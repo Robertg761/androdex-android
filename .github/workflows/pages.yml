@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - ".github/workflows/pages.yml"
-      - "privacy-policy.html"
+      - "privacypolicy.html"
   workflow_dispatch:
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
       - name: Prepare site
         run: |
           mkdir -p _site
-          cp privacy-policy.html _site/privacy-policy.html
+          cp privacypolicy.html _site/privacypolicy.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
