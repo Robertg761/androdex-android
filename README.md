@@ -100,9 +100,9 @@ Relaydex is preparing for Google Play closed testing.
 
 If you want to help test the Android app:
 
-1. Join the tester group: `<google-group-join-url>`
-2. Open the Play opt-in link: `<play-opt-in-url>`
-3. Install the app from Google Play
+1. Join the tester group: `https://groups.google.com/g/relaydex-android-testers`
+2. Opt in on Google Play: `https://play.google.com/apps/testing/io.relaydex.android`
+3. Install the app from Google Play: `https://play.google.com/store/apps/details?id=io.relaydex.android`
 4. Keep the app installed and remain opted in for at least 14 days
 
 Notes:
@@ -113,6 +113,7 @@ Notes:
 
 Recruitment and rollout docs:
 
+- Public closed-test page: `https://ranats.github.io/relaydex/closed-test.html`
 - [Docs/CLOSED_TEST_PLAN.md](Docs/CLOSED_TEST_PLAN.md)
 - [Docs/TESTER_RECRUITMENT_COPY.md](Docs/TESTER_RECRUITMENT_COPY.md)
 - [Docs/CLOSED_TEST_LANDING_PAGE.md](Docs/CLOSED_TEST_LANDING_PAGE.md)

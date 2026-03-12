@@ -1,9 +1,5 @@
 # Relaydex Android Closed Test
 
-Replace the placeholder URLs below and publish this as a public page on GitHub, GitHub Pages, Notion, or any simple static site.
-
----
-
 ## Relaydex Android closed test
 
 Relaydex is an independent fork of Remodex focused on controlling local Codex running on Windows from Android.
@@ -28,15 +24,17 @@ Important:
 
 ### Step 1: Join the tester group
 
-`<google-group-join-url>`
+`https://groups.google.com/g/relaydex-android-testers`
 
 ### Step 2: Opt in on Google Play
 
-`<play-opt-in-url>`
+`https://play.google.com/apps/testing/io.relaydex.android`
 
 ### Step 3: Install the app
 
-After opting in, install the app from the Play testing page.
+After opting in, install the app from Google Play:
+
+`https://play.google.com/store/apps/details?id=io.relaydex.android`
 
 ### Step 4: Stay opted in
 
@@ -46,13 +44,9 @@ That helps satisfy Google Play's closed testing requirement for new personal dev
 
 ## Feedback
 
-Feedback form:
+GitHub issues:
 
-`<feedback-form-url>`
-
-Contact email:
-
-`<contact-email>`
+`https://github.com/Ranats/relaydex/issues`
 
 ## Notes
 

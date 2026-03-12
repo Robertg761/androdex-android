@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/workflows/pages.yml"
+      - "closed-test.html"
       - "privacypolicy.html"
   workflow_dispatch:
 
@@ -32,6 +33,7 @@ jobs:
       - name: Prepare site
         run: |
           mkdir -p _site
+          cp closed-test.html _site/closed-test.html
           cp privacypolicy.html _site/privacypolicy.html
 
       - name: Upload Pages artifact
