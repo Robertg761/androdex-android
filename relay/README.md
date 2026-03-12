@@ -1,14 +1,14 @@
 # Relay
 
-This folder contains the thin WebSocket relay used by the default hosted Remodex pairing flow.
+This folder contains the thin WebSocket relay used by the default hosted Relaydex pairing flow.
 
 In production, the default hosted relay runs on my VPS. If you want, you can inspect this code, fork it, and host the same relay yourself.
 
 ## What It Does
 
 - accepts WebSocket connections at `/relay/{sessionId}`
-- pairs one Mac host with one live iPhone client for a session
-- forwards secure control messages and encrypted payloads between Mac and iPhone
+- pairs one host bridge with one live mobile client for a session
+- forwards secure control messages and encrypted payloads between the host and the mobile client
 - logs only connection metadata and payload sizes, not plaintext prompts or responses
 - exposes lightweight stats for a health endpoint
 
@@ -19,17 +19,17 @@ In production, the default hosted relay runs on my VPS. If you want, you can ins
 - it does not contain your repository checkout
 - it does not persist the local workspace on the server
 
-Codex, git, and local file operations still run on the user's Mac.
+Codex, git, and local file operations still run on the user's host computer.
 The relay is intentionally blind to Remodex application contents once the secure handshake completes.
 
 ## Security Model
 
-Remodex uses the relay as a transport hop, not as a trusted application server.
+Relaydex uses the relay as a transport hop, not as a trusted application server.
 
-- The pairing QR gives the iPhone the bridge identity public key plus short-lived session details.
-- The iPhone and bridge perform a signed handshake, derive shared AES-256-GCM keys with X25519 + HKDF-SHA256, and then encrypt application payloads end to end.
+- The pairing QR gives the mobile client the bridge identity public key plus short-lived session details.
+- The mobile client and bridge perform a signed handshake, derive shared AES-256-GCM keys with X25519 + HKDF-SHA256, and then encrypt application payloads end to end.
 - The relay can still observe connection metadata and the plaintext secure control messages needed to establish the encrypted session.
-- The relay does not receive plaintext Remodex application payloads after the secure session is active.
+- The relay does not receive plaintext Relaydex application payloads after the secure session is active.
 
 ## Protocol Notes
 
