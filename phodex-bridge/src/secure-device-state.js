@@ -10,9 +10,9 @@ const path = require("path");
 const { randomUUID, generateKeyPairSync } = require("crypto");
 const { execFileSync } = require("child_process");
 
-const STORE_DIR = path.join(os.homedir(), ".remodex");
+const STORE_DIR = path.join(os.homedir(), ".relaydex");
 const STORE_FILE = path.join(STORE_DIR, "device-state.json");
-const KEYCHAIN_SERVICE = "com.remodex.bridge.device-state";
+const KEYCHAIN_SERVICE = "io.relaydex.bridge.device-state";
 const KEYCHAIN_ACCOUNT = "default";
 
 function loadOrCreateBridgeDeviceState() {
@@ -33,7 +33,7 @@ function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey) {
     return state;
   }
 
-  // Remodex supports one trusted iPhone per Mac, so a new trust record replaces old ones.
+  // Relaydex supports one trusted mobile client per bridge state, so a new trust record replaces old ones.
   const nextState = {
     ...state,
     trustedPhones: {

@@ -67,7 +67,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
       if (parsed.method || parsed.id != null) {
         sendControlMessage(createSecureError({
           code: "update_required",
-          message: "This bridge requires the latest Remodex iPhone app for secure pairing.",
+          message: "This bridge requires the latest compatible Relaydex mobile app for secure pairing.",
         }));
         return true;
       }
@@ -116,7 +116,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     return Boolean(activeSession?.isResumed);
   }
 
-  // Rejects QR bootstraps from a second iPhone unless it is the already-trusted device.
+  // Rejects QR bootstraps from a second mobile client unless it is the already-trusted device.
   function hasConflictingTrustedPhone(phoneDeviceId, phoneIdentityPublicKey) {
     const trustedPhones = currentDeviceState.trustedPhones || {};
     return Object.entries(trustedPhones).some(([trustedDeviceId, trustedPublicKey]) => (
@@ -136,7 +136,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (protocolVersion !== SECURE_PROTOCOL_VERSION || incomingSessionId !== sessionId) {
       sendControlMessage(createSecureError({
         code: "update_required",
-        message: "The bridge and iPhone are not using the same secure transport version.",
+        message: "The bridge and mobile client are not using the same secure transport version.",
       }));
       return;
     }
@@ -144,7 +144,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (!phoneDeviceId || !phoneIdentityPublicKey || !phoneEphemeralPublicKey || !clientNonceBase64) {
       sendControlMessage(createSecureError({
         code: "invalid_client_hello",
-        message: "The iPhone handshake is missing required secure fields.",
+        message: "The mobile-client handshake is missing required secure fields.",
       }));
       return;
     }
@@ -152,7 +152,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (handshakeMode !== HANDSHAKE_MODE_QR_BOOTSTRAP && handshakeMode !== HANDSHAKE_MODE_TRUSTED_RECONNECT) {
       sendControlMessage(createSecureError({
         code: "invalid_handshake_mode",
-        message: "The iPhone requested an unknown secure pairing mode.",
+        message: "The mobile client requested an unknown secure pairing mode.",
       }));
       return;
     }
@@ -169,7 +169,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP && hasConflictingTrustedPhone(phoneDeviceId, phoneIdentityPublicKey)) {
       sendControlMessage(createSecureError({
         code: "phone_replacement_required",
-        message: "This Mac is already paired with another iPhone. Reset pairing on the Mac before pairing a new phone.",
+        message: "This host is already paired with another mobile client. Reset pairing on the host before pairing a new device.",
       }));
       return;
     }
@@ -178,14 +178,14 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
       if (!trustedPhonePublicKey) {
         sendControlMessage(createSecureError({
           code: "phone_not_trusted",
-          message: "This iPhone is not trusted by the current bridge session. Scan a fresh QR code to pair again.",
+          message: "This mobile client is not trusted by the current bridge session. Scan a fresh QR code to pair again.",
         }));
         return;
       }
       if (trustedPhonePublicKey !== phoneIdentityPublicKey) {
         sendControlMessage(createSecureError({
           code: "phone_identity_changed",
-          message: "The trusted iPhone identity does not match this reconnect attempt.",
+          message: "The trusted mobile-client identity does not match this reconnect attempt.",
         }));
         return;
       }
@@ -195,7 +195,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (!clientNonce || clientNonce.length === 0) {
       sendControlMessage(createSecureError({
         code: "invalid_client_nonce",
-        message: "The iPhone secure nonce could not be decoded.",
+        message: "The mobile-client secure nonce could not be decoded.",
       }));
       return;
     }
@@ -306,7 +306,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
       pendingHandshake = null;
       sendControlMessage(createSecureError({
         code: "invalid_phone_signature",
-        message: "The iPhone secure signature could not be verified.",
+        message: "The mobile-client secure signature could not be verified.",
       }));
       return;
     }
@@ -432,7 +432,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
     if (!plaintextBuffer) {
       sendControlMessage(createSecureError({
         code: "decrypt_failed",
-        message: "The bridge could not decrypt the iPhone secure payload.",
+        message: "The bridge could not decrypt the secure payload from the mobile client.",
       }));
       return true;
     }
@@ -511,7 +511,7 @@ function createBridgeSecureTransport({ sessionId, relayUrl, deviceState }) {
 }
 
 function debugSecureLog(message) {
-  console.log(`[remodex][secure] ${message}`);
+  console.log(`[relaydex][secure] ${message}`);
 }
 
 function shortId(value) {

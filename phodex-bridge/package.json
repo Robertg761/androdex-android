@@ -1,20 +1,23 @@
 {
-  "name": "remodex",
+  "name": "relaydex",
   "version": "1.1.3",
-  "description": "Local bridge between Codex and the Remodex mobile app. Run `remodex up` to start.",
+  "description": "Local bridge between Codex and the Relaydex mobile app. Run `relaydex up` to start.",
   "main": "src/index.js",
   "bin": {
-    "remodex": "./bin/remodex.js"
+    "relaydex": "bin/relaydex.js"
   },
   "files": [
     "bin/",
-    "src/"
+    "src/",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "start": "node ./bin/remodex.js up",
+    "start": "node ./bin/relaydex.js up",
     "test": "node --test ./test/*.test.js"
   },
   "keywords": [
+    "relaydex",
     "remodex",
     "codex",
     "bridge",
@@ -23,6 +26,12 @@
   "author": "Emanuele Di Pietro",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
     "uuid": "^13.0.0",

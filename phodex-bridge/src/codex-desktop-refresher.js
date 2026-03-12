@@ -26,7 +26,7 @@ class CodexDesktopRefresher {
     refreshCommand = "",
     bundleId = DEFAULT_BUNDLE_ID,
     appPath = DEFAULT_APP_PATH,
-    logPrefix = "[remodex]",
+    logPrefix = "[relaydex]",
     fallbackNewThreadMs = DEFAULT_FALLBACK_NEW_THREAD_MS,
     midRunRefreshThrottleMs = DEFAULT_MID_RUN_REFRESH_THROTTLE_MS,
     rolloutLookupTimeoutMs = DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS,
@@ -368,7 +368,7 @@ class CodexDesktopRefresher {
     this.fallbackTimer = null;
   }
 
-  // Keeps one lightweight rollout watcher alive for the current Remodex-controlled thread.
+  // Keeps one lightweight rollout watcher alive for the current Relaydex-controlled thread.
   ensureWatcher(threadId) {
     if (!this.canRefresh() || !threadId) {
       return;
@@ -517,21 +517,21 @@ class CodexDesktopRefresher {
 
 function readBridgeConfig({ env = process.env, platform = process.platform } = {}) {
   const codexEndpoint = readFirstDefinedEnv(
-    ["REMODEX_CODEX_ENDPOINT", "PHODEX_CODEX_ENDPOINT"],
+    ["RELAYDEX_CODEX_ENDPOINT", "REMODEX_CODEX_ENDPOINT", "PHODEX_CODEX_ENDPOINT"],
     "",
     env
   );
   const refreshCommand = readFirstDefinedEnv(
-    ["REMODEX_REFRESH_COMMAND", "PHODEX_ON_PHONE_MESSAGE"],
+    ["RELAYDEX_REFRESH_COMMAND", "REMODEX_REFRESH_COMMAND", "PHODEX_ON_PHONE_MESSAGE"],
     "",
     env
   );
-  const explicitRefreshEnabled = readOptionalBooleanEnv(["REMODEX_REFRESH_ENABLED"], env);
+  const explicitRefreshEnabled = readOptionalBooleanEnv(["RELAYDEX_REFRESH_ENABLED", "REMODEX_REFRESH_ENABLED"], env);
   // Desktop refresh is opt-in for now because Codex.app still lacks true live updates.
   const defaultRefreshEnabled = false;
   return {
     relayUrl: readFirstDefinedEnv(
-      ["REMODEX_RELAY", "PHODEX_RELAY"],
+      ["RELAYDEX_RELAY", "REMODEX_RELAY", "PHODEX_RELAY"],
       "wss://api.phodex.app/relay",
       env
     ),
@@ -539,12 +539,12 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
       ? defaultRefreshEnabled
       : explicitRefreshEnabled,
     refreshDebounceMs: parseIntegerEnv(
-      readFirstDefinedEnv(["REMODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
+      readFirstDefinedEnv(["RELAYDEX_REFRESH_DEBOUNCE_MS", "REMODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
       DEFAULT_DEBOUNCE_MS
     ),
     codexEndpoint,
     refreshCommand,
-    codexBundleId: readFirstDefinedEnv(["REMODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
+    codexBundleId: readFirstDefinedEnv(["RELAYDEX_CODEX_BUNDLE_ID", "REMODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
     codexAppPath: DEFAULT_APP_PATH,
   };
 }

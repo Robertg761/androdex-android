@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relaydex Privacy Policy</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f2ea;
+      color: #1f1c17;
+      line-height: 1.6;
+    }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 40px 20px 72px;
+    }
+    h1, h2 {
+      color: #123d35;
+    }
+    .card {
+      background: #fffaf2;
+      border: 1px solid #e4d8c6;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(18, 61, 53, 0.08);
+    }
+    a {
+      color: #0f5f78;
+    }
+    ul {
+      padding-left: 20px;
+    }
+    .meta {
+      color: #5a544c;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Privacy Policy for Relaydex</h1>
+      <p class="meta">Last updated: 2026-03-12</p>
+
+      <p>Relaydex is an independent fork of Remodex focused on controlling local Codex running on a user's own computer from Android.</p>
+
+      <h2>Who this policy applies to</h2>
+      <p>This policy applies to the Relaydex Android app and the Relaydex host bridge.</p>
+
+      <h2>What Relaydex does</h2>
+      <p>Relaydex is a local-first remote control system:</p>
+      <ul>
+        <li>the Android app acts as a remote control client</li>
+        <li>the host bridge runs on the user's own computer</li>
+        <li>Codex runs locally on the user's own computer</li>
+      </ul>
+
+      <h2>Data handled by the app</h2>
+      <p>Depending on how the app is used, Relaydex may handle:</p>
+      <ul>
+        <li>pairing information such as relay URL, session ID, device ID, and cryptographic public keys</li>
+        <li>user-provided content such as prompts and conversation messages</li>
+        <li>thread and conversation metadata</li>
+        <li>approval actions and local workflow actions initiated by the user</li>
+      </ul>
+
+      <h2>How data is used</h2>
+      <p>Relaydex uses data to:</p>
+      <ul>
+        <li>pair the Android client with the user's host bridge</li>
+        <li>route messages between the Android app and the host bridge</li>
+        <li>display threads, messages, and approval requests in the app</li>
+        <li>maintain secure encrypted sessions</li>
+        <li>store pairing and trusted-device information locally on the device</li>
+      </ul>
+
+      <h2>Encryption and transport</h2>
+      <p>Relaydex uses a secure pairing and encrypted transport design between the Android app and the host bridge.</p>
+      <p>The relay may still observe limited connection metadata required to route traffic, such as session identifiers and connection timing, but application payloads are intended to be encrypted after the secure handshake completes.</p>
+
+      <h2>Local storage</h2>
+      <p>The Android app may store limited data locally on the device, including:</p>
+      <ul>
+        <li>pairing details</li>
+        <li>trusted-device records</li>
+        <li>encrypted local persistence required for reconnect and secure operation</li>
+      </ul>
+
+      <h2>Data sharing</h2>
+      <p>Relaydex is not designed to sell user data.</p>
+      <p>Data may be transmitted as part of core app functionality to:</p>
+      <ul>
+        <li>the relay service used to connect the Android app and the host bridge</li>
+        <li>the host bridge running on the user's own computer</li>
+      </ul>
+
+      <h2>Ads</h2>
+      <p>Relaydex does not display third-party advertising.</p>
+
+      <h2>Account requirement</h2>
+      <p>Relaydex does not require an in-app account login to function, but it does require the user to operate a compatible host bridge and local Codex environment on their own computer.</p>
+
+      <h2>Children</h2>
+      <p>Relaydex is not directed to children.</p>
+
+      <h2>Data retention</h2>
+      <p>Data retention depends on:</p>
+      <ul>
+        <li>what is stored locally on the Android device</li>
+        <li>what is stored by the user on their own host computer</li>
+        <li>what relay infrastructure is used</li>
+      </ul>
+      <p>Users can remove the app and clear locally stored app data from their Android device. Users can also remove or reset host-side bridge state on their own computer.</p>
+
+      <h2>Contact</h2>
+      <ul>
+        <li>GitHub repository: <a href="https://github.com/Ranats/relaydex">https://github.com/Ranats/relaydex</a></li>
+        <li>Issue tracker: <a href="https://github.com/Ranats/relaydex/issues">https://github.com/Ranats/relaydex/issues</a></li>
+      </ul>
+    </div>
+  </main>
+</body>
+</html>
