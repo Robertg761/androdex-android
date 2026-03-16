@@ -151,6 +151,7 @@ Current stance:
 - the repository is public now
 - the official Play listing is still being prepared
 - advanced users can build and test the Android client from source
+- if you want the later Play build, you can join the Google Group waitlist
 
 This lets the project be visible early without forcing a public Play rollout before account and contact details are ready.
 
@@ -160,6 +161,23 @@ If you want to track Android release progress:
 - rollout notes: [Docs/CLOSED_TEST_PLAN.md](Docs/CLOSED_TEST_PLAN.md)
 - recruitment copy: [Docs/TESTER_RECRUITMENT_COPY.md](Docs/TESTER_RECRUITMENT_COPY.md)
 - launch copy: [Docs/LAUNCH_COPY.md](Docs/LAUNCH_COPY.md)
+
+## Try It Now
+
+Right now there are two supported public paths:
+
+1. build the Android app from source and test it yourself
+2. join the Google Group waitlist for the later Play closed test
+
+Current waitlist link:
+
+- `https://groups.google.com/g/relaydex-android-testers`
+
+Important:
+
+- joining the Google Group now does **not** by itself advance the Google Play closed-test requirement
+- the actual Play opt-in and install step will be shared later, after the Play rollout is ready
+- if you want to test immediately, source build is the path to use today
 
 ## Self-Hosting
 
@@ -176,14 +194,14 @@ Start here:
 
 ## Feedback
 
-Best links to share with testers:
+Best links to share right now:
 
 - Closed-test guide: `https://ranats.github.io/relaydex/closed-test.html`
-- Issue form: `https://github.com/Ranats/relaydex/issues/new?template=closed-test-feedback.yml`
+- Issues page: `https://github.com/Ranats/relaydex/issues`
 
 Suggested Play Console feedback URL:
 
-- `https://github.com/Ranats/relaydex/issues/new?template=closed-test-feedback.yml`
+- `mailto:saxophonia991@gmail.com`
 
 Suggested Play Console feedback email:
 
