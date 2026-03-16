@@ -154,7 +154,6 @@ The actual Play opt-in and install step will be shared later.
 If you tried a source build and hit a bug, pairing issue, reconnect problem, or UI confusion:
 
 - GitHub Issues: `https://github.com/Ranats/relaydex/issues`
-- Support email: `saxophonia991@gmail.com`
 
 Helpful details:
 
