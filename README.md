@@ -4,7 +4,7 @@
 
 # Relaydex
 
-[日本語 README](README.ja.md)
+[Japanese README](README.ja.md)
 
 Fork of [Remodex](https://github.com/Emanuele-web04/remodex) focused on one concrete workflow:
 
@@ -42,17 +42,13 @@ Relaydex does **not** run Codex on the phone itself. Instead:
 - the phone acts as a paired remote control client
 - git and workspace actions still execute on the host machine
 
-## Planned Distribution
+## Current Release Status
 
-- Windows host bridge: publish to npm as `relaydex`
-- Android client: ship from `android/`
+- Windows host bridge is published to npm as `relaydex`
+- the official Android Play release is still in preparation
+- if you want to try the Android client right now, you can build it yourself from `android/`
 
-Current release status:
-
-- the current Google Play closed test is free to install
-- the Android app is planned to become paid after closed testing ends
-
-The intended user flow after release is:
+The intended host-side flow is:
 
 ```sh
 npm install -g relaydex
@@ -60,6 +56,8 @@ relaydex up
 ```
 
 Then pair from the Android app.
+
+If you want to build the Android client from source before the Play release, see [Docs/ANDROID_BUILD_FROM_SOURCE.md](Docs/ANDROID_BUILD_FROM_SOURCE.md).
 
 ## Architecture
 
@@ -101,47 +99,30 @@ Short version:
 4. Open the Android app.
 5. Scan the QR code or paste the pairing payload shown under the QR.
 
-## Android Closed Test
+## Android Availability
 
-Relaydex is currently in Google Play closed testing.
+The Android app is not yet broadly released on Google Play.
 
-If you want to help test the Android app:
+Current stance:
 
-1. Join the tester group: `https://groups.google.com/g/relaydex-android-testers`
-2. Opt in on Google Play: `https://play.google.com/apps/testing/io.relaydex.android`
-3. Install the current closed-test build from Google Play: `https://play.google.com/store/apps/details?id=io.relaydex.android`
-4. Open the app at least once and keep it installed and opted in for at least 14 days
-5. Send feedback if you hit bugs, pairing problems, or UX issues
+- the repository is public now
+- the official Play listing is still being prepared
+- advanced users can build and test the Android client from source
 
-Notes:
+This lets the project be visible early without forcing a public Play rollout before account and contact details are ready.
 
-- This is an independent fork of Remodex, not the official Remodex app.
-- The Android app is only the remote control client.
-- Codex still runs locally on your own computer.
-- The current closed-test build is free on Google Play.
-- The production Android release is planned to become paid after closed testing ends.
+If you want to track Android release progress:
 
-Recommended feedback flow:
-
-1. Join the tester group and opt in on Play.
-2. Install the app and try one real host pairing.
-3. Report issues through the closed-test issue form: `https://github.com/Ranats/relaydex/issues/new?template=closed-test-feedback.yml`
-4. If GitHub is inconvenient, send feedback by email: `mailto:saxophonia991@gmail.com?subject=Relaydex%20closed%20test%20feedback`
-
-Recruitment and rollout docs:
-
-- Public closed-test page: `https://ranats.github.io/relaydex/closed-test.html`
-- [Docs/CLOSED_TEST_PLAN.md](Docs/CLOSED_TEST_PLAN.md)
-- [Docs/TESTER_RECRUITMENT_COPY.md](Docs/TESTER_RECRUITMENT_COPY.md)
-- [Docs/CLOSED_TEST_LANDING_PAGE.md](Docs/CLOSED_TEST_LANDING_PAGE.md)
+- closed-test page: `https://ranats.github.io/relaydex/closed-test.html`
+- rollout notes: [Docs/CLOSED_TEST_PLAN.md](Docs/CLOSED_TEST_PLAN.md)
+- recruitment copy: [Docs/TESTER_RECRUITMENT_COPY.md](Docs/TESTER_RECRUITMENT_COPY.md)
+- launch copy: [Docs/LAUNCH_COPY.md](Docs/LAUNCH_COPY.md)
 
 ## Feedback
 
 Best links to share with testers:
 
 - Closed-test guide: `https://ranats.github.io/relaydex/closed-test.html`
-- Play opt-in: `https://play.google.com/apps/testing/io.relaydex.android`
-- Play install page: `https://play.google.com/store/apps/details?id=io.relaydex.android`
 - Issue form: `https://github.com/Ranats/relaydex/issues/new?template=closed-test-feedback.yml`
 
 Suggested Play Console feedback URL:
@@ -183,6 +164,8 @@ The Android client supports:
 - prompt sending
 - streamed Codex output
 - approval prompts
+
+To build it before the Play release, see [Docs/ANDROID_BUILD_FROM_SOURCE.md](Docs/ANDROID_BUILD_FROM_SOURCE.md).
 
 ## Security Notes
 
