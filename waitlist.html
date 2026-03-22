@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relaydex Waitlist</title>
+  <style>
+    :root {
+      --ink: #123d35;
+      --paper: #f6f2ea;
+      --panel: #fffaf2;
+      --line: #e0d5c5;
+      --accent: #db7c26;
+      --muted: #5c564d;
+      --good: #1f7a5a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #1f1c17;
+      background: radial-gradient(circle at top left, #fffaf0 0, #f2dfc3 42%, #d9e9e2 100%);
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 56px 24px 80px;
+    }
+
+    .hero, .panel {
+      background: rgba(255, 250, 242, 0.9);
+      border: 1px solid rgba(18, 61, 53, 0.08);
+      border-radius: 28px;
+      box-shadow: 0 24px 64px rgba(18, 61, 53, 0.08);
+    }
+
+    .hero { padding: 40px; }
+    .panel { padding: 28px; }
+
+    .eyebrow {
+      display: inline-block;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      color: var(--ink);
+      font-size: clamp(40px, 7vw, 72px);
+      line-height: 0.94;
+      letter-spacing: -0.04em;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      color: var(--ink);
+      font-size: 28px;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 720px;
+      font-size: 21px;
+      line-height: 1.5;
+    }
+
+    .grid {
+      display: grid;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 20px;
+    }
+
+    .note {
+      margin-top: 16px;
+      color: #36433e;
+      line-height: 1.6;
+    }
+
+    .small {
+      font-size: 14px;
+      color: #5b5750;
+    }
+
+    .option {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: var(--panel);
+      margin-bottom: 12px;
+    }
+
+    .option label {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      cursor: pointer;
+    }
+
+    .option strong {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 4px;
+    }
+
+    form {
+      display: grid;
+      gap: 16px;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field label {
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    input, textarea, select, button {
+      font: inherit;
+    }
+
+    input[type="email"],
+    input[type="text"],
+    textarea,
+    select {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    button {
+      border: 0;
+      border-radius: 16px;
+      background: var(--ink);
+      color: white;
+      padding: 16px 18px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .links {
+      display: grid;
+      gap: 14px;
+    }
+
+    a.cta {
+      display: block;
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    a.cta small {
+      display: block;
+      margin-top: 6px;
+      color: #36433e;
+      font-weight: 400;
+    }
+
+    .result {
+      display: none;
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(31, 122, 90, 0.1);
+      border: 1px solid rgba(31, 122, 90, 0.2);
+      color: var(--good);
+    }
+
+    .result.active { display: block; }
+
+    .hidden {
+      position: absolute !important;
+      left: -10000px !important;
+      top: auto !important;
+      width: 1px !important;
+      height: 1px !important;
+      overflow: hidden !important;
+    }
+
+    iframe.hidden-frame {
+      width: 0;
+      height: 0;
+      border: 0;
+    }
+
+    @media (max-width: 840px) {
+      .split {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">Relaydex Waitlist</div>
+      <h1>Try it now from source, or join the later Play rollout.</h1>
+      <p class="lead">
+        Relaydex is an independent fork of Remodex focused on controlling local Codex running on your own Windows PC from Android.
+      </p>
+      <p class="note">
+        Right now, the Android app is best treated as a source-build project with a waitlist for the later Google Play rollout.
+      </p>
+    </section>
+
+    <div class="grid">
+      <section class="panel split">
+        <div>
+          <h2>Choose your path</h2>
+          <div class="option">
+            <label>
+              <input type="radio" name="interest_type" value="source_build_now" checked>
+              <span>
+                <strong>Source build now</strong>
+                I want to build the Android app from source and try it right away.
+              </span>
+            </label>
+          </div>
+          <div class="option">
+            <label>
+              <input type="radio" name="interest_type" value="play_waitlist_later">
+              <span>
+                <strong>Play waitlist later</strong>
+                I want to hear when the Google Play rollout is ready.
+              </span>
+            </label>
+          </div>
+          <p class="note small">
+            Joining this waitlist does not by itself advance the Google Play closed-test requirement. The actual Play opt-in step will be shared later.
+          </p>
+        </div>
+
+        <div>
+          <h2>Join the waitlist</h2>
+          <form id="waitlist-form" method="post" target="submit-target">
+            <div class="field">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" autocomplete="email" required>
+            </div>
+
+            <div class="field">
+              <label for="device_model">Device model</label>
+              <input id="device_model" name="device_model" type="text" placeholder="Pixel 9a">
+            </div>
+
+            <div class="field">
+              <label for="android_version">Android version</label>
+              <input id="android_version" name="android_version" type="text" placeholder="Android 16">
+            </div>
+
+            <div class="field">
+              <label for="x_handle">X handle (optional)</label>
+              <input id="x_handle" name="x_handle" type="text" placeholder="@example">
+            </div>
+
+            <div class="field">
+              <label for="notes">Notes (optional)</label>
+              <textarea id="notes" name="notes" placeholder="Anything useful about your setup or what you want to test"></textarea>
+            </div>
+
+            <input class="hidden" id="interest_type_hidden" name="interest_type" type="text" value="source_build_now" aria-hidden="true" tabindex="-1">
+            <input class="hidden" name="source" type="text" value="github_pages_waitlist" aria-hidden="true" tabindex="-1">
+            <input class="hidden" name="website" type="text" value="" aria-hidden="true" tabindex="-1">
+            <input class="hidden" name="submitted_at" type="text" value="">
+
+            <button id="submit-button" type="submit">Submit</button>
+          </form>
+          <p class="note small">
+            The form submits to a Google Apps Script endpoint backed by a spreadsheet.
+          </p>
+        </div>
+      </section>
+
+      <section id="result-source" class="panel result">
+        <h2>You’re on the source-build path</h2>
+        <p class="note">
+          Build the Android app from source, then run <code>relaydex up</code> on Windows and pair from Android.
+        </p>
+        <div class="links">
+          <a class="cta" href="https://github.com/Ranats/relaydex#build-the-android-app-from-source">Build from source
+            <small>https://github.com/Ranats/relaydex#build-the-android-app-from-source</small>
+          </a>
+          <a class="cta" href="https://github.com/Ranats/relaydex/issues">Send feedback on GitHub
+            <small>https://github.com/Ranats/relaydex/issues</small>
+          </a>
+        </div>
+      </section>
+
+      <section id="result-waitlist" class="panel result">
+        <h2>You’re on the Play waitlist</h2>
+        <p class="note">
+          Your email has been recorded for the later Play rollout. When the Play flow is ready, you can be guided through the Google Group and Play opt-in steps.
+        </p>
+        <div class="links">
+          <a class="cta" href="https://groups.google.com/g/relaydex-android-testers">Open the Google Group
+            <small>https://groups.google.com/g/relaydex-android-testers</small>
+          </a>
+          <a class="cta" href="https://github.com/Ranats/relaydex">Back to the repository
+            <small>https://github.com/Ranats/relaydex</small>
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <iframe class="hidden-frame" name="submit-target" title="Waitlist submission target"></iframe>
+  </main>
+
+  <script>
+    const APPS_SCRIPT_ENDPOINT = "REPLACE_WITH_YOUR_APPS_SCRIPT_WEB_APP_URL";
+
+    const form = document.getElementById("waitlist-form");
+    const submitButton = document.getElementById("submit-button");
+    const hiddenInterest = document.getElementById("interest_type_hidden");
+    const submittedAt = form.querySelector('input[name="submitted_at"]');
+    const radios = Array.from(document.querySelectorAll('input[type="radio"][name="interest_type"]'));
+    const resultSource = document.getElementById("result-source");
+    const resultWaitlist = document.getElementById("result-waitlist");
+
+    submittedAt.value = new Date().toISOString();
+
+    function currentInterest() {
+      const selected = radios.find((radio) => radio.checked);
+      return selected ? selected.value : "source_build_now";
+    }
+
+    function syncInterest() {
+      hiddenInterest.value = currentInterest();
+    }
+
+    function showResult() {
+      const interest = currentInterest();
+      resultSource.classList.remove("active");
+      resultWaitlist.classList.remove("active");
+      if (interest === "play_waitlist_later") {
+        resultWaitlist.classList.add("active");
+      } else {
+        resultSource.classList.add("active");
+      }
+      resultSource.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    radios.forEach((radio) => {
+      radio.addEventListener("change", syncInterest);
+    });
+
+    form.addEventListener("submit", (event) => {
+      syncInterest();
+      if (APPS_SCRIPT_ENDPOINT.includes("REPLACE_WITH_YOUR_APPS_SCRIPT_WEB_APP_URL")) {
+        event.preventDefault();
+        alert("Set your Apps Script Web App URL in waitlist.html before publishing this form.");
+        return;
+      }
+      form.action = APPS_SCRIPT_ENDPOINT;
+      submitButton.disabled = true;
+      submitButton.textContent = "Submitting...";
+      setTimeout(() => {
+        submitButton.disabled = false;
+        submitButton.textContent = "Submit";
+        showResult();
+      }, 500);
+    });
+  </script>
+</body>
+</html>

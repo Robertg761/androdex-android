@@ -141,9 +141,13 @@ The Android app is not yet broadly released on Google Play.
 Right now there are two public paths:
 
 1. build the Android app from source and test it yourself
-2. join the Google Group waitlist for the later Play rollout
+2. join the waitlist for the later Play rollout
 
-Waitlist:
+Recommended waitlist page:
+
+- `https://ranats.github.io/relaydex/waitlist.html`
+
+Direct Google Group link:
 
 - `https://groups.google.com/g/relaydex-android-testers`
 
