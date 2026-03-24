@@ -211,7 +211,7 @@ function startBridge() {
       return;
     }
     desktopRefresher.handleInbound(rawMessage);
-    rememberThreadFromMessage("phone", rawMessage);
+    rememberThreadFromMessage("android", rawMessage);
     codex.send(rawMessage);
   }
 
@@ -233,8 +233,8 @@ function startBridge() {
     rememberActiveThread(threadId, source);
   }
 
-  // The spawned/shared Codex app-server stays warm across phone reconnects.
-  // When iPhone reconnects it sends initialize again, but forwarding that to the
+  // The spawned/shared Codex app-server stays warm across Android reconnects.
+  // When the Android client reconnects it sends initialize again, but forwarding that to the
   // already-initialized Codex transport only produces "Already initialized".
   function handleBridgeManagedHandshakeMessage(rawMessage) {
     let parsed = null;

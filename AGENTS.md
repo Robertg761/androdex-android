@@ -14,12 +14,12 @@ This repo keeps Codex running on the user's host machine, but device access may 
 - Treat this repo as open source: avoid junk code, placeholder hacks, noisy one-off workarounds, and low-signal docs.
 - If you touch docs, keep the distinction clear between host-local Codex execution and remote device connectivity.
 
-## iOS runtime + timeline guardrails
+## Mobile runtime + timeline guardrails
 
 - `turn/started` may not include a usable `turnId`: keep the per-thread running fallback.
 - If Stop is tapped and `activeTurnIdByThread` is missing, resolve via `thread/read` before interrupting.
 - On reconnect/background recover, rehydrate active turn state so Stop remains visible.
-- Suppress benign background disconnect noise (`NWError.posix(.ECONNABORTED)`) and retry on foreground.
+- Suppress benign background disconnect noise and retry on foreground.
 - Keep assistant rows item-scoped to avoid timeline flattening/reordering.
 - Merge late reasoning deltas into existing rows; do not spawn fake extra "Thinking..." rows.
 - Ignore late turn-less activity events when the turn is already inactive.
@@ -34,9 +34,8 @@ This repo keeps Codex running on the user's host machine, but device access may 
 
 ## Build guardrails
 
-- Do not run Xcode builds/tests unless the user explicitly asks.
-- Markdown files inside Xcode-synced groups can still produce harmless warnings.
-- For small iOS/mobile fixes, prefer inspection and targeted edits over simulator runs by default.
+- Do not run Android builds/tests unless the user explicitly asks.
+- For small mobile fixes, prefer inspection and targeted edits over emulator runs by default.
 
 ## Quick runbook
 

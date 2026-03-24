@@ -34,11 +34,11 @@ Androdex uses the relay as a transport hop, not as a trusted application server.
 ## Protocol Notes
 
 - path: `/relay/{hostId}`
-- required header: `x-role: mac` or `x-role: iphone`
+- required header: `x-role: mac` or `x-role: android`
 - close code `4000`: invalid session or role
 - close code `4001`: previous Mac connection replaced
 - close code `4002`: host unavailable / Mac disconnected
-- close code `4003`: previous iPhone connection replaced
+- close code `4003`: previous Android connection replaced
 
 ## Standalone Server
 

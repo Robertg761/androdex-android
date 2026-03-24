@@ -299,7 +299,7 @@ class AndrodexClient(
         val relayUrl = pairing.relay.trimEnd('/')
         val request = Request.Builder()
             .url("$relayUrl/${pairing.routingId}")
-            .header("x-role", "iphone")
+            .header("x-role", "android")
             .build()
 
         val openDeferred = CompletableDeferred<Unit>()
@@ -833,7 +833,7 @@ class AndrodexClient(
         val payload = JSONObject()
             .put("bridgeOutboundSeq", JSONObject.NULL)
             .put("payloadText", plaintext)
-        val nonce = secureNonce("iphone", session.nextOutboundCounter)
+        val nonce = secureNonce("android", session.nextOutboundCounter)
         val (ciphertext, tag) = aesGcmEncrypt(
             key = session.phoneToMacKey,
             nonce = nonce,
@@ -844,7 +844,7 @@ class AndrodexClient(
             .put("v", secureProtocolVersion)
             .put("sessionId", session.sessionId)
             .put("keyEpoch", session.keyEpoch)
-            .put("sender", "iphone")
+            .put("sender", "android")
             .put("counter", session.nextOutboundCounter)
             .put("ciphertext", encodeBase64(ciphertext))
             .put("tag", encodeBase64(tag))

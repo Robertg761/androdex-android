@@ -245,7 +245,7 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
       payloadText: JSON.stringify({ id: "request-1", method: "thread/list", params: {} }),
     },
     phoneToMacKey,
-    "iphone",
+    "android",
     0,
     "session-2",
     serverHello.keyEpoch
@@ -267,7 +267,7 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
   ]);
 });
 
-test("qr bootstrap rejects pairing a different iPhone after one phone is trusted", () => {
+test("qr bootstrap rejects pairing a different Android device after one phone is trusted", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const firstPhoneIdentity = createOkpKeyPair("ed25519");
   const firstPhoneEphemeral = createOkpKeyPair("x25519");

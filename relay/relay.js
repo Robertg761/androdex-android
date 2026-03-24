@@ -8,7 +8,7 @@ const { WebSocket } = require("ws");
 const CLEANUP_DELAY_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
-const CLOSE_CODE_IPHONE_REPLACED = 4003;
+const CLOSE_CODE_ANDROID_REPLACED = 4003;
 
 // In-memory host registry for one live host daemon and one live mobile client per host id.
 const sessions = new Map();
@@ -34,7 +34,7 @@ function setupRelay(wss) {
     const sessionId = match?.[1];
     const role = req.headers["x-role"];
 
-    if (!sessionId || (role !== "mac" && role !== "iphone")) {
+    if (!sessionId || (role !== "mac" && role !== "android")) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
       return;
     }
@@ -45,7 +45,7 @@ function setupRelay(wss) {
     });
 
     // Only the host daemon is allowed to create a fresh host room.
-    if (role === "iphone" && !sessions.has(sessionId)) {
+    if (role === "android" && !sessions.has(sessionId)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Host is not available");
       return;
     }
@@ -60,7 +60,7 @@ function setupRelay(wss) {
 
     const session = sessions.get(sessionId);
 
-    if (role === "iphone" && session.mac?.readyState !== WebSocket.OPEN) {
+    if (role === "android" && session.mac?.readyState !== WebSocket.OPEN) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Host is not available");
       return;
     }
@@ -87,8 +87,8 @@ function setupRelay(wss) {
           || existingClient.readyState === WebSocket.CONNECTING
         ) {
           existingClient.close(
-            CLOSE_CODE_IPHONE_REPLACED,
-            "Replaced by newer iPhone connection"
+            CLOSE_CODE_ANDROID_REPLACED,
+            "Replaced by newer Android connection"
           );
         }
         session.clients.delete(existingClient);

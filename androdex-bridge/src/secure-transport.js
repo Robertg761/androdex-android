@@ -29,7 +29,7 @@ const HANDSHAKE_TAG = "androdex-e2ee-v1";
 const HANDSHAKE_MODE_QR_BOOTSTRAP = "qr_bootstrap";
 const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
 const SECURE_SENDER_MAC = "mac";
-const SECURE_SENDER_IPHONE = "iphone";
+const SECURE_SENDER_ANDROID = "android";
 const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
@@ -436,7 +436,7 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
     if (
       incomingSessionId !== stableHostId
       || keyEpoch !== activeSession.keyEpoch
-      || sender !== SECURE_SENDER_IPHONE
+      || sender !== SECURE_SENDER_ANDROID
       || !Number.isInteger(counter)
       || counter <= activeSession.lastInboundCounter
     ) {
@@ -447,7 +447,7 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
       return true;
     }
 
-    const plaintextBuffer = decryptEnvelopeBuffer(message, activeSession.phoneToMacKey, SECURE_SENDER_IPHONE, counter);
+    const plaintextBuffer = decryptEnvelopeBuffer(message, activeSession.phoneToMacKey, SECURE_SENDER_ANDROID, counter);
     if (!plaintextBuffer) {
       sendControlMessage(createSecureError({
         code: "decrypt_failed",
@@ -491,7 +491,7 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
     }
   }
 
-  // Starts each fresh QR bootstrap with a clean catch-up window for the single trusted phone.
+    // Starts each fresh QR bootstrap with a clean catch-up window for the single trusted Android client.
   function resetOutboundReplayState() {
     outboundBuffer.length = 0;
     outboundBufferBytes = 0;

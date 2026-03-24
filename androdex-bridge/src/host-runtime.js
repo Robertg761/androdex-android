@@ -313,7 +313,7 @@ class HostRuntime {
     }
 
     this.desktopRefresher.handleInbound(rawMessage);
-    this.rememberThreadFromMessage("phone", rawMessage);
+    this.rememberThreadFromMessage("android", rawMessage);
     this.codex.send(rawMessage);
   }
 

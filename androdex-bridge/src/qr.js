@@ -19,7 +19,7 @@ function printQR(pairingPayload) {
     console.log(`Bootstrap Token: ${String(pairingPayload.bootstrapToken).slice(0, 8)}...`);
   }
   console.log(`Expires: ${new Date(pairingPayload.expiresAt).toISOString()}\n`);
-  console.log("Pairing payload (copy into the Android app if you are not scanning):");
+  console.log("Pairing payload (paste into the Android app if you are not scanning):");
   console.log(`${payload}\n`);
 }
 

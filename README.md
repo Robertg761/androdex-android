@@ -57,7 +57,6 @@ Androdex does **not** run Codex on the phone itself.
 - the host bridge is published to npm as `androdex`
 - the Android app source lives in `android/`
 - the repository is built around a host-local Codex runtime plus relay-backed remote access
-- macOS host support can be added later, but it is not the current focus
 
 If you want to work from this repo today, use the bridge from npm or source, then build the Android client from source.
 
@@ -163,7 +162,6 @@ androdex/
 |   `-- src/                      # Bridge runtime and handlers
 |-- android/                      # Android Studio project
 |   `-- app/                      # Kotlin + Compose Android client
-|-- CodexMobile/                  # Legacy iOS source tree kept temporarily during cleanup
 |-- relay/                        # Relay implementation
 `-- assets/                       # Public graphics
 ```
@@ -247,7 +245,7 @@ Yes. That is one of the intended public-repo paths.
 
 ## Security Notes
 
-The Android client and bridge use an end-to-end encrypted session model derived from the upstream projects. Some internal protocol field names still say `mac` or `iphone`; those are implementation leftovers, not actual platform restrictions.
+The Android client and bridge use an end-to-end encrypted session model derived from the upstream projects. Some host-side protocol field names still say `mac`; those are implementation leftovers, not platform restrictions.
 
 ## Credits
 

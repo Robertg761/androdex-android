@@ -42,13 +42,6 @@ cd android
 gradlew assembleDebug
 ```
 
-iOS source tree:
-
-```sh
-cd CodexMobile
-open CodexMobile.xcodeproj
-```
-
 ## Notes
 
 - Set `ANDRODEX_RELAY` explicitly when testing relay-based flows.
