@@ -174,15 +174,7 @@ androdex/
 
 The Android app is not yet broadly released on Google Play.
 
-Right now there are two public paths:
-
-1. build the Android app from source and test it yourself
-2. join the waitlist for the later Play rollout
-
-Recommended waitlist page:
-
-- [Waitlist page in English](https://ranats.github.io/androdex/waitlist.html)
-- [Waitlist page in Japanese](https://ranats.github.io/androdex/waitlist-ja.html)
+Right now the public path is to build the Android app from source and test it yourself.
 
 If you want to be ready for the later Play rollout, you can also search for `androdex-android-testers` in Google Groups and join from there.
 

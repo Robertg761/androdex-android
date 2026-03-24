@@ -160,15 +160,7 @@ androdex/
 
 Android アプリはまだ Google Play で一般公開していません。
 
-現時点での公開導線は 2 つです。
-
-1. source build して自分で試す
-2. 後日の Play rollout に向けて waitlist に参加する
-
-推奨 waitlist ページ:
-
-- [英語の waitlist ページ](https://ranats.github.io/androdex/waitlist.html)
-- [日本語の waitlist ページ](https://ranats.github.io/androdex/waitlist-ja.html)
+現時点での公開導線は、source build して自分で試す方法です。
 
 後日の Play rollout に備えておきたい場合は、Google Groups で `androdex-android-testers` を検索して参加しておいても大丈夫です。
 
