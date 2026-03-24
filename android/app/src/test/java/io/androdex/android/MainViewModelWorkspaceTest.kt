@@ -3,6 +3,7 @@ package io.androdex.android
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -104,13 +105,56 @@ class MainViewModelWorkspaceTest {
 
         assertEquals("Pair again on this Android install.", viewModel.uiState.value.errorMessage)
     }
+
+    @Test
+    fun savedReconnect_waitsUntilForeground() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.RETRYING_SAVED_PAIRING, "Retrying"))
+        dispatcher.scheduler.runCurrent()
+        assertEquals(0, repository.reconnectSavedCalls)
+
+        viewModel.onAppForegrounded()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(1, repository.reconnectSavedCalls)
+    }
+
+    @Test
+    fun savedReconnect_cancelsPendingRetryWhenBackgrounded() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.onAppForegrounded()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(1, repository.reconnectSavedCalls)
+
+        repository.reconnectSavedCalls = 0
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.RETRYING_SAVED_PAIRING, "Retrying"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.onAppBackgrounded()
+        dispatcher.scheduler.advanceTimeBy(5_000)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(0, repository.reconnectSavedCalls)
+    }
 }
 
 private class FakeRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>()
 
+    var hasSavedPairing = false
     var recentState = WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
     var startupNotice: String? = null
+    var reconnectSavedCalls = 0
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
@@ -121,7 +165,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         updatesFlow.emit(update)
     }
 
-    override fun hasSavedPairing(): Boolean = false
+    override fun hasSavedPairing(): Boolean = hasSavedPairing
 
     override fun currentFingerprint(): String? = null
 
@@ -129,7 +173,9 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
 
-    override suspend fun reconnectSaved() = Unit
+    override suspend fun reconnectSaved() {
+        reconnectSavedCalls += 1
+    }
 
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 

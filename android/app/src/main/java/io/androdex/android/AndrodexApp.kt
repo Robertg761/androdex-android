@@ -416,13 +416,19 @@ private fun PairingScreen(
                         color = MaterialTheme.colorScheme.outlineVariant,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
+                    val reconnectButtonLabel = when (state.connectionStatus) {
+                        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying Saved Pairing..."
+                        ConnectionStatus.RECONNECT_REQUIRED -> "Reconnect Saved Pairing"
+                        ConnectionStatus.UPDATE_REQUIRED -> "Reconnect After Updating"
+                        else -> "Reconnect Saved Pairing"
+                    }
                     FilledTonalButton(
                         onClick = onReconnectSaved,
-                        enabled = !state.isBusy,
+                        enabled = !state.isBusy && state.connectionStatus != ConnectionStatus.RETRYING_SAVED_PAIRING,
                         modifier = Modifier.fillMaxWidth(),
                         shape = MaterialTheme.shapes.medium,
                     ) {
-                        Text("Reconnect Saved Pairing")
+                        Text(reconnectButtonLabel)
                     }
                 }
             }
@@ -1215,10 +1221,16 @@ private fun StatusCapsule(
         ConnectionStatus.CONNECTED -> Color(0xFF34D399) to "Connected"
         ConnectionStatus.CONNECTING -> Color(0xFFFBBF24) to "Connecting"
         ConnectionStatus.HANDSHAKING -> Color(0xFFFBBF24) to "Handshaking"
-        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFF59E0B) to "Host Offline, Retrying"
-        ConnectionStatus.RECONNECT_REQUIRED -> Color(0xFFF87171) to "Reconnect Required"
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFF59E0B) to "Waiting For Host"
+        ConnectionStatus.RECONNECT_REQUIRED -> Color(0xFFF87171) to "Repair Pairing Required"
         ConnectionStatus.UPDATE_REQUIRED -> Color(0xFFF87171) to "Update Required"
         ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.outline to "Disconnected"
+    }
+    val guidance = when (status) {
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still trusted. We'll retry automatically when the host or relay comes back."
+        ConnectionStatus.RECONNECT_REQUIRED -> "Saved pairing needs attention. Reconnect from saved pairing or scan a fresh QR code if trust changed."
+        ConnectionStatus.UPDATE_REQUIRED -> updateRequiredGuidance(detail)
+        else -> null
     }
 
     Surface(
@@ -1261,6 +1273,14 @@ private fun StatusCapsule(
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+            guidance?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = if (detail.isNullOrBlank()) 4.dp else 2.dp),
+                )
+            }
             fingerprint?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     text = "Host: $it",
@@ -1270,6 +1290,19 @@ private fun StatusCapsule(
                 )
             }
         }
+    }
+}
+
+private fun updateRequiredGuidance(detail: String?): String {
+    val normalized = detail?.lowercase() ?: return "Update the Android app or host bridge, then reconnect with the saved pairing."
+    return when {
+        normalized.contains("latest compatible androdex mobile app") ->
+            "This host bridge needs a newer Android app build. Update the Android app, then reconnect with the saved pairing."
+        normalized.contains("bridge and mobile client are not using the same secure transport version") ->
+            "The Android app and host bridge are out of sync. Update whichever side is older, then reconnect with the saved pairing."
+        normalized.contains("bridge version mismatch") || normalized.contains("different secure transport version") ->
+            "This saved pairing reached a host bridge with a different secure transport version. Update the host bridge or Android app, then reconnect."
+        else -> "Update the Android app or host bridge, then reconnect with the saved pairing."
     }
 }
 

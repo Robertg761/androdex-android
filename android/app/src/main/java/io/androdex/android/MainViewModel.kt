@@ -59,6 +59,7 @@ data class AndrodexUiState(
 class MainViewModel(
     private val repository: AndrodexRepositoryContract,
 ) : ViewModel() {
+    private var appInForeground = false
     private var savedReconnectInFlight = false
     private var savedReconnectRetryJob: Job? = null
     private var suppressSavedReconnect = false
@@ -128,6 +129,9 @@ class MainViewModel(
     }
 
     fun reconnectSavedIfAvailable() {
+        if (!appInForeground) {
+            return
+        }
         val snapshot = uiStateFlow.value
         if (!snapshot.hasSavedPairing || savedReconnectInFlight) {
             return
@@ -144,6 +148,16 @@ class MainViewModel(
 
         suppressSavedReconnect = false
         scheduleSavedReconnectRetry(immediate = true)
+    }
+
+    fun onAppForegrounded() {
+        appInForeground = true
+        reconnectSavedIfAvailable()
+    }
+
+    fun onAppBackgrounded() {
+        appInForeground = false
+        cancelSavedReconnectRetry()
     }
 
     fun disconnect(clearSavedPairing: Boolean = false) {
@@ -388,7 +402,11 @@ class MainViewModel(
                     }
 
                     ConnectionStatus.RETRYING_SAVED_PAIRING -> {
-                        scheduleSavedReconnectRetry()
+                        if (appInForeground) {
+                            scheduleSavedReconnectRetry()
+                        } else {
+                            cancelSavedReconnectRetry()
+                        }
                     }
 
                     ConnectionStatus.DISCONNECTED,
@@ -485,7 +503,7 @@ class MainViewModel(
 
     private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
         val snapshot = uiStateFlow.value
-        if (suppressSavedReconnect || !snapshot.hasSavedPairing || snapshot.pairingInput.isNotBlank()) {
+        if (!appInForeground || suppressSavedReconnect || !snapshot.hasSavedPairing || snapshot.pairingInput.isNotBlank()) {
             return
         }
         if (savedReconnectRetryJob?.isActive == true) {
@@ -498,7 +516,7 @@ class MainViewModel(
             }
             while (isActive) {
                 val state = uiStateFlow.value
-                if (suppressSavedReconnect || !state.hasSavedPairing || state.pairingInput.isNotBlank()) {
+                if (!appInForeground || suppressSavedReconnect || !state.hasSavedPairing || state.pairingInput.isNotBlank()) {
                     break
                 }
                 if (state.connectionStatus == ConnectionStatus.CONNECTED) {

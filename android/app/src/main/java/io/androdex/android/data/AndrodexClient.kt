@@ -85,6 +85,7 @@ class AndrodexClient(
     private var openSocketDeferred: CompletableDeferred<Unit>? = null
     private var secureSession: SecureSession? = null
     private var pendingHandshake: PendingHandshake? = null
+    private var pendingTerminalConnectionUpdate: ClientUpdate.Connection? = null
     private var lastSocketCloseDetail: String? = null
     private var lastSocketFailureDetail: String? = null
     private var phoneIdentityState: PhoneIdentityState = persistence.loadPhoneIdentity() ?: generatePhoneIdentityState().also {
@@ -295,6 +296,7 @@ class AndrodexClient(
             val relayUrl = pairing.relay.trimEnd('/')
             val attemptId = System.currentTimeMillis()
             Log.i(logTag, "connect[$attemptId] start relay=$relayUrl host=${pairing.routingId.take(8)}")
+            pendingTerminalConnectionUpdate = null
             lastSocketCloseDetail = null
             lastSocketFailureDetail = null
             val request = Request.Builder()
@@ -375,6 +377,7 @@ class AndrodexClient(
             performSecureHandshake(pairing)
             initializeSession()
             runCatching { loadRuntimeConfig() }
+            pendingTerminalConnectionUpdate = null
             updatesFlow.emit(
                 ClientUpdate.Connection(
                     status = ConnectionStatus.CONNECTED,
@@ -394,6 +397,7 @@ class AndrodexClient(
             pendingHandshake = null
             lastSocketCloseDetail = null
             lastSocketFailureDetail = null
+            pendingTerminalConnectionUpdate = null
             clearPendingRequests()
             clearSecureWaiters(IllegalStateException("Disconnected"))
             if (clearSavedPairing) {
@@ -485,7 +489,7 @@ class AndrodexClient(
         val serverHello = JSONObject(serverHelloRaw)
         val protocolVersion = serverHello.optInt("protocolVersion", 0)
         if (protocolVersion != secureProtocolVersion) {
-            updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.UPDATE_REQUIRED, "Bridge version mismatch."))
+            emitTerminalConnectionUpdate(ClientUpdate.Connection(ConnectionStatus.UPDATE_REQUIRED, "Bridge version mismatch."))
             throw IllegalStateException("This bridge uses a different secure transport version.")
         }
 
@@ -512,6 +516,12 @@ class AndrodexClient(
             signature = macSignature,
         )
         if (!signatureValid) {
+            emitTerminalConnectionUpdate(
+                ClientUpdate.Connection(
+                    ConnectionStatus.RECONNECT_REQUIRED,
+                    "The secure host signature could not be verified.",
+                )
+            )
             throw IllegalStateException("The secure host signature could not be verified.")
         }
 
@@ -909,29 +919,10 @@ class AndrodexClient(
         clearPendingRequests()
         clearSecureWaiters(IllegalStateException("Socket closed"))
 
-        if (code in setOf(4000, 4001, 4002, 4003)) {
-            updatesFlow.emit(
-                ClientUpdate.Connection(
-                    status = when (code) {
-                        4002 -> ConnectionStatus.RETRYING_SAVED_PAIRING
-                        else -> ConnectionStatus.RECONNECT_REQUIRED
-                    },
-                    detail = when (code) {
-                        4002 -> "Host offline, retrying saved pairing until the daemon reconnects."
-                        4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
-                        else -> "The relay connection closed (code $code). Reconnect from saved pairing."
-                    }
-                )
-            )
-            return
+        val update = connectionUpdateForSocketClose(code, consumePendingTerminalConnectionUpdate())
+        if (update != null) {
+            updatesFlow.emit(update)
         }
-
-        updatesFlow.emit(
-            ClientUpdate.Connection(
-                ConnectionStatus.DISCONNECTED,
-                "Relay disconnected (code $code)."
-            )
-        )
     }
 
     private suspend fun handleSocketFailure(failedSocket: WebSocket, error: Throwable) {
@@ -948,20 +939,19 @@ class AndrodexClient(
             return
         }
 
-        updatesFlow.emit(
-            ClientUpdate.Connection(
-                status = if (savedPairingPayload != null) {
-                    ConnectionStatus.RETRYING_SAVED_PAIRING
-                } else {
-                    ConnectionStatus.DISCONNECTED
-                },
-                detail = if (savedPairingPayload != null) {
-                    "Relay unavailable, retrying saved pairing."
-                } else {
-                    error.message ?: "Relay connection failed."
-                },
-            )
+        secureSession = null
+        pendingHandshake = null
+        clearPendingRequests()
+        clearSecureWaiters(IllegalStateException("Socket failure"))
+
+        val update = connectionUpdateForSocketFailure(
+            savedPairingAvailable = savedPairingPayload != null,
+            errorMessage = error.message,
+            pendingTerminalUpdate = consumePendingTerminalConnectionUpdate(),
         )
+        if (update != null) {
+            updatesFlow.emit(update)
+        }
     }
 
     private fun buildNotConnectedDetail(): String {
@@ -981,12 +971,7 @@ class AndrodexClient(
             val error = JSONObject(rawText)
             val code = error.optString("code")
             val message = error.optString("message").ifBlank { "Secure handshake failed." }
-            val status = when (code) {
-                "update_required" -> ConnectionStatus.UPDATE_REQUIRED
-                "pairing_expired", "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> ConnectionStatus.RECONNECT_REQUIRED
-                else -> ConnectionStatus.DISCONNECTED
-            }
-            updatesFlow.emit(ClientUpdate.Connection(status, message))
+            emitTerminalConnectionUpdate(secureErrorConnectionUpdate(code, message))
         }
 
         val waiter = requestMutex.withLock {
@@ -1132,6 +1117,17 @@ class AndrodexClient(
         outstanding.forEach { it.completeExceptionally(IllegalStateException("Disconnected")) }
     }
 
+    private suspend fun emitTerminalConnectionUpdate(update: ClientUpdate.Connection) {
+        pendingTerminalConnectionUpdate = update
+        updatesFlow.emit(update)
+    }
+
+    private fun consumePendingTerminalConnectionUpdate(): ClientUpdate.Connection? {
+        val update = pendingTerminalConnectionUpdate
+        pendingTerminalConnectionUpdate = null
+        return update
+    }
+
     private fun normalizeRuntimeSelectionsAfterModelsUpdate() {
         if (availableModels.isEmpty()) {
             selectedReasoningEffort = null
@@ -1243,5 +1239,63 @@ class AndrodexClient(
         var lastInboundBridgeOutboundSeq: Int,
         var lastInboundCounter: Int = -1,
         var nextOutboundCounter: Int = 0,
+    )
+}
+
+internal fun secureErrorConnectionUpdate(code: String, message: String): ClientUpdate.Connection {
+    val status = when (code) {
+        "update_required" -> ConnectionStatus.UPDATE_REQUIRED
+        "pairing_expired", "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> ConnectionStatus.RECONNECT_REQUIRED
+        else -> ConnectionStatus.DISCONNECTED
+    }
+    return ClientUpdate.Connection(status, message)
+}
+
+internal fun connectionUpdateForSocketClose(
+    code: Int,
+    pendingTerminalUpdate: ClientUpdate.Connection?,
+): ClientUpdate.Connection? {
+    if (pendingTerminalUpdate != null) {
+        return null
+    }
+    return if (code in setOf(4000, 4001, 4002, 4003)) {
+        ClientUpdate.Connection(
+            status = when (code) {
+                4002 -> ConnectionStatus.RETRYING_SAVED_PAIRING
+                else -> ConnectionStatus.RECONNECT_REQUIRED
+            },
+            detail = when (code) {
+                4002 -> "Host offline, retrying saved pairing until the daemon reconnects."
+                4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
+                else -> "The relay connection closed (code $code). Reconnect from saved pairing."
+            }
+        )
+    } else {
+        ClientUpdate.Connection(
+            ConnectionStatus.DISCONNECTED,
+            "Relay disconnected (code $code)."
+        )
+    }
+}
+
+internal fun connectionUpdateForSocketFailure(
+    savedPairingAvailable: Boolean,
+    errorMessage: String?,
+    pendingTerminalUpdate: ClientUpdate.Connection?,
+): ClientUpdate.Connection? {
+    if (pendingTerminalUpdate != null) {
+        return null
+    }
+    return ClientUpdate.Connection(
+        status = if (savedPairingAvailable) {
+            ConnectionStatus.RETRYING_SAVED_PAIRING
+        } else {
+            ConnectionStatus.DISCONNECTED
+        },
+        detail = if (savedPairingAvailable) {
+            "Relay unavailable, retrying saved pairing."
+        } else {
+            errorMessage ?: "Relay connection failed."
+        },
     )
 }
