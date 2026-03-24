@@ -167,8 +167,6 @@ The Android app is not yet broadly released on Google Play.
 
 Right now the public path is to build the Android app from source and test it yourself.
 
-If you want to be ready for the later Play rollout, you can also search for `androdex-android-testers` in Google Groups and join from there.
-
 - [Google Groups search entry point](https://groups.google.com/)
 
 The actual Play opt-in and install step will be shared later.
