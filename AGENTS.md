@@ -34,7 +34,6 @@ This repo keeps Codex running on the user's host machine, but device access may 
 
 ## Build guardrails
 
-- Do not run Android builds/tests unless the user explicitly asks.
 - For small mobile fixes, prefer inspection and targeted edits over emulator runs by default.
 
 ## Quick runbook

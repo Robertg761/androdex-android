@@ -28,7 +28,11 @@ private val isoFormatters = listOf(
 
 fun JSONObject.stringOrNull(vararg keys: String): String? {
     for (key in keys) {
-        val value = optString(key, "").trim()
+        val rawValue = opt(key)
+        if (rawValue == null || rawValue == JSONObject.NULL) {
+            continue
+        }
+        val value = rawValue.toString().trim()
         if (value.isNotEmpty()) {
             return value
         }
