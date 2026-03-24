@@ -3,8 +3,6 @@
 [![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
-[Japanese README](README.ja.md)
-
 Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is itself a fork of [Remodex](https://github.com/Emanuele-web04/remodex), focused on one workflow:
 
 - run local Codex on Windows
