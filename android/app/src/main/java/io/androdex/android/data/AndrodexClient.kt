@@ -912,9 +912,12 @@ class AndrodexClient(
         if (code in setOf(4000, 4001, 4002, 4003)) {
             updatesFlow.emit(
                 ClientUpdate.Connection(
-                    status = ConnectionStatus.RECONNECT_REQUIRED,
+                    status = when (code) {
+                        4002 -> ConnectionStatus.RETRYING_SAVED_PAIRING
+                        else -> ConnectionStatus.RECONNECT_REQUIRED
+                    },
                     detail = when (code) {
-                        4002 -> "The host is offline right now. Retry from saved pairing when the daemon reconnects."
+                        4002 -> "Host offline, retrying saved pairing until the daemon reconnects."
                         4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
                         else -> "The relay connection closed (code $code). Reconnect from saved pairing."
                     }
@@ -947,8 +950,16 @@ class AndrodexClient(
 
         updatesFlow.emit(
             ClientUpdate.Connection(
-                status = ConnectionStatus.DISCONNECTED,
-                detail = error.message ?: "Relay connection failed.",
+                status = if (savedPairingPayload != null) {
+                    ConnectionStatus.RETRYING_SAVED_PAIRING
+                } else {
+                    ConnectionStatus.DISCONNECTED
+                },
+                detail = if (savedPairingPayload != null) {
+                    "Relay unavailable, retrying saved pairing."
+                } else {
+                    error.message ?: "Relay connection failed."
+                },
             )
         )
     }

@@ -15,12 +15,17 @@ import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+private const val savedReconnectRetryDelayMs = 5_000L
 
 data class AndrodexUiState(
     val pairingInput: String = "",
@@ -55,6 +60,8 @@ class MainViewModel(
     private val repository: AndrodexRepositoryContract,
 ) : ViewModel() {
     private var savedReconnectInFlight = false
+    private var savedReconnectRetryJob: Job? = null
+    private var suppressSavedReconnect = false
 
     private val uiStateFlow = MutableStateFlow(
         AndrodexUiState(
@@ -100,6 +107,8 @@ class MainViewModel(
             return
         }
 
+        suppressSavedReconnect = false
+        cancelSavedReconnectRetry()
         runBusyAction {
             repository.connectWithPairingPayload(payload)
             repository.refreshThreads()
@@ -108,6 +117,8 @@ class MainViewModel(
     }
 
     fun reconnectSaved() {
+        suppressSavedReconnect = false
+        cancelSavedReconnectRetry()
         runBusyAction {
             repository.reconnectSaved()
             repository.refreshThreads()
@@ -130,21 +141,13 @@ class MainViewModel(
             return
         }
 
-        viewModelScope.launch {
-            savedReconnectInFlight = true
-            try {
-                repository.reconnectSaved()
-                repository.refreshThreads()
-                loadWorkspaceState()
-            } catch (_: Throwable) {
-                // The pairing screen already shows connection status and retry affordances.
-            } finally {
-                savedReconnectInFlight = false
-            }
-        }
+        suppressSavedReconnect = false
+        scheduleSavedReconnectRetry(immediate = true)
     }
 
     fun disconnect(clearSavedPairing: Boolean = false) {
+        suppressSavedReconnect = true
+        cancelSavedReconnectRetry()
         runBusyAction {
             repository.disconnect(clearSavedPairing)
         }
@@ -376,9 +379,25 @@ class MainViewModel(
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
                     )
                 }
-                if (update.status == ConnectionStatus.CONNECTED) {
-                    loadRuntimeConfig()
-                    openProjectPicker()
+                when (update.status) {
+                    ConnectionStatus.CONNECTED -> {
+                        cancelSavedReconnectRetry()
+                        loadRuntimeConfig()
+                        openProjectPicker()
+                    }
+
+                    ConnectionStatus.RETRYING_SAVED_PAIRING -> {
+                        scheduleSavedReconnectRetry()
+                    }
+
+                    ConnectionStatus.DISCONNECTED,
+                    ConnectionStatus.RECONNECT_REQUIRED,
+                    ConnectionStatus.UPDATE_REQUIRED -> {
+                        cancelSavedReconnectRetry()
+                    }
+
+                    ConnectionStatus.CONNECTING,
+                    ConnectionStatus.HANDSHAKING -> Unit
                 }
             }
 
@@ -388,6 +407,10 @@ class MainViewModel(
                         hasSavedPairing = update.hasSavedPairing,
                         secureFingerprint = update.fingerprint,
                     )
+                }
+                if (!update.hasSavedPairing) {
+                    suppressSavedReconnect = false
+                    cancelSavedReconnectRetry()
                 }
             }
 
@@ -457,6 +480,58 @@ class MainViewModel(
                 uiStateFlow.update { it.copy(errorMessage = update.message) }
             }
         }
+    }
+
+    private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
+        val snapshot = uiStateFlow.value
+        if (suppressSavedReconnect || !snapshot.hasSavedPairing || snapshot.pairingInput.isNotBlank()) {
+            return
+        }
+        if (savedReconnectRetryJob?.isActive == true) {
+            return
+        }
+
+        savedReconnectRetryJob = viewModelScope.launch {
+            if (!immediate) {
+                delay(savedReconnectRetryDelayMs)
+            }
+            while (isActive) {
+                val state = uiStateFlow.value
+                if (suppressSavedReconnect || !state.hasSavedPairing || state.pairingInput.isNotBlank()) {
+                    break
+                }
+                if (state.connectionStatus == ConnectionStatus.CONNECTED) {
+                    break
+                }
+                if (savedReconnectInFlight) {
+                    delay(savedReconnectRetryDelayMs)
+                    continue
+                }
+
+                savedReconnectInFlight = true
+                try {
+                    repository.reconnectSaved()
+                    repository.refreshThreads()
+                    loadWorkspaceState()
+                    break
+                } catch (_: Throwable) {
+                    delay(savedReconnectRetryDelayMs)
+                } finally {
+                    savedReconnectInFlight = false
+                }
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (savedReconnectRetryJob === job) {
+                    savedReconnectRetryJob = null
+                }
+            }
+        }
+    }
+
+    private fun cancelSavedReconnectRetry() {
+        savedReconnectRetryJob?.cancel()
+        savedReconnectRetryJob = null
     }
 
     private fun applyAssistantDelta(

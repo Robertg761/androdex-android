@@ -1215,6 +1215,7 @@ private fun StatusCapsule(
         ConnectionStatus.CONNECTED -> Color(0xFF34D399) to "Connected"
         ConnectionStatus.CONNECTING -> Color(0xFFFBBF24) to "Connecting"
         ConnectionStatus.HANDSHAKING -> Color(0xFFFBBF24) to "Handshaking"
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFF59E0B) to "Host Offline, Retrying"
         ConnectionStatus.RECONNECT_REQUIRED -> Color(0xFFF87171) to "Reconnect Required"
         ConnectionStatus.UPDATE_REQUIRED -> Color(0xFFF87171) to "Update Required"
         ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.outline to "Disconnected"
