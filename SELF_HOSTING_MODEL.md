@@ -8,7 +8,7 @@ If you cloned Androdex from GitHub, the intended path is local-first usage or se
 
 The public repository includes:
 
-- the Windows-friendly host bridge
+- the host bridge
 - the Android app source code
 - the public relay code
 - local pairing and self-hosting documentation
@@ -36,12 +36,12 @@ If you use the public repo, expect one of these flows:
 
 That means:
 
-- Codex still runs on your Windows host
-- git commands still run on your Windows host
+- Codex still runs on your host machine
+- git commands still run on your host machine
 - the Android phone is still a paired remote client
 - the relay is only the transport layer
 
-For the full setup guide, read [Docs/self-hosting.md](Docs/self-hosting.md).
+For relay details, read [relay/README.md](G:\Projects\Androdex\relay\README.md).
 
 ## Why the Repo Stays Generic
 

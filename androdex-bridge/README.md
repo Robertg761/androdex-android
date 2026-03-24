@@ -2,7 +2,7 @@
 
 `androdex` is the host-side CLI bridge for the Androdex project.
 
-It is published separately from the Android app. The daemon keeps a stable host identity alive on the host machine and lets a paired mobile client control local Codex remotely.
+It is published separately from the Android app. The daemon keeps a stable host identity alive on the host machine and lets the Android client control local Codex remotely.
 
 ## Install
 
@@ -26,7 +26,7 @@ androdex watch
 - keeps a durable relay presence keyed by a stable host id
 - prints a pairing QR code and raw pairing payload on demand
 - activates local `codex app-server` for the current workspace
-- forwards JSON-RPC traffic between the host and the mobile client
+- forwards JSON-RPC traffic between the host and the Android client
 - handles git and workspace actions on the host machine
 
 ## Commands
@@ -65,6 +65,7 @@ Useful variables:
 - `ANDRODEX_CODEX_ENDPOINT`: connect to an existing Codex WebSocket instead of spawning a local runtime
 - `ANDRODEX_REFRESH_ENABLED`: enable the macOS desktop refresh workaround explicitly
 - `ANDRODEX_REFRESH_DEBOUNCE_MS`: adjust refresh debounce timing
+- `ANDRODEX_REFRESH_COMMAND`: override desktop refresh with a custom command
 
 ## Source builds
 
@@ -78,6 +79,6 @@ npm start
 
 ## Project status
 
-This package is part of Androdex, a local-first fork focused on the Windows host + Android client workflow.
+This package is part of Androdex, a local-first project focused on the host-machine-plus-Android workflow today.
 
 Credit for the upstream fork chain remains with [relaydex](https://github.com/Ranats/relaydex) and [Remodex](https://github.com/Emanuele-web04/remodex).

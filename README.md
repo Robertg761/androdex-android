@@ -5,7 +5,7 @@
 
 Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is itself a fork of [Remodex](https://github.com/Emanuele-web04/remodex), focused on one workflow:
 
-- run local Codex on Windows
+- run local Codex on the host machine
 - pair the phone once with `androdex pair`
 - activate the current local workspace with `androdex up`
 - control that local Codex session from Android
@@ -23,7 +23,6 @@ Androdex is local-first. Codex keeps running on your host computer, while the ph
 - [Commands](#commands)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
-- [Android Availability](#android-availability)
 - [Feedback](#feedback)
 - [Environment Variables](#environment-variables)
 - [Self-Hosting](#self-hosting)
@@ -43,7 +42,7 @@ Androdex does **not** run Codex on the phone itself.
 ## Key Features
 
 - end-to-end encrypted pairing between the Android client and the host bridge
-- local-first host workflow: Codex, git, and file operations stay on your Windows machine
+- local-first host workflow: Codex, git, and file operations stay on your machine
 - QR pairing and pairing-payload paste
 - open existing threads and create new ones from Android
 - stream Codex output on the phone while work continues on the host
@@ -53,11 +52,12 @@ Androdex does **not** run Codex on the phone itself.
 
 ## Current Status
 
-- Windows host bridge is published to npm as `androdex`
-- the Android app source is public in this repository
-- the public Google Play release is still being prepared
+- the host bridge is published to npm as `androdex`
+- the Android app source lives in `android/`
+- the repository assumes a local bridge and an explicitly configured relay, not a built-in hosted backend
+- macOS host support can be added later, but it is not the current focus
 
-If you want to try the Android client now, build it from source from the `android/` directory.
+If you want to work from this repo today, use the bridge from npm or source, then build the Android client from source.
 
 ## Install the Bridge
 
@@ -81,7 +81,7 @@ Then open the Android app and scan the pairing QR code.
 
 ## Build the Android App From Source
 
-If you want to test the Android client before the public Play release:
+If you want to test the Android client from source:
 
 1. Open `android/` in Android Studio
 2. Let Gradle sync finish
@@ -103,9 +103,9 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Quick Start
 
-1. Install Node.js and Codex CLI on Windows
+1. Install Node.js and Codex CLI on the host machine
 2. Install the bridge package
-3. Run `androdex pair` once on the host and pair from Android
+3. Run `androdex pair` once on the host and pair from the Android app
 4. Run `androdex up` in the local project directory you want active
 5. Open or create a thread and send a message
 
@@ -156,20 +156,10 @@ androdex/
 |   `-- src/                      # Bridge runtime and handlers
 |-- android/                      # Android Studio project
 |   `-- app/                      # Kotlin + Compose Android client
-|-- CodexMobile/                  # Upstream iOS source tree kept for protocol reference
+|-- CodexMobile/                  # Legacy iOS source tree kept temporarily during cleanup
 |-- relay/                        # Relay implementation
 `-- assets/                       # Public graphics
 ```
-
-## Android Availability
-
-The Android app is not yet broadly released on Google Play.
-
-Right now the public path is to build the Android app from source and test it yourself.
-
-- [Google Groups search entry point](https://groups.google.com/)
-
-The actual Play opt-in and install step will be shared later.
 
 ## Feedback
 
@@ -188,7 +178,7 @@ Helpful details:
 
 ## Environment Variables
 
-The bridge accepts `ANDRODEX_*` names, the legacy `RELAYDEX_*` names, and the older `REMODEX_*` names.
+The bridge reads `ANDRODEX_*` environment variables.
 
 | Variable | Description |
 |----------|-------------|
@@ -197,6 +187,7 @@ The bridge accepts `ANDRODEX_*` names, the legacy `RELAYDEX_*` names, and the ol
 | `ANDRODEX_REFRESH_ENABLED` | Enable the macOS desktop refresh workaround explicitly |
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
+| `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
 
 If you are building from source or self-hosting, set these explicitly. The public repo does not assume a hosted relay default.
 
@@ -213,13 +204,13 @@ If you self-host, keep private hostnames, IPs, and credentials out of the public
 ## FAQ
 
 **Does this work on Windows?**  
-Yes. This fork is specifically focused on the Windows host + Android workflow.
+Yes. This fork is currently aimed at the host-machine-plus-Android workflow, with Windows as the main supported host setup today.
 
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.
 
 **What happens if I close the terminal running `androdex up`?**  
-The bridge stops. Start it again to create a new live session.
+The daemon keeps running in the background. Run `androdex up` again in a project directory whenever you want to switch or reactivate the active workspace.
 
 **How do I force a clean pairing state?**  
 Run `androdex reset-pairing`, then start the bridge again with `androdex up`.
@@ -229,7 +220,7 @@ Yes. That is one of the intended public-repo paths.
 
 ## Security Notes
 
-The mobile client and bridge use an end-to-end encrypted session model derived from the upstream projects. Some internal protocol field names still say `mac` or `iphone`; those are implementation leftovers, not actual platform restrictions.
+The Android client and bridge use an end-to-end encrypted session model derived from the upstream projects. Some internal protocol field names still say `mac` or `iphone`; those are implementation leftovers, not actual platform restrictions.
 
 ## Credits
 
