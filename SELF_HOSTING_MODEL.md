@@ -41,6 +41,12 @@ That means:
 - the Android phone is still a paired remote client
 - the relay is only the transport layer
 
+The practical split is:
+
+- local-only workflow: use a local relay URL on your LAN for testing
+- cross-network workflow: run a public `wss://` relay on infrastructure you control
+- managed builds: inject `ANDRODEX_DEFAULT_RELAY_URL` at build or release time, while still honoring `ANDRODEX_RELAY`
+
 For relay details, read [relay/README.md](G:\Projects\Androdex\relay\README.md).
 
 ## Why the Repo Stays Generic
@@ -64,4 +70,21 @@ If you fork or self-host Androdex, keep these things out of the public repo:
 - any private build overrides
 - any publish-time package defaults
 
+If you ship managed builds for end users, prefer injecting the hosted relay URL at build or release time through `ANDRODEX_DEFAULT_RELAY_URL`, while continuing to honor explicit self-host overrides through `ANDRODEX_RELAY`.
+
 Those belong in your own environment, private config, or release pipeline.
+
+## Public Relay Checklist
+
+If you want pairing to work when the phone is not on the same network as the host, your relay needs:
+
+- a public DNS name you control
+- TLS, so the app can use `wss://`
+- ports `80` and `443` reachable from the internet if you use ACME/Let's Encrypt on the box
+- the bridge configured with that relay URL before pairing
+
+At the end, the bridge should pair against a URL shaped like:
+
+```text
+wss://your-relay.example/relay
+```

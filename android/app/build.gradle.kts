@@ -5,6 +5,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val defaultRelayUrlProvider = providers
+    .gradleProperty("ANDRODEX_DEFAULT_RELAY_URL")
+    .orElse(providers.environmentVariable("ANDRODEX_DEFAULT_RELAY_URL"))
+    .orElse("")
+
+fun escapeBuildConfigString(value: String): String {
+    return value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+}
+
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 if (keystorePropertiesFile.exists()) {
@@ -21,6 +32,11 @@ android {
         targetSdk = 36
         versionCode = 9
         versionName = "0.1.8"
+        buildConfigField(
+            "String",
+            "ANDRODEX_DEFAULT_RELAY_URL",
+            "\"${escapeBuildConfigString(defaultRelayUrlProvider.get())}\""
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -58,6 +74,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 

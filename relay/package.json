@@ -1,0 +1,17 @@
+{
+  "name": "androdex-relay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone relay server for Androdex.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node ./server.js"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

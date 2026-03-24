@@ -23,6 +23,7 @@ import java.util.UUID
 data class AndrodexUiState(
     val pairingInput: String = "",
     val hasSavedPairing: Boolean = false,
+    val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
     val secureFingerprint: String? = null,
@@ -49,6 +50,7 @@ class MainViewModel(
     private val uiStateFlow = MutableStateFlow(
         AndrodexUiState(
             hasSavedPairing = repository.hasSavedPairing(),
+            defaultRelayUrl = AppEnvironment.defaultRelayUrl.takeIf { it.isNotEmpty() },
             secureFingerprint = repository.currentFingerprint(),
         )
     )

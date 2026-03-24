@@ -105,9 +105,12 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 1. Install Node.js and Codex CLI on the host machine
 2. Install the bridge package
-3. Run `androdex pair` once on the host and pair from the Android app
-4. Run `androdex up` in the local project directory you want active
-5. Open or create a thread and send a message
+3. Choose a relay path:
+   - local-only testing: set `ANDRODEX_RELAY=ws://<your-host-ip>:8787/relay`
+   - cross-network access: run your own public relay and set `ANDRODEX_RELAY=wss://<your-domain>/relay`
+4. Run `androdex pair` once on the host and pair from the Android app
+5. Run `androdex up` in the local project directory you want active
+6. Open or create a thread and send a message
 
 ## Commands
 
@@ -182,14 +185,30 @@ The bridge reads `ANDRODEX_*` environment variables.
 
 | Variable | Description |
 |----------|-------------|
-| `ANDRODEX_RELAY` | Override the relay URL |
+| `ANDRODEX_RELAY` | Override the relay URL explicitly |
+| `ANDRODEX_DEFAULT_RELAY_URL` | Provide the default hosted relay URL for managed builds |
 | `ANDRODEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
 | `ANDRODEX_REFRESH_ENABLED` | Enable the macOS desktop refresh workaround explicitly |
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
 
-If you are building from source or self-hosting, set these explicitly. The public repo does not assume a hosted relay default.
+The bridge resolves relay configuration in this order:
+
+1. `ANDRODEX_RELAY`
+2. `ANDRODEX_DEFAULT_RELAY_URL`
+
+That means release builds can ship with a managed hosted relay, while self-host users can still override it explicitly. If you are building from source or self-hosting, set these explicitly. The public repo does not assume a hosted relay default.
+
+Typical examples:
+
+```sh
+# Local network testing
+ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex pair
+
+# Public relay you control
+ANDRODEX_RELAY=wss://relay.example.com/relay androdex pair
+```
 
 ## Self-Hosting
 
@@ -198,8 +217,11 @@ The public repository is meant to stay self-host friendly.
 - you can run a local relay or your own hosted relay
 - the relay is only a transport hop
 - Codex still runs on your own machine
+- if you want the phone to work away from your LAN, use a public `wss://` relay you control
 
 If you self-host, keep private hostnames, IPs, and credentials out of the public repository.
+
+For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/README.md).
 
 ## FAQ
 

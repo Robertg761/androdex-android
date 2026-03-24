@@ -546,12 +546,17 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
   const codexEndpoint = readFirstDefinedEnv(["ANDRODEX_CODEX_ENDPOINT"], "", env);
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
+  const relayUrl = readFirstDefinedEnv(
+    ["ANDRODEX_RELAY", "ANDRODEX_DEFAULT_RELAY_URL"],
+    "",
+    env
+  );
   // Windows uses protocol deep links to keep the desktop client aligned with
   // phone-authored activity. macOS keeps the more conservative opt-in default
   // because it still depends on the AppleScript workaround.
   const defaultRefreshEnabled = platform === "win32";
   return {
-    relayUrl: readFirstDefinedEnv(["ANDRODEX_RELAY"], "", env),
+    relayUrl,
     refreshEnabled: explicitRefreshEnabled == null
       ? defaultRefreshEnabled
       : explicitRefreshEnabled,
