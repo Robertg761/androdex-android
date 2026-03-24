@@ -17,7 +17,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,18 +96,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ThreadSummary
 import java.text.DateFormat
 import java.util.Date
@@ -970,6 +979,7 @@ private fun ThreadDetailScreen(
                 .imePadding(),
         ) {
             BusyIndicator(state = state)
+            AgentActivityBanner(messages = state.messages)
 
             // Messages
             Box(
@@ -981,7 +991,7 @@ private fun ThreadDetailScreen(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(state.messages, key = { it.id }) { message ->
                         MessageBubble(message = message)
@@ -1030,22 +1040,12 @@ private fun MessageBubble(message: ConversationMessage) {
     val isSystem = message.role == ConversationRole.SYSTEM
 
     if (isSystem) {
-        // System messages: centered, muted capsule
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(
-                    text = message.text.ifBlank { " " },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                )
-            }
+        when (message.kind) {
+            ConversationKind.FILE_CHANGE -> FileChangeBubble(message)
+            ConversationKind.COMMAND -> CommandBubble(message)
+            ConversationKind.PLAN -> PlanBubble(message)
+            ConversationKind.THINKING -> ThinkingBubble(message)
+            else -> SystemCapsule(message)
         }
         return
     }
@@ -1103,31 +1103,492 @@ private fun MessageBubble(message: ConversationMessage) {
     }
 }
 
+// ─────────────────────────────────────────────────
+// System message: generic capsule
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun SystemCapsule(message: ConversationMessage) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text(
+                text = message.text.ifBlank { " " },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Thinking bubble
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun ThinkingBubble(message: ConversationMessage) {
+    val infiniteTransition = rememberInfiniteTransition(label = "thinking")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+        label = "thinkingPulse",
+    )
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Animated thinking dots
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                repeat(3) { index ->
+                    val dotAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.3f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            tween(600, delayMillis = index * 150),
+                            RepeatMode.Reverse,
+                        ),
+                        label = "dot$index",
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = dotAlpha)),
+                    )
+                }
+            }
+            Text(
+                text = message.text.ifBlank { "Thinking..." },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// File change bubble with diff rendering
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun FileChangeBubble(message: ConversationMessage) {
+    val isCompleted = message.status?.lowercase() == "completed"
+    val statusColor = if (isCompleted) Color(0xFF34D399) else Color(0xFFFBBF24)
+    var expanded by remember { mutableStateOf(true) }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            // Header with file path and status
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Status dot
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(statusColor),
+                    )
+                    // File icon + path
+                    Text(
+                        text = message.filePath
+                            ?.substringAfterLast('/')
+                            ?.substringAfterLast('\\')
+                            ?: "File Change",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Status badge
+                    Surface(
+                        color = statusColor.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                    ) {
+                        Text(
+                            text = (message.status ?: "changed").replaceFirstChar(Char::uppercase),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+            }
+
+            // Full file path (if available)
+            message.filePath?.let { path ->
+                Text(
+                    text = path,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+
+            // Diff content
+            AnimatedVisibility(visible = expanded) {
+                if (!message.diffText.isNullOrBlank()) {
+                    DiffView(
+                        diffText = message.diffText,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                } else {
+                    // Fallback: show summary text
+                    val summaryText = message.text
+                        .removePrefix("Status: ${message.status ?: "completed"}")
+                        .removePrefix("\n\n")
+                        .removePrefix("Path: ${message.filePath ?: ""}")
+                        .removePrefix("\n\n")
+                        .trim()
+                    if (summaryText.isNotBlank()) {
+                        Text(
+                            text = summaryText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Diff view - color-coded unified diff
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun DiffView(diffText: String, modifier: Modifier = Modifier) {
+    val addedBg = Color(0xFF22C55E).copy(alpha = 0.12f)
+    val removedBg = Color(0xFFEF4444).copy(alpha = 0.12f)
+    val addedText = Color(0xFF16A34A)
+    val removedText = Color(0xFFDC2626)
+    val hunkText = Color(0xFF6366F1)
+    val contextText = MaterialTheme.colorScheme.onSurfaceVariant
+
+    val scrollState = rememberScrollState()
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shape = RoundedCornerShape(0.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .horizontalScroll(scrollState)
+                .padding(vertical = 4.dp),
+        ) {
+            diffText.lines().forEach { line ->
+                val (bgColor, fgColor) = when {
+                    line.startsWith("+++") || line.startsWith("---") ->
+                        Color.Transparent to MaterialTheme.colorScheme.onSurfaceVariant
+                    line.startsWith("+") ->
+                        addedBg to addedText
+                    line.startsWith("-") ->
+                        removedBg to removedText
+                    line.startsWith("@@") ->
+                        Color.Transparent to hunkText
+                    else ->
+                        Color.Transparent to contextText
+                }
+
+                Text(
+                    text = line.ifEmpty { " " },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    ),
+                    color = fgColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(bgColor)
+                        .padding(horizontal = 12.dp, vertical = 1.dp),
+                    softWrap = false,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Command execution bubble
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun CommandBubble(message: ConversationMessage) {
+    val cmdStatus = message.status?.lowercase() ?: "completed"
+    val isRunning = cmdStatus == "running" || cmdStatus == "in_progress"
+    val isFailed = cmdStatus == "failed" || cmdStatus == "error"
+    val statusColor = when {
+        isRunning -> Color(0xFFFBBF24)
+        isFailed -> Color(0xFFEF4444)
+        else -> Color(0xFF34D399)
+    }
+    val statusIcon = when {
+        isRunning -> ">"
+        isFailed -> "x"
+        else -> "$"
+    }
+
+    Surface(
+        color = Color(0xFF1E1E2E),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Terminal header
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Terminal dots
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFFF5F57)))
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFFFBD2E)))
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF28C840)))
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                // Status badge
+                Surface(
+                    color = statusColor.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(4.dp),
+                ) {
+                    Text(
+                        text = cmdStatus.replaceFirstChar(Char::uppercase),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Command text
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    text = statusIcon,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = statusColor,
+                )
+                Text(
+                    text = message.command ?: message.text,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = Color(0xFFCDD6F4),
+                )
+            }
+
+            if (isRunning) {
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = statusColor,
+                    trackColor = Color(0xFF313244),
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Plan bubble with step checkmarks
+// ─────────────────────────────────────────────────
+
+@Composable
+private fun PlanBubble(message: ConversationMessage) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        text = "PLAN",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (message.planSteps != null) {
+                message.planSteps.forEachIndexed { index, step ->
+                    PlanStepRow(
+                        index = index + 1,
+                        step = step,
+                    )
+                    if (index < message.planSteps.lastIndex) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                }
+            } else {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanStepRow(index: Int, step: PlanStep) {
+    val isComplete = step.status?.lowercase() in listOf("completed", "done", "complete")
+    val isActive = step.status?.lowercase() in listOf("in_progress", "active", "running")
+    val stepColor = when {
+        isComplete -> Color(0xFF34D399)
+        isActive -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val indicator = when {
+        isComplete -> "+"
+        isActive -> ">"
+        else -> "$index"
+    }
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Surface(
+            color = stepColor.copy(alpha = 0.15f),
+            shape = CircleShape,
+            modifier = Modifier.size(22.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = indicator,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = stepColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = step.text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isComplete) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            step.status?.takeIf { it.isNotBlank() && !isComplete }?.let {
+                Text(
+                    text = it.replaceFirstChar(Char::uppercase),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = stepColor,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────
+// Streaming / activity indicator
+// ─────────────────────────────────────────────────
+
 @Composable
 private fun StreamingIndicator() {
     val infiniteTransition = rememberInfiniteTransition(label = "streaming")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "pulse",
-    )
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(bottom = 4.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .scale(scale)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-        )
+        // Animated pulsing dots
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            repeat(3) { index ->
+                val dotScale by infiniteTransition.animateFloat(
+                    initialValue = 0.5f,
+                    targetValue = 1.2f,
+                    animationSpec = infiniteRepeatable(
+                        tween(500, delayMillis = index * 120),
+                        RepeatMode.Reverse,
+                    ),
+                    label = "streamDot$index",
+                )
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .scale(dotScale)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = "Responding",
+            text = "Writing",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -1326,6 +1787,60 @@ private fun BusyIndicator(state: AndrodexUiState) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentActivityBanner(messages: List<ConversationMessage>) {
+    val isStreaming = messages.any { it.isStreaming }
+    val lastSystemMessage = messages.lastOrNull { it.role == ConversationRole.SYSTEM }
+
+    val activityText = when {
+        !isStreaming && lastSystemMessage == null -> null
+        isStreaming -> "Agent is writing a response..."
+        lastSystemMessage?.kind == ConversationKind.FILE_CHANGE -> {
+            val fileName = lastSystemMessage.filePath
+                ?.substringAfterLast('/')
+                ?.substringAfterLast('\\')
+            if (fileName != null) "Edited $fileName" else "Edited files"
+        }
+        lastSystemMessage?.kind == ConversationKind.COMMAND -> {
+            "Ran: ${lastSystemMessage.command?.take(40) ?: "command"}"
+        }
+        lastSystemMessage?.kind == ConversationKind.THINKING -> "Thinking..."
+        lastSystemMessage?.kind == ConversationKind.PLAN -> "Planning..."
+        else -> null
+    }
+
+    AnimatedVisibility(
+        visible = isStreaming,
+        enter = slideInVertically { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut(),
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = activityText ?: "Working...",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

@@ -240,6 +240,16 @@ data class ConversationMessage(
     val turnId: String? = null,
     val itemId: String? = null,
     val isStreaming: Boolean = false,
+    val filePath: String? = null,
+    val status: String? = null,
+    val diffText: String? = null,
+    val command: String? = null,
+    val planSteps: List<PlanStep>? = null,
+)
+
+data class PlanStep(
+    val text: String,
+    val status: String?,
 )
 
 data class ApprovalRequest(

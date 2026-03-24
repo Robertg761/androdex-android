@@ -4,6 +4,7 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -217,41 +218,51 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                 }
 
                 "filechange", "toolcall", "diff" -> {
+                    val fileChange = decodeFileChangeStructured(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.SYSTEM,
                         kind = ConversationKind.FILE_CHANGE,
-                        text = decodeFileChangeText(itemObject),
+                        text = fileChange.displayText,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
+                        filePath = fileChange.path,
+                        status = fileChange.status,
+                        diffText = fileChange.diff,
                     )
                 }
 
                 "commandexecution" -> {
+                    val cmdStatus = itemObject.stringOrNull("status") ?: "completed"
+                    val cmdText = itemObject.stringOrNull("command", "cmd", "raw_command", "rawCommand", "message") ?: "command"
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.SYSTEM,
                         kind = ConversationKind.COMMAND,
-                        text = decodeCommandText(itemObject),
+                        text = "${cmdStatus.replaceFirstChar(Char::uppercase)}: $cmdText",
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
+                        status = cmdStatus,
+                        command = cmdText,
                     )
                 }
 
                 "plan" -> {
+                    val planData = decodePlanStructured(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.SYSTEM,
                         kind = ConversationKind.PLAN,
-                        text = decodePlanText(itemObject),
+                        text = planData.first,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
+                        planSteps = planData.second,
                     )
                 }
             }
@@ -412,41 +423,52 @@ private fun decodeReasoningText(itemObject: JSONObject): String {
         ?: "Thinking..."
 }
 
-private fun decodeFileChangeText(itemObject: JSONObject): String {
+private data class FileChangeData(
+    val status: String,
+    val path: String?,
+    val diff: String?,
+    val displayText: String,
+)
+
+private fun decodeFileChangeStructured(itemObject: JSONObject): FileChangeData {
     val status = itemObject.stringOrNull("status") ?: "completed"
-    val directDiff = itemObject.stringOrNull("diff", "unified_diff", "unifiedDiff", "patch")
-    if (!directDiff.isNullOrBlank()) {
-        return "Status: $status\n\n$directDiff"
-    }
     val path = itemObject.stringOrNull("path", "file", "file_path", "filePath")
+    val directDiff = itemObject.stringOrNull("diff", "unified_diff", "unifiedDiff", "patch")
     val summary = itemObject.stringOrNull("summary", "message", "text")
-    return listOfNotNull(
-        "Status: $status",
-        path?.let { "Path: $it" },
-        summary,
-    ).joinToString("\n\n")
+
+    val displayText = if (!directDiff.isNullOrBlank()) {
+        "Status: $status\n\n$directDiff"
+    } else {
+        listOfNotNull(
+            "Status: $status",
+            path?.let { "Path: $it" },
+            summary,
+        ).joinToString("\n\n")
+    }
+
+    return FileChangeData(
+        status = status,
+        path = path,
+        diff = directDiff,
+        displayText = displayText,
+    )
 }
 
-private fun decodeCommandText(itemObject: JSONObject): String {
-    val status = itemObject.stringOrNull("status") ?: "completed"
-    val command = itemObject.stringOrNull("command", "cmd", "raw_command", "rawCommand", "message")
-        ?: "command"
-    return "${status.replaceFirstChar(Char::uppercase)}: $command"
-}
-
-private fun decodePlanText(itemObject: JSONObject): String {
+private fun decodePlanStructured(itemObject: JSONObject): Pair<String, List<PlanStep>?> {
     val steps = itemObject.arrayOrNull("steps", "items")
     if (steps != null && steps.length() > 0) {
+        val planSteps = mutableListOf<PlanStep>()
         val parts = mutableListOf<String>()
         for (index in 0 until steps.length()) {
             val step = steps.optJSONObject(index) ?: continue
             val text = step.stringOrNull("step", "title", "text") ?: continue
             val status = step.stringOrNull("status")
+            planSteps += PlanStep(text = text, status = status)
             parts += if (status.isNullOrBlank()) text else "[$status] $text"
         }
         if (parts.isNotEmpty()) {
-            return parts.joinToString("\n")
+            return parts.joinToString("\n") to planSteps
         }
     }
-    return itemObject.stringOrNull("summary", "message", "text") ?: "Plan updated"
+    return (itemObject.stringOrNull("summary", "message", "text") ?: "Plan updated") to null
 }
