@@ -8,7 +8,7 @@ const { WebSocket } = require("ws");
 const CLEANUP_DELAY_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
-const CLOSE_CODE_ANDROID_REPLACED = 4003;
+const CLOSE_CODE_MOBILE_REPLACED = 4003;
 
 // In-memory host registry for one live host daemon and one live mobile client per host id.
 const sessions = new Map();
@@ -29,12 +29,12 @@ function setupRelay(wss) {
   wss.on("close", () => clearInterval(heartbeat));
 
   wss.on("connection", (ws, req) => {
-    const urlPath = req.url || "";
+    const urlPath = normalizeRelayPath(req.url || "");
     const match = urlPath.match(/^\/relay\/([^/?]+)/);
     const sessionId = match?.[1];
-    const role = req.headers["x-role"];
+    const role = normalizeRole(req.headers["x-role"]);
 
-    if (!sessionId || (role !== "mac" && role !== "android")) {
+    if (!sessionId || (role !== "mac" && role !== "mobile")) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
       return;
     }
@@ -45,7 +45,7 @@ function setupRelay(wss) {
     });
 
     // Only the host daemon is allowed to create a fresh host room.
-    if (role === "android" && !sessions.has(sessionId)) {
+    if (role === "mobile" && !sessions.has(sessionId)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Host is not available");
       return;
     }
@@ -60,7 +60,7 @@ function setupRelay(wss) {
 
     const session = sessions.get(sessionId);
 
-    if (role === "android" && session.mac?.readyState !== WebSocket.OPEN) {
+    if (role === "mobile" && session.mac?.readyState !== WebSocket.OPEN) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Host is not available");
       return;
     }
@@ -86,10 +86,7 @@ function setupRelay(wss) {
           existingClient.readyState === WebSocket.OPEN
           || existingClient.readyState === WebSocket.CONNECTING
         ) {
-          existingClient.close(
-            CLOSE_CODE_ANDROID_REPLACED,
-            "Replaced by newer Android connection"
-          );
+          existingClient.close(CLOSE_CODE_MOBILE_REPLACED, "Replaced by newer mobile connection");
         }
         session.clients.delete(existingClient);
       }
@@ -144,6 +141,32 @@ function setupRelay(wss) {
       );
     });
   });
+}
+
+function normalizeRelayPath(rawUrl) {
+  if (!rawUrl) {
+    return "";
+  }
+
+  if (rawUrl.startsWith("/")) {
+    return rawUrl;
+  }
+
+  try {
+    return new URL(rawUrl).pathname;
+  } catch {
+    return rawUrl;
+  }
+}
+
+function normalizeRole(rawRole) {
+  if (rawRole === "mac") {
+    return "mac";
+  }
+  if (rawRole === "android" || rawRole === "iphone") {
+    return "mobile";
+  }
+  return rawRole;
 }
 
 function scheduleCleanup(sessionId) {

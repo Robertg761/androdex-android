@@ -1,5 +1,6 @@
 package io.androdex.android.data
 
+import android.util.Log
 import io.androdex.android.crypto.aesGcmDecrypt
 import io.androdex.android.crypto.aesGcmEncrypt
 import io.androdex.android.crypto.buildClientAuthTranscript
@@ -65,6 +66,7 @@ private const val secureHandshakeTimeoutMs = 20_000L
 private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
+private const val logTag = "AndrodexClient"
 
 class AndrodexClient(
     private val persistence: AndrodexPersistence,
@@ -74,6 +76,7 @@ class AndrodexClient(
     private val updatesFlow = MutableSharedFlow<ClientUpdate>(extraBufferCapacity = 64)
     private val requestMutex = Mutex()
     private val socketMutex = Mutex()
+    private val connectionLifecycleMutex = Mutex()
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val pendingSecureControlWaiters = mutableMapOf<String, MutableList<CompletableDeferred<String>>>()
     private val bufferedSecureControlMessages = mutableMapOf<String, ArrayDeque<String>>()
@@ -82,6 +85,8 @@ class AndrodexClient(
     private var openSocketDeferred: CompletableDeferred<Unit>? = null
     private var secureSession: SecureSession? = null
     private var pendingHandshake: PendingHandshake? = null
+    private var lastSocketCloseDetail: String? = null
+    private var lastSocketFailureDetail: String? = null
     private var phoneIdentityState: PhoneIdentityState = persistence.loadPhoneIdentity() ?: generatePhoneIdentityState().also {
         persistence.savePhoneIdentity(it)
     }
@@ -123,22 +128,12 @@ class AndrodexClient(
     }
 
     suspend fun disconnect(clearSavedPairing: Boolean = false) {
-        socketMutex.withLock {
-            webSocket?.close(1000, null)
-            webSocket = null
-            openSocketDeferred = null
-            secureSession = null
-            pendingHandshake = null
-            clearPendingRequests()
-            clearSecureWaiters(IllegalStateException("Disconnected"))
-            if (clearSavedPairing) {
-                persistence.clearPairing()
-                savedPairingPayload = null
-                lastAppliedBridgeOutboundSeq = 0
-                emitPairingAvailability()
-            }
+        connectionLifecycleMutex.withLock {
+            disconnectInternal(
+                clearSavedPairing = clearSavedPairing,
+            )
+            updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.DISCONNECTED))
         }
-        updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.DISCONNECTED))
     }
 
     suspend fun listThreads(limit: Int = 40): List<ThreadSummary> {
@@ -293,80 +288,121 @@ class AndrodexClient(
     }
 
     private suspend fun connect(pairing: PairingPayload) {
-        disconnect(clearSavedPairing = false)
-        updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTING, "Connecting to relay..."))
+        connectionLifecycleMutex.withLock {
+            disconnectInternal(clearSavedPairing = false)
+            updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTING, "Connecting to relay..."))
 
-        val relayUrl = pairing.relay.trimEnd('/')
-        val request = Request.Builder()
-            .url("$relayUrl/${pairing.routingId}")
-            .header("x-role", "android")
-            .build()
+            val relayUrl = pairing.relay.trimEnd('/')
+            val attemptId = System.currentTimeMillis()
+            Log.i(logTag, "connect[$attemptId] start relay=$relayUrl host=${pairing.routingId.take(8)}")
+            lastSocketCloseDetail = null
+            lastSocketFailureDetail = null
+            val request = Request.Builder()
+                .url("$relayUrl/${pairing.routingId}")
+                .header("x-role", "android")
+                .build()
 
-        val openDeferred = CompletableDeferred<Unit>()
-        openSocketDeferred = openDeferred
-        webSocket = okHttpClient.newWebSocket(
-            request,
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    clientScope.launch {
-                        if (!isCurrentSocket(webSocket)) {
-                            return@launch
+            val openDeferred = CompletableDeferred<Unit>()
+            openSocketDeferred = openDeferred
+            webSocket = okHttpClient.newWebSocket(
+                request,
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        Log.i(
+                            logTag,
+                            "connect[$attemptId] websocket open code=${response.code} message=${response.message} url=${request.url}"
+                        )
+                        clientScope.launch {
+                            if (!isCurrentSocket(webSocket)) {
+                                return@launch
+                            }
+                            if (!openDeferred.isCompleted) {
+                                openDeferred.complete(Unit)
+                            }
+                        }
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        clientScope.launch {
+                            if (!isCurrentSocket(webSocket)) {
+                                return@launch
+                            }
+                            try {
+                                handleIncomingWireText(text)
+                            } catch (error: Throwable) {
+                                updatesFlow.emit(ClientUpdate.Error(error.message ?: "Failed to process relay message."))
+                            }
+                        }
+                    }
+
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        lastSocketCloseDetail = "code=$code reason=${reason.ifBlank { "<empty>" }}"
+                        Log.w(logTag, "connect[$attemptId] websocket closing code=$code reason=$reason")
+                        webSocket.close(code, reason)
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        lastSocketCloseDetail = "code=$code reason=${reason.ifBlank { "<empty>" }}"
+                        Log.w(logTag, "connect[$attemptId] websocket closed code=$code reason=$reason")
+                        clientScope.launch {
+                            handleSocketClosed(webSocket, code)
+                        }
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        lastSocketFailureDetail =
+                            "responseCode=${response?.code} responseMessage=${response?.message ?: "<none>"} error=${t.message ?: "<none>"}"
+                        Log.e(
+                            logTag,
+                            "connect[$attemptId] websocket failure responseCode=${response?.code} responseMessage=${response?.message} error=${t.message}",
+                            t
+                        )
+                        clientScope.launch {
+                            handleSocketFailure(webSocket, t)
                         }
                         if (!openDeferred.isCompleted) {
-                            openDeferred.complete(Unit)
+                            openDeferred.completeExceptionally(t)
                         }
                     }
                 }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    clientScope.launch {
-                        if (!isCurrentSocket(webSocket)) {
-                            return@launch
-                        }
-                        try {
-                            handleIncomingWireText(text)
-                        } catch (error: Throwable) {
-                            updatesFlow.emit(ClientUpdate.Error(error.message ?: "Failed to process relay message."))
-                        }
-                    }
-                }
-
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    webSocket.close(code, reason)
-                }
-
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    clientScope.launch {
-                        handleSocketClosed(webSocket, code)
-                    }
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    clientScope.launch {
-                        handleSocketFailure(webSocket, t)
-                    }
-                    if (!openDeferred.isCompleted) {
-                        openDeferred.completeExceptionally(t)
-                    }
-                }
-            }
-        )
-
-        withTimeout(relayOpenTimeoutMs) {
-            openDeferred.await()
-        }
-
-        updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.HANDSHAKING, "Performing secure handshake..."))
-        performSecureHandshake(pairing)
-        initializeSession()
-        runCatching { loadRuntimeConfig() }
-        updatesFlow.emit(
-            ClientUpdate.Connection(
-                status = ConnectionStatus.CONNECTED,
-                detail = "Connected to ${pairing.routingId.take(8)}",
-                fingerprint = secureSession?.macIdentityPublicKey?.let(::fingerprint),
             )
-        )
+
+            withTimeout(relayOpenTimeoutMs) {
+                openDeferred.await()
+            }
+
+            updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.HANDSHAKING, "Performing secure handshake..."))
+            performSecureHandshake(pairing)
+            initializeSession()
+            runCatching { loadRuntimeConfig() }
+            updatesFlow.emit(
+                ClientUpdate.Connection(
+                    status = ConnectionStatus.CONNECTED,
+                    detail = "Connected to ${pairing.routingId.take(8)}",
+                    fingerprint = secureSession?.macIdentityPublicKey?.let(::fingerprint),
+                )
+            )
+        }
+    }
+
+    private suspend fun disconnectInternal(clearSavedPairing: Boolean) {
+        socketMutex.withLock {
+            webSocket?.close(1000, null)
+            webSocket = null
+            openSocketDeferred = null
+            secureSession = null
+            pendingHandshake = null
+            lastSocketCloseDetail = null
+            lastSocketFailureDetail = null
+            clearPendingRequests()
+            clearSecureWaiters(IllegalStateException("Disconnected"))
+            if (clearSavedPairing) {
+                persistence.clearPairing()
+                savedPairingPayload = null
+                lastAppliedBridgeOutboundSeq = 0
+                emitPairingAvailability()
+            }
+        }
     }
 
     private suspend fun initializeSession() {
@@ -821,11 +857,13 @@ class AndrodexClient(
     }
 
     private suspend fun sendRawText(text: String) {
-        val socket = webSocket ?: throw IllegalStateException("Not connected.")
+        val socket = webSocket ?: throw IllegalStateException(buildNotConnectedDetail())
         val sent = withContext(Dispatchers.IO) { socket.send(text) }
         if (!sent) {
+            Log.e(logTag, "socket send returned false payloadLength=${text.length}")
             throw IOException("Failed to write to relay socket.")
         }
+        Log.d(logTag, "socket send ok payloadLength=${text.length}")
     }
 
     private fun secureWireText(plaintext: String): String {
@@ -878,19 +916,30 @@ class AndrodexClient(
                     detail = when (code) {
                         4002 -> "The host is offline right now. Retry from saved pairing when the daemon reconnects."
                         4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
-                        else -> "The relay connection closed. Reconnect from saved pairing."
+                        else -> "The relay connection closed (code $code). Reconnect from saved pairing."
                     }
                 )
             )
             return
         }
 
-        updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.DISCONNECTED, "Relay disconnected."))
+        updatesFlow.emit(
+            ClientUpdate.Connection(
+                ConnectionStatus.DISCONNECTED,
+                "Relay disconnected (code $code)."
+            )
+        )
     }
 
     private suspend fun handleSocketFailure(failedSocket: WebSocket, error: Throwable) {
         val isCurrent = socketMutex.withLock {
-            webSocket === failedSocket
+            if (webSocket !== failedSocket) {
+                false
+            } else {
+                webSocket = null
+                openSocketDeferred = null
+                true
+            }
         }
         if (!isCurrent) {
             return
@@ -902,6 +951,18 @@ class AndrodexClient(
                 detail = error.message ?: "Relay connection failed.",
             )
         )
+    }
+
+    private fun buildNotConnectedDetail(): String {
+        val closeDetail = lastSocketCloseDetail
+        if (!closeDetail.isNullOrBlank()) {
+            return "Not connected. Last relay close: $closeDetail"
+        }
+        val failureDetail = lastSocketFailureDetail
+        if (!failureDetail.isNullOrBlank()) {
+            return "Not connected. Last relay failure: $failureDetail"
+        }
+        return "Not connected."
     }
 
     private suspend fun bufferSecureControlMessage(kind: String, rawText: String) {
