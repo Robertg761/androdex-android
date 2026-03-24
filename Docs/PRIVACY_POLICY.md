@@ -1,8 +1,8 @@
 # Privacy Policy for Androdex
 
-Last updated: 2026-03-12
+Last updated: 2026-03-24
 
-Androdex is a local-first Android remote client and host bridge for controlling Codex running on the user's own computer.
+Androdex is an Android remote client and host bridge for controlling Codex running on the user's own computer.
 
 ## Who this policy applies to
 
@@ -10,11 +10,12 @@ This policy applies to the Androdex Android app and the Androdex host bridge.
 
 ## What Androdex does
 
-Androdex is a local-first remote control system:
+Androdex is a remote control system where:
 
 - the Android app acts as a remote control client
 - the host bridge runs on the user's own computer
 - Codex runs locally on the user's own computer
+- the Android app can connect over local or internet-accessible relay paths
 
 ## Data handled by the app
 

@@ -10,12 +10,13 @@ const os = require("os");
 const path = require("path");
 const { promisify } = require("util");
 const { gitStatus } = require("./git-handler");
+const { createWorkspaceBrowser } = require("./workspace-browser");
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
 const repoMutationLocks = new Map();
 
-function handleWorkspaceRequest(rawMessage, sendResponse) {
+function handleWorkspaceRequest(rawMessage, sendResponse, options = {}) {
   let parsed;
   try {
     parsed = JSON.parse(rawMessage);
@@ -31,7 +32,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
   const id = parsed.id;
   const params = parsed.params || {};
 
-  handleWorkspaceMethod(method, params)
+  handleWorkspaceMethod(method, params, options)
     .then((result) => {
       sendResponse(JSON.stringify({ id, result }));
     })
@@ -53,18 +54,87 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
   return true;
 }
 
-async function handleWorkspaceMethod(method, params) {
-  const cwd = await resolveWorkspaceCwd(params);
-  const repoRoot = await resolveRepoRoot(cwd);
-
+async function handleWorkspaceMethod(method, params, options = {}) {
   switch (method) {
-    case "workspace/revertPatchPreview":
+    case "workspace/listRecent":
+      return workspaceListRecent(options);
+    case "workspace/listDirectory":
+      return workspaceListDirectory(params, options);
+    case "workspace/activate":
+      return workspaceActivate(params, options);
+    case "workspace/revertPatchPreview": {
+      const cwd = await resolveWorkspaceCwd(params);
+      const repoRoot = await resolveRepoRoot(cwd);
       return workspaceRevertPatchPreview(repoRoot, params);
-    case "workspace/revertPatchApply":
+    }
+    case "workspace/revertPatchApply": {
+      const cwd = await resolveWorkspaceCwd(params);
+      const repoRoot = await resolveRepoRoot(cwd);
       return withRepoMutationLock(repoRoot, () => workspaceRevertPatchApply(repoRoot, params));
+    }
     default:
       throw workspaceError("unknown_method", `Unknown workspace method: ${method}`);
   }
+}
+
+function workspaceListRecent(options) {
+  const browser = getWorkspaceBrowser(options);
+  const workspaceState = getWorkspaceState(options);
+  return {
+    activeCwd: workspaceState.activeCwd || null,
+    recentWorkspaces: browser.buildRecentWorkspaceSummaries({
+      activeCwd: workspaceState.activeCwd,
+      recentWorkspaces: workspaceState.recentWorkspaces,
+    }),
+  };
+}
+
+function workspaceListDirectory(params, options) {
+  const browser = getWorkspaceBrowser(options);
+  const workspaceState = getWorkspaceState(options);
+  return browser.listDirectory({
+    requestedPath: firstNonEmptyString([params.path]),
+    activeCwd: workspaceState.activeCwd,
+    recentWorkspaces: workspaceState.recentWorkspaces,
+  });
+}
+
+async function workspaceActivate(params, options) {
+  const browser = getWorkspaceBrowser(options);
+  const activateWorkspace = typeof options.activateWorkspace === "function"
+    ? options.activateWorkspace
+    : null;
+
+  if (!activateWorkspace) {
+    throw workspaceError("workspace_activation_unavailable", "Remote workspace activation is not available.");
+  }
+
+  const cwd = browser.normalizeAbsoluteDirectoryPath(firstNonEmptyString([params.cwd]));
+  return activateWorkspace({ cwd });
+}
+
+function getWorkspaceState(options) {
+  if (typeof options.getWorkspaceState !== "function") {
+    return {
+      activeCwd: "",
+      recentWorkspaces: [],
+    };
+  }
+
+  const state = options.getWorkspaceState() || {};
+  return {
+    activeCwd: firstNonEmptyString([state.activeCwd]) || "",
+    recentWorkspaces: Array.isArray(state.recentWorkspaces)
+      ? state.recentWorkspaces.filter((candidate) => typeof candidate === "string" && candidate.trim())
+      : [],
+  };
+}
+
+function getWorkspaceBrowser(options) {
+  if (!options.workspaceBrowser) {
+    options.workspaceBrowser = createWorkspaceBrowser({ platform: options.platform });
+  }
+  return options.workspaceBrowser;
 }
 
 // Validates the reverse patch against the current tree without writing repo files.

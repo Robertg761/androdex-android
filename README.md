@@ -1,6 +1,6 @@
 # Androdex
 
-Local-first Android remote client and host bridge for controlling Codex on your own computer.
+Android remote client and host bridge for controlling Codex running on your own computer.
 
 [![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
@@ -9,10 +9,10 @@ Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is i
 
 - run local Codex on the host machine
 - pair the phone once with `androdex pair`
-- activate the current local workspace with `androdex up`
+- optionally activate the current local workspace with `androdex up`
 - control that local Codex session from Android
 
-Androdex is local-first. Codex keeps running on your host computer, while the phone acts as a paired remote control client over a secure session.
+Androdex keeps Codex running on your host computer, while the phone connects as a paired remote control client over a secure session that can work across networks through a relay.
 
 ## Contents
 
@@ -27,7 +27,7 @@ Androdex is local-first. Codex keeps running on your host computer, while the ph
 - [Project Structure](#project-structure)
 - [Feedback](#feedback)
 - [Environment Variables](#environment-variables)
-- [Self-Hosting](#self-hosting)
+- [Remote Access](#remote-access)
 - [FAQ](#faq)
 - [Security Notes](#security-notes)
 - [Credits](#credits)
@@ -37,14 +37,14 @@ Androdex is local-first. Codex keeps running on your host computer, while the ph
 
 Androdex does **not** run Codex on the phone itself.
 
-- the host computer runs the local bridge and local Codex runtime
+- the host computer runs the bridge and local Codex runtime
 - the phone acts as a paired remote control client
 - git and workspace actions still execute on the host machine
 
 ## Key Features
 
 - end-to-end encrypted pairing between the Android client and the host bridge
-- local-first host workflow: Codex, git, and file operations stay on your machine
+- remote-capable access to a host-local Codex runtime through a relay
 - QR pairing and pairing-payload paste
 - open existing threads and create new ones from Android
 - stream Codex output on the phone while work continues on the host
@@ -56,7 +56,7 @@ Androdex does **not** run Codex on the phone itself.
 
 - the host bridge is published to npm as `androdex`
 - the Android app source lives in `android/`
-- the repository assumes a local bridge and an explicitly configured relay, not a built-in hosted backend
+- the repository is built around a host-local Codex runtime plus relay-backed remote access
 - macOS host support can be added later, but it is not the current focus
 
 If you want to work from this repo today, use the bridge from npm or source, then build the Android client from source.
@@ -79,7 +79,7 @@ Then run the workspace you want Codex to use:
 androdex up
 ```
 
-Then open the Android app and scan the pairing QR code.
+Then open the Android app, scan the pairing QR code, and switch projects from the app when needed.
 
 ## Build the Android App From Source
 
@@ -106,19 +106,21 @@ android/app/build/outputs/apk/debug/app-debug.apk
 ## Quick Start
 
 1. Install Node.js and Codex CLI on the host machine
-2. Install the bridge package
+2. Install the bridge package on the host machine
 3. Choose a relay path:
    - local-only testing: set `ANDRODEX_RELAY=ws://<your-host-ip>:8787/relay`
    - cross-network access: run your own public relay and set `ANDRODEX_RELAY=wss://<your-domain>/relay`
 4. Run `androdex pair` once on the host and pair from the Android app
-5. Run `androdex up` in the local project directory you want active
-6. Open or create a thread and send a message
+5. Optionally run `androdex up` in a local project directory if you want to seed the first active workspace from the host
+6. Open the Android app, choose a project, then open or create a thread and send a message
 
 ## Commands
 
 ### `androdex up`
 
 Activates the current local project in the daemon and launches `codex app-server` there if needed.
+
+You can still use this as the fastest host-side shortcut, but Android can also switch projects remotely after pairing.
 
 ### `androdex pair`
 
@@ -212,16 +214,17 @@ ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex pair
 ANDRODEX_RELAY=wss://relay.example.com/relay androdex pair
 ```
 
-## Self-Hosting
+## Remote Access
 
-The public repository is meant to stay self-host friendly.
+Androdex is designed so Codex stays on the host machine while the Android client can connect from the same network or across the internet through a relay.
 
-- you can run a local relay or your own hosted relay
+- you can use a local relay for LAN testing
+- you can use a public `wss://` relay for cross-network access
 - the relay is only a transport hop
 - Codex still runs on your own machine
-- if you want the phone to work away from your LAN, use a public `wss://` relay you control
+- if you want the phone to work away from your LAN, configure a public relay before pairing
 
-If you self-host, keep private hostnames, IPs, and credentials out of the public repository.
+Keep private hostnames, IPs, and credentials out of the public repository.
 
 For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/README.md).
 
@@ -234,10 +237,10 @@ Yes. This fork is currently aimed at the host-machine-plus-Android workflow, wit
 No. Codex runs on the host machine. The phone is only a paired remote client.
 
 **What happens if I close the terminal running `androdex up`?**  
-The daemon keeps running in the background. Run `androdex up` again in a project directory whenever you want to switch or reactivate the active workspace.
+The daemon keeps running in the background. You can reactivate a project later with `androdex up`, or switch projects from the Android app once you reconnect.
 
 **How do I force a clean pairing state?**  
-Run `androdex reset-pairing`, then start the bridge again with `androdex up`.
+Run `androdex reset-pairing`, then pair again with `androdex pair`.
 
 **Can I self-host the relay?**  
 Yes. That is one of the intended public-repo paths.

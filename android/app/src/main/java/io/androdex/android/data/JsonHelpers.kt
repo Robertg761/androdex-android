@@ -6,6 +6,11 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ReasoningEffortOption
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.WorkspaceActivationStatus
+import io.androdex.android.model.WorkspaceBrowseResult
+import io.androdex.android.model.WorkspaceDirectoryEntry
+import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.model.WorkspaceRecentState
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.ParseException
@@ -283,6 +288,78 @@ fun decodeModelOptions(resultObject: JSONObject): List<ModelOption> {
         )
     }
     return decoded
+}
+
+fun decodeWorkspaceRecentState(resultObject: JSONObject): WorkspaceRecentState {
+  return WorkspaceRecentState(
+    activeCwd = resultObject.stringOrNull("activeCwd", "active_cwd"),
+    recentWorkspaces = decodeWorkspacePathSummaries(
+      resultObject.optJSONArray("recentWorkspaces")
+        ?: resultObject.optJSONArray("recent_workspaces")
+        ?: JSONArray()
+    ),
+  )
+}
+
+fun decodeWorkspaceBrowseResult(resultObject: JSONObject): WorkspaceBrowseResult {
+  return WorkspaceBrowseResult(
+    requestedPath = resultObject.stringOrNull("requestedPath", "requested_path"),
+    parentPath = resultObject.stringOrNull("parentPath", "parent_path"),
+    entries = decodeWorkspaceDirectoryEntries(resultObject.optJSONArray("entries") ?: JSONArray()),
+    rootEntries = decodeWorkspaceDirectoryEntries(
+      resultObject.optJSONArray("rootEntries")
+        ?: resultObject.optJSONArray("root_entries")
+        ?: JSONArray()
+    ),
+    activeCwd = resultObject.stringOrNull("activeCwd", "active_cwd"),
+    recentWorkspaces = decodeWorkspacePathSummaries(
+      resultObject.optJSONArray("recentWorkspaces")
+        ?: resultObject.optJSONArray("recent_workspaces")
+        ?: JSONArray()
+    ),
+  )
+}
+
+fun decodeWorkspaceActivationStatus(resultObject: JSONObject): WorkspaceActivationStatus {
+  return WorkspaceActivationStatus(
+    hostId = resultObject.stringOrNull("hostId", "host_id"),
+    macDeviceId = resultObject.stringOrNull("macDeviceId", "mac_device_id"),
+    relayUrl = resultObject.stringOrNull("relayUrl", "relay_url"),
+    relayStatus = resultObject.stringOrNull("relayStatus", "relay_status"),
+    currentCwd = resultObject.stringOrNull("currentCwd", "current_cwd"),
+    workspaceActive = resultObject.optBoolean("workspaceActive", resultObject.optBoolean("workspace_active")),
+    hasTrustedPhone = resultObject.optBoolean("hasTrustedPhone", resultObject.optBoolean("has_trusted_phone")),
+  )
+}
+
+private fun decodeWorkspacePathSummaries(items: JSONArray): List<WorkspacePathSummary> {
+  val decoded = mutableListOf<WorkspacePathSummary>()
+  for (index in 0 until items.length()) {
+    val item = items.optJSONObject(index) ?: continue
+    val path = item.stringOrNull("path") ?: continue
+    decoded += WorkspacePathSummary(
+      path = path,
+      name = item.stringOrNull("name") ?: path,
+      isActive = item.optBoolean("isActive", item.optBoolean("is_active")),
+    )
+  }
+  return decoded
+}
+
+private fun decodeWorkspaceDirectoryEntries(items: JSONArray): List<WorkspaceDirectoryEntry> {
+  val decoded = mutableListOf<WorkspaceDirectoryEntry>()
+  for (index in 0 until items.length()) {
+    val item = items.optJSONObject(index) ?: continue
+    val path = item.stringOrNull("path") ?: continue
+    decoded += WorkspaceDirectoryEntry(
+      path = path,
+      name = item.stringOrNull("name") ?: path,
+      isDirectory = item.optBoolean("isDirectory", item.optBoolean("is_directory", true)),
+      isActive = item.optBoolean("isActive", item.optBoolean("is_active")),
+      source = item.stringOrNull("source") ?: "browse",
+    )
+  }
+  return decoded
 }
 
 private fun decodeReasoningEffortOptions(items: JSONArray): List<ReasoningEffortOption> {

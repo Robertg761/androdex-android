@@ -1,18 +1,18 @@
-# AGENTS.md (Local-First)
+# AGENTS.md (Host-Local Runtime)
 
 Keep this file and `CLAUDE.md` aligned.
 
-This repo is local-first now. Do not reintroduce hosted-service assumptions, remote deployment runbooks, or hardcoded production domains.
+This repo keeps Codex running on the user's host machine, but device access may happen over non-local relay connections. Do not hardcode private production domains, hosted credentials, or private deployment runbooks into the public repo.
 
 ## Core guardrails
 
-- Prefer local Mac runtime, local bridge, QR pairing, and daemon workflows.
+- Prefer host-local runtime, bridge, QR pairing, daemon workflows, and relay-compatible remote access.
 - Keep repo isolation by thread/project metadata and local `cwd`.
 - Do not reintroduce filtering by selected repo in sidebar/content.
 - Keep cross-repo open/create flow with automatic local context switch.
 - Preserve single responsibility: shared logic belongs in services/coordinators, not duplicated in views.
 - Treat this repo as open source: avoid junk code, placeholder hacks, noisy one-off workarounds, and low-signal docs.
-- If you touch docs, keep them local-only and remove stale hosted-service notes instead of adding compatibility layers.
+- If you touch docs, keep the distinction clear between host-local Codex execution and remote device connectivity.
 
 ## iOS runtime + timeline guardrails
 
@@ -25,12 +25,12 @@ This repo is local-first now. Do not reintroduce hosted-service assumptions, rem
 - Ignore late turn-less activity events when the turn is already inactive.
 - Preserve item-aware history reconciliation instead of falling back to `turnId`-only matching.
 
-## Local connection guardrails
+## Connection guardrails
 
-- Prefer saved relay pairing and local connection state as the source of truth.
-- Avoid hardcoded remote domains; default to local values or explicit user config.
+- Prefer saved relay pairing and connection state as the source of truth.
+- Avoid hardcoded remote domains; use explicit config or safe public defaults only where intended.
 - Keep pairing/auth UX stable: do not clear saved relay info too early during reconnect flows.
-- Preserve reconnect behavior across relaunch when the local host session is still valid.
+- Preserve reconnect behavior across relaunch when the host session is still valid.
 
 ## Build guardrails
 
@@ -38,7 +38,7 @@ This repo is local-first now. Do not reintroduce hosted-service assumptions, rem
 - Markdown files inside Xcode-synced groups can still produce harmless warnings.
 - For small iOS/mobile fixes, prefer inspection and targeted edits over simulator runs by default.
 
-## Local quick runbook
+## Quick runbook
 
 ```bash
 cd androdex-bridge

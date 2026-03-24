@@ -2,7 +2,7 @@
 
 This file explains what the public Androdex repository is for, what it includes, and what it does not include.
 
-If you cloned Androdex from GitHub, the intended path is local-first usage or self-hosting on infrastructure you control.
+If you cloned Androdex from GitHub, the intended path is to run Codex on your own host machine and connect to it remotely through relay infrastructure you control or configure.
 
 ## What the Public Repo Includes
 
@@ -11,7 +11,7 @@ The public repository includes:
 - the host bridge
 - the Android app source code
 - the public relay code
-- local pairing and self-hosting documentation
+- relay configuration and self-hosting documentation
 
 The public repository is meant to be usable without private hosted dependencies baked into the source tree.
 
@@ -56,7 +56,7 @@ The public repo stays generic on purpose.
 That keeps the self-host path honest:
 
 - people can inspect the transport and pairing code
-- people can run Androdex locally
+- people can run Codex on their own host
 - people can self-host their own relay
 - people are not silently tied to someone else's hosted infrastructure
 

@@ -6,55 +6,84 @@ import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.WorkspaceActivationStatus
+import io.androdex.android.model.WorkspaceBrowseResult
+import io.androdex.android.model.WorkspaceRecentState
 import kotlinx.coroutines.flow.SharedFlow
 
-class AndrodexRepository(context: Context) {
+interface AndrodexRepositoryContract {
+    val updates: SharedFlow<ClientUpdate>
+    fun hasSavedPairing(): Boolean
+    fun currentFingerprint(): String?
+    suspend fun connectWithPairingPayload(rawPayload: String)
+    suspend fun reconnectSaved()
+    suspend fun disconnect(clearSavedPairing: Boolean = false)
+    suspend fun refreshThreads(): List<ThreadSummary>
+    suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary
+    suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>>
+    suspend fun startTurn(threadId: String, userInput: String)
+    suspend fun loadRuntimeConfig()
+    suspend fun setSelectedModelId(modelId: String?)
+    suspend fun setSelectedReasoningEffort(effort: String?)
+    suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean)
+    suspend fun listRecentWorkspaces(): WorkspaceRecentState
+    suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult
+    suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus
+}
+
+class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     private val persistence = AndrodexPersistence(context.applicationContext)
     private val client = AndrodexClient(persistence)
 
-    val updates: SharedFlow<ClientUpdate> = client.updates
+    override val updates: SharedFlow<ClientUpdate> = client.updates
 
-    fun hasSavedPairing(): Boolean = client.hasSavedPairing()
+    override fun hasSavedPairing(): Boolean = client.hasSavedPairing()
 
-    fun currentFingerprint(): String? = client.currentFingerprint()
+    override fun currentFingerprint(): String? = client.currentFingerprint()
 
-    suspend fun connectWithPairingPayload(rawPayload: String) {
+    override suspend fun connectWithPairingPayload(rawPayload: String) {
         client.connectWithPairingPayload(rawPayload)
     }
 
-    suspend fun reconnectSaved() {
+    override suspend fun reconnectSaved() {
         client.reconnectSaved()
     }
 
-    suspend fun disconnect(clearSavedPairing: Boolean = false) {
+    override suspend fun disconnect(clearSavedPairing: Boolean) {
         client.disconnect(clearSavedPairing)
     }
 
-    suspend fun refreshThreads(): List<ThreadSummary> = client.listThreads()
+    override suspend fun refreshThreads(): List<ThreadSummary> = client.listThreads()
 
-    suspend fun startThread(): ThreadSummary = client.startThread()
+    override suspend fun startThread(preferredProjectPath: String?): ThreadSummary = client.startThread(preferredProjectPath)
 
-    suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
+    override suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
         return client.loadThread(threadId)
     }
 
-    suspend fun startTurn(threadId: String, userInput: String) {
+    override suspend fun startTurn(threadId: String, userInput: String) {
         client.startTurn(threadId, userInput)
     }
 
-    suspend fun loadRuntimeConfig() {
+    override suspend fun loadRuntimeConfig() {
         client.loadRuntimeConfig()
     }
 
-    suspend fun setSelectedModelId(modelId: String?) {
+    override suspend fun setSelectedModelId(modelId: String?) {
         client.setSelectedModelId(modelId)
     }
 
-    suspend fun setSelectedReasoningEffort(effort: String?) {
+    override suspend fun setSelectedReasoningEffort(effort: String?) {
         client.setSelectedReasoningEffort(effort)
     }
 
-    suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
+    override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         client.respondToApproval(request, accept)
     }
+
+    override suspend fun listRecentWorkspaces(): WorkspaceRecentState = client.listRecentWorkspaces()
+
+    override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult = client.listWorkspaceDirectory(path)
+
+    override suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus = client.activateWorkspace(cwd)
 }

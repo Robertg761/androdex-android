@@ -4,7 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import io.androdex.android.data.AndrodexRepository
+import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
@@ -13,6 +13,8 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.WorkspaceDirectoryEntry
+import io.androdex.android.model.WorkspacePathSummary
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,12 +40,19 @@ data class AndrodexUiState(
     val availableModels: List<ModelOption> = emptyList(),
     val selectedModelId: String? = null,
     val selectedReasoningEffort: String? = null,
+    val activeWorkspacePath: String? = null,
+    val recentWorkspaces: List<WorkspacePathSummary> = emptyList(),
+    val workspaceBrowserPath: String? = null,
+    val workspaceBrowserParentPath: String? = null,
+    val workspaceBrowserEntries: List<WorkspaceDirectoryEntry> = emptyList(),
+    val isProjectPickerOpen: Boolean = false,
+    val isWorkspaceBrowserLoading: Boolean = false,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
 )
 
 class MainViewModel(
-    private val repository: AndrodexRepository,
+    private val repository: AndrodexRepositoryContract,
 ) : ViewModel() {
     private var savedReconnectInFlight = false
 
@@ -94,6 +103,7 @@ class MainViewModel(
         runBusyAction {
             repository.connectWithPairingPayload(payload)
             repository.refreshThreads()
+            loadWorkspaceState()
         }
     }
 
@@ -101,6 +111,7 @@ class MainViewModel(
         runBusyAction {
             repository.reconnectSaved()
             repository.refreshThreads()
+            loadWorkspaceState()
         }
     }
 
@@ -124,6 +135,7 @@ class MainViewModel(
             try {
                 repository.reconnectSaved()
                 repository.refreshThreads()
+                loadWorkspaceState()
             } catch (_: Throwable) {
                 // The pairing screen already shows connection status and retry affordances.
             } finally {
@@ -141,19 +153,22 @@ class MainViewModel(
     fun refreshThreads() {
         runBusyAction("Loading threads...") {
             repository.refreshThreads()
+            loadWorkspaceState()
         }
     }
 
     fun openThread(threadId: String) {
+        val targetThread = uiStateFlow.value.threads.firstOrNull { it.id == threadId }
         uiStateFlow.update { current ->
             current.copy(
                 selectedThreadId = threadId,
-                selectedThreadTitle = current.threads.firstOrNull { it.id == threadId }?.title,
+                selectedThreadTitle = targetThread?.title,
                 messages = emptyList(),
             )
         }
 
         runBusyAction("Loading messages...") {
+            ensureWorkspaceActivated(targetThread?.cwd)
             repository.loadThread(threadId)
         }
     }
@@ -170,8 +185,11 @@ class MainViewModel(
 
     fun createThread() {
         runBusyAction("Creating thread...") {
-            val thread = repository.startThread()
+            val preferredWorkspace = uiStateFlow.value.activeWorkspacePath
+            ensureWorkspaceActivated(preferredWorkspace)
+            val thread = repository.startThread(preferredWorkspace)
             repository.refreshThreads()
+            loadWorkspaceState()
             uiStateFlow.update { current ->
                 current.copy(
                     selectedThreadId = thread.id,
@@ -189,8 +207,10 @@ class MainViewModel(
         }
 
         runBusyAction("Sending message...") {
-            val threadId = uiStateFlow.value.selectedThreadId ?: repository.startThread().id.also { newThreadId ->
+            val preferredWorkspace = uiStateFlow.value.activeWorkspacePath
+            val threadId = uiStateFlow.value.selectedThreadId ?: repository.startThread(preferredWorkspace).id.also { newThreadId ->
                 repository.refreshThreads()
+                loadWorkspaceState()
                 uiStateFlow.update { current ->
                     current.copy(
                         selectedThreadId = newThreadId,
@@ -248,6 +268,89 @@ class MainViewModel(
         }
     }
 
+    fun openProjectPicker() {
+        uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
+        viewModelScope.launch {
+            try {
+                loadWorkspaceState()
+            } catch (error: Throwable) {
+                uiStateFlow.update { current ->
+                    current.copy(errorMessage = error.message ?: "Failed to load projects.")
+                }
+            }
+        }
+    }
+
+    fun closeProjectPicker() {
+        uiStateFlow.update {
+            it.copy(
+                isProjectPickerOpen = false,
+                workspaceBrowserPath = null,
+                workspaceBrowserParentPath = null,
+                workspaceBrowserEntries = emptyList(),
+                isWorkspaceBrowserLoading = false,
+            )
+        }
+    }
+
+    fun loadRecentWorkspaces() {
+        runBusyAction("Loading projects...") {
+            loadWorkspaceState()
+        }
+    }
+
+    fun browseWorkspace(path: String?) {
+        viewModelScope.launch {
+            uiStateFlow.update { it.copy(isWorkspaceBrowserLoading = true) }
+            try {
+                val result = repository.listWorkspaceDirectory(path)
+                uiStateFlow.update {
+                    it.copy(
+                        activeWorkspacePath = result.activeCwd,
+                        recentWorkspaces = result.recentWorkspaces,
+                        workspaceBrowserPath = result.requestedPath,
+                        workspaceBrowserParentPath = result.parentPath,
+                        workspaceBrowserEntries = if (result.requestedPath == null) result.rootEntries else result.entries,
+                        isWorkspaceBrowserLoading = false,
+                        isProjectPickerOpen = true,
+                    )
+                }
+            } catch (error: Throwable) {
+                uiStateFlow.update {
+                    it.copy(
+                        isWorkspaceBrowserLoading = false,
+                        errorMessage = error.message ?: "Failed to browse folders.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateWorkspaceBrowserPath(path: String) {
+        uiStateFlow.update { it.copy(workspaceBrowserPath = path) }
+    }
+
+    fun activateWorkspace(path: String) {
+        runBusyAction("Switching project...") {
+            val status = repository.activateWorkspace(path)
+            repository.refreshThreads()
+            val recent = repository.listRecentWorkspaces()
+            uiStateFlow.update {
+                it.copy(
+                    activeWorkspacePath = status.currentCwd,
+                    recentWorkspaces = recent.recentWorkspaces,
+                    isProjectPickerOpen = false,
+                    workspaceBrowserPath = null,
+                    workspaceBrowserParentPath = null,
+                    workspaceBrowserEntries = emptyList(),
+                    selectedThreadId = null,
+                    selectedThreadTitle = null,
+                    messages = emptyList(),
+                )
+            }
+        }
+    }
+
     private fun runBusyAction(label: String? = null, block: suspend () -> Unit) {
         viewModelScope.launch {
             uiStateFlow.update { it.copy(isBusy = true, busyLabel = label) }
@@ -275,6 +378,7 @@ class MainViewModel(
                 }
                 if (update.status == ConnectionStatus.CONNECTED) {
                     loadRuntimeConfig()
+                    openProjectPicker()
                 }
             }
 
@@ -414,6 +518,25 @@ class MainViewModel(
             itemId = update.itemId,
             isStreaming = false,
         )
+    }
+
+    private suspend fun ensureWorkspaceActivated(path: String?) {
+        val normalizedPath = path?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (normalizedPath == uiStateFlow.value.activeWorkspacePath) {
+            return
+        }
+        val status = repository.activateWorkspace(normalizedPath)
+        uiStateFlow.update { it.copy(activeWorkspacePath = status.currentCwd ?: normalizedPath) }
+    }
+
+    private suspend fun loadWorkspaceState() {
+        val recent = repository.listRecentWorkspaces()
+        uiStateFlow.update {
+            it.copy(
+                activeWorkspacePath = recent.activeCwd,
+                recentWorkspaces = recent.recentWorkspaces,
+            )
+        }
     }
 }
 

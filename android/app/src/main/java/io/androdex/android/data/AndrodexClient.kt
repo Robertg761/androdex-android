@@ -29,6 +29,9 @@ import io.androdex.android.model.PhoneIdentityState
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.TrustedMacRecord
 import io.androdex.android.model.TrustedMacRegistry
+import io.androdex.android.model.WorkspaceActivationStatus
+import io.androdex.android.model.WorkspaceBrowseResult
+import io.androdex.android.model.WorkspaceRecentState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -139,44 +142,74 @@ class AndrodexClient(
     }
 
     suspend fun listThreads(limit: Int = 40): List<ThreadSummary> {
-        val threads = mutableListOf<ThreadSummary>()
-        var nextCursor: Any? = JSONObject.NULL
-        do {
-            val params = JSONObject()
-                .put("sourceKinds", JSONArray().apply {
-                    put("cli")
-                    put("vscode")
-                    put("appServer")
-                    put("exec")
-                    put("unknown")
-                })
-                .put("limit", limit)
-                .put("cursor", nextCursor)
-            val result = sendRequest("thread/list", params)
-            val page = result.optJSONArray("data")
-                ?: result.optJSONArray("items")
-                ?: result.optJSONArray("threads")
-                ?: JSONArray()
-            for (index in 0 until page.length()) {
-                val thread = page.optJSONObject(index)?.let(::decodeThreadSummary) ?: continue
-                threads += thread
-            }
-            nextCursor = result.opt("nextCursor").takeUnless { it == null }
-                ?: result.opt("next_cursor").takeUnless { it == null }
-        } while (nextCursor != null && nextCursor != JSONObject.NULL && threads.size < limit)
+        return try {
+            val threads = mutableListOf<ThreadSummary>()
+            var nextCursor: Any? = JSONObject.NULL
+            do {
+                val params = JSONObject()
+                    .put("sourceKinds", JSONArray().apply {
+                        put("cli")
+                        put("vscode")
+                        put("appServer")
+                        put("exec")
+                        put("unknown")
+                    })
+                    .put("limit", limit)
+                    .put("cursor", nextCursor)
+                val result = sendRequest("thread/list", params)
+                val page = result.optJSONArray("data")
+                    ?: result.optJSONArray("items")
+                    ?: result.optJSONArray("threads")
+                    ?: JSONArray()
+                for (index in 0 until page.length()) {
+                    val thread = page.optJSONObject(index)?.let(::decodeThreadSummary) ?: continue
+                    threads += thread
+                }
+                nextCursor = result.opt("nextCursor").takeUnless { it == null }
+                    ?: result.opt("next_cursor").takeUnless { it == null }
+            } while (nextCursor != null && nextCursor != JSONObject.NULL && threads.size < limit)
 
-        val sorted = threads.sortedByDescending { it.updatedAtEpochMs ?: it.createdAtEpochMs ?: 0L }
-        updatesFlow.emit(ClientUpdate.ThreadsLoaded(sorted))
-        return sorted
+            val sorted = threads.sortedByDescending { it.updatedAtEpochMs ?: it.createdAtEpochMs ?: 0L }
+            updatesFlow.emit(ClientUpdate.ThreadsLoaded(sorted))
+            sorted
+        } catch (error: RpcException) {
+            if (isNoActiveWorkspaceError(error)) {
+                updatesFlow.emit(ClientUpdate.ThreadsLoaded(emptyList()))
+                emptyList()
+            } else {
+                throw error
+            }
+        }
     }
 
-    suspend fun startThread(): ThreadSummary {
+    suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary {
         val params = JSONObject()
         runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
+        preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params.put("cwd", it) }
         val result = sendRequest("thread/start", params)
         val thread = decodeThreadSummary(result.optJSONObject("thread") ?: JSONObject())
             ?: throw IllegalStateException("thread/start response did not include a thread.")
         return thread
+    }
+
+    suspend fun listRecentWorkspaces(): WorkspaceRecentState {
+        val result = sendRequest("workspace/listRecent", JSONObject())
+        return decodeWorkspaceRecentState(result)
+    }
+
+    suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
+        val params = JSONObject()
+        path?.trim()?.takeIf { it.isNotEmpty() }?.let { params.put("path", it) }
+        val result = sendRequest("workspace/listDirectory", params)
+        return decodeWorkspaceBrowseResult(result)
+    }
+
+    suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus {
+        val result = sendRequest(
+            "workspace/activate",
+            JSONObject().put("cwd", cwd.trim())
+        )
+        return decodeWorkspaceActivationStatus(result)
     }
 
     suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
@@ -1087,8 +1120,14 @@ class AndrodexClient(
         return when (method) {
             "thread/read" -> threadReadTimeoutMs
             "thread/list" -> threadListTimeoutMs
+            "workspace/listDirectory" -> threadListTimeoutMs
             else -> defaultRpcTimeoutMs
         }
+    }
+
+    private fun isNoActiveWorkspaceError(error: RpcException): Boolean {
+        val message = error.message.lowercase(Locale.US)
+        return message.contains("no active workspace on the host")
     }
 
     private suspend fun waitForMatchingSecureReady(

@@ -153,11 +153,50 @@ data class ThreadSummary(
     val projectName: String
         get() = cwd
             ?.trim()
-            ?.trimEnd('/')
+            ?.trimEnd('/', '\\')
             ?.substringAfterLast('/')
+            ?.substringAfterLast('\\')
             ?.takeIf { it.isNotBlank() }
             ?: "No Project"
 }
+
+data class WorkspacePathSummary(
+    val path: String,
+    val name: String,
+    val isActive: Boolean,
+)
+
+data class WorkspaceDirectoryEntry(
+    val path: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val isActive: Boolean,
+    val source: String,
+)
+
+data class WorkspaceRecentState(
+    val activeCwd: String?,
+    val recentWorkspaces: List<WorkspacePathSummary>,
+)
+
+data class WorkspaceBrowseResult(
+    val requestedPath: String?,
+    val parentPath: String?,
+    val entries: List<WorkspaceDirectoryEntry>,
+    val rootEntries: List<WorkspaceDirectoryEntry>,
+    val activeCwd: String?,
+    val recentWorkspaces: List<WorkspacePathSummary>,
+)
+
+data class WorkspaceActivationStatus(
+    val hostId: String?,
+    val macDeviceId: String?,
+    val relayUrl: String?,
+    val relayStatus: String?,
+    val currentCwd: String?,
+    val workspaceActive: Boolean,
+    val hasTrustedPhone: Boolean,
+)
 
 data class ReasoningEffortOption(
     val reasoningEffort: String,

@@ -5,6 +5,7 @@
 // Depends on: fs, ws, ./codex-desktop-refresher, ./codex-transport, ./session-state, ./secure-device-state, ./secure-transport
 
 const fs = require("fs");
+const path = require("path");
 const WebSocket = require("ws");
 const {
   CodexDesktopRefresher,
@@ -20,6 +21,7 @@ const { readDaemonRuntimeState, writeDaemonRuntimeState } = require("./daemon-st
 
 class HostRuntime {
   constructor({ env = process.env, platform = process.platform } = {}) {
+    this.platform = platform;
     this.config = readBridgeConfig({ env, platform });
     this.relayBaseUrl = this.config.relayUrl.replace(/\/+$/, "");
     this.deviceState = loadOrCreateBridgeDeviceState();
@@ -79,7 +81,7 @@ class HostRuntime {
   }
 
   async activateWorkspace({ cwd = "" } = {}) {
-    const nextCwd = normalizeNonEmptyString(cwd) || process.cwd();
+    const nextCwd = normalizeWorkspacePath(normalizeNonEmptyString(cwd) || process.cwd(), this.platform);
     if (!isExistingDirectory(nextCwd)) {
       throw new Error(`Workspace directory not found: ${nextCwd}`);
     }
@@ -112,6 +114,15 @@ class HostRuntime {
       currentCwd: this.currentCwd || null,
       workspaceActive: Boolean(this.codex),
       hasTrustedPhone: Object.keys(currentDeviceState.trustedPhones || {}).length > 0,
+    };
+  }
+
+  getWorkspaceState() {
+    return {
+      activeCwd: this.currentCwd || "",
+      recentWorkspaces: Array.isArray(this.runtimeState.recentWorkspaces)
+        ? [...this.runtimeState.recentWorkspaces]
+        : [],
     };
   }
 
@@ -225,7 +236,7 @@ class HostRuntime {
 
     await this.shutdownCodex();
     this.currentCwd = cwd;
-    writeDaemonRuntimeState({ lastActiveCwd: cwd });
+    this.rememberRecentWorkspace(cwd);
     this.codexHandshakeState = this.config.codexEndpoint ? "warm" : "cold";
     this.forwardedInitializeRequestIds.clear();
 
@@ -285,7 +296,11 @@ class HostRuntime {
     if (this.handleBridgeManagedHandshakeMessage(rawMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
+    if (handleWorkspaceRequest(rawMessage, this.sendApplicationResponse.bind(this), {
+      activateWorkspace: this.activateWorkspace.bind(this),
+      getWorkspaceState: this.getWorkspaceState.bind(this),
+      platform: this.platform,
+    })) {
       return;
     }
     if (handleGitRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
@@ -375,9 +390,34 @@ class HostRuntime {
       id: parsed.id,
       error: {
         code: -32000,
-        message: "No active workspace on the host. Run `androdex up` in the project you want to use.",
+        message: "No active workspace on the host. Choose a project from the Android app to get started.",
       },
     }));
+  }
+
+  rememberRecentWorkspace(cwd) {
+    const normalized = normalizeWorkspacePath(cwd, this.platform);
+    const recentWorkspaces = Array.isArray(this.runtimeState.recentWorkspaces)
+      ? [...this.runtimeState.recentWorkspaces]
+      : [];
+    const targetKey = this.platform === "win32" ? normalized.toLowerCase() : normalized;
+    const nextRecentWorkspaces = [
+      normalized,
+      ...recentWorkspaces.filter((candidate) => {
+        const candidatePath = normalizeWorkspacePath(candidate, this.platform);
+        const candidateKey = this.platform === "win32"
+          ? candidatePath.toLowerCase()
+          : candidatePath;
+        return candidatePath && candidateKey !== targetKey;
+      }),
+    ].slice(0, 25);
+
+    this.runtimeState = {
+      ...this.runtimeState,
+      lastActiveCwd: normalized,
+      recentWorkspaces: nextRecentWorkspaces,
+    };
+    writeDaemonRuntimeState(this.runtimeState);
   }
 
   trackCodexHandshakeState(rawMessage) {
@@ -530,6 +570,17 @@ function readString(value) {
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeWorkspacePath(value, platform = process.platform) {
+  const trimmed = normalizeNonEmptyString(value);
+  if (!trimmed) {
+    return "";
+  }
+  const normalized = path.normalize(trimmed);
+  return platform === "win32" && /^[a-z]:/.test(normalized)
+    ? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+    : normalized;
 }
 
 function isAlreadyInitializedError(message) {

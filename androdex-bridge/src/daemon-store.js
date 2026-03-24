@@ -13,6 +13,7 @@ const STORE_DIR = path.join(os.homedir(), ".androdex");
 const CONTROL_FILE = path.join(STORE_DIR, "daemon-control.json");
 const RUNTIME_FILE = path.join(STORE_DIR, "daemon-runtime.json");
 const LOG_FILE = path.join(STORE_DIR, "daemon.log");
+const MAX_RECENT_WORKSPACES = 25;
 
 function ensureStoreDir() {
   fs.mkdirSync(STORE_DIR, { recursive: true });
@@ -38,12 +39,14 @@ function readDaemonRuntimeState() {
   const runtimeState = readJsonFile(RUNTIME_FILE);
   return {
     lastActiveCwd: normalizeNonEmptyString(runtimeState?.lastActiveCwd),
+    recentWorkspaces: normalizeRecentWorkspaces(runtimeState?.recentWorkspaces),
   };
 }
 
 function writeDaemonRuntimeState(state) {
   writeJsonFile(RUNTIME_FILE, {
     lastActiveCwd: normalizeNonEmptyString(state?.lastActiveCwd),
+    recentWorkspaces: normalizeRecentWorkspaces(state?.recentWorkspaces),
   });
 }
 
@@ -81,10 +84,39 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeRecentWorkspaces(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const candidate of value) {
+    const trimmed = normalizeNonEmptyString(candidate);
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      continue;
+    }
+
+    const dedupeKey = process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    normalized.push(trimmed);
+    if (normalized.length >= MAX_RECENT_WORKSPACES) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
 module.exports = {
   clearDaemonControlState,
   createDaemonControlToken,
   getDaemonLogPath,
+  MAX_RECENT_WORKSPACES,
   readDaemonControlState,
   readDaemonRuntimeState,
   writeDaemonControlState,

@@ -173,6 +173,12 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onCreateThread = viewModel::createThread,
                 onOpenThread = viewModel::openThread,
                 onOpenSettings = { settingsOpen = true },
+                onOpenProjects = viewModel::openProjectPicker,
+                onCloseProjects = viewModel::closeProjectPicker,
+                onLoadRecentWorkspaces = viewModel::loadRecentWorkspaces,
+                onBrowseWorkspace = viewModel::browseWorkspace,
+                onWorkspaceBrowserPathChanged = viewModel::updateWorkspaceBrowserPath,
+                onActivateWorkspace = viewModel::activateWorkspace,
             )
         } else {
             PairingScreen(
@@ -322,7 +328,7 @@ private fun PairingScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Run androdex pair once on your host to trust this phone, then reopen the app to reconnect from the saved pairing. Run androdex up inside a project when you want that workspace active.",
+                    text = "Run androdex pair once on your host to trust this phone, then reconnect from saved pairing later. Once connected, choose or switch projects directly from Android.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 8.dp),
@@ -454,8 +460,25 @@ private fun ThreadListScreen(
     onCreateThread: () -> Unit,
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenProjects: () -> Unit,
+    onCloseProjects: () -> Unit,
+    onLoadRecentWorkspaces: () -> Unit,
+    onBrowseWorkspace: (String?) -> Unit,
+    onWorkspaceBrowserPathChanged: (String) -> Unit,
+    onActivateWorkspace: (String) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+
+    if (state.isProjectPickerOpen) {
+        ProjectPickerSheet(
+            state = state,
+            onDismiss = onCloseProjects,
+            onRefresh = onLoadRecentWorkspaces,
+            onBrowse = onBrowseWorkspace,
+            onBrowserPathChanged = onWorkspaceBrowserPathChanged,
+            onActivateWorkspace = onActivateWorkspace,
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -464,6 +487,9 @@ private fun ThreadListScreen(
                     Text("Threads", style = MaterialTheme.typography.titleLarge)
                 },
                 actions = {
+                    TextButton(onClick = onOpenProjects) {
+                        Text("Projects")
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
@@ -534,6 +560,12 @@ private fun ThreadListScreen(
 
             BusyIndicator(state = state)
 
+            ActiveWorkspaceBanner(
+                activeWorkspacePath = state.activeWorkspacePath,
+                onOpenProjects = onOpenProjects,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+
             if (state.threads.isEmpty() && !state.isBusy) {
                 // Empty state
                 Box(
@@ -548,10 +580,20 @@ private fun ThreadListScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Tap \"New Chat\" to start one",
+                            text = if (state.activeWorkspacePath == null) {
+                                "Choose a project to start chatting"
+                            } else {
+                                "Tap \"New Chat\" to start one"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.outline,
                         )
+                        if (state.activeWorkspacePath == null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            FilledTonalButton(onClick = onOpenProjects) {
+                                Text("Choose Project")
+                            }
+                        }
                     }
                 }
             } else {
@@ -570,6 +612,218 @@ private fun ThreadListScreen(
                     item { Spacer(modifier = Modifier.height(80.dp)) }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ActiveWorkspaceBanner(
+    activeWorkspacePath: String?,
+    onOpenProjects: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Active Project",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = activeWorkspacePath ?: "No project selected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            OutlinedButton(onClick = onOpenProjects) {
+                Text(if (activeWorkspacePath == null) "Choose" else "Switch")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProjectPickerSheet(
+    state: AndrodexUiState,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onBrowse: (String?) -> Unit,
+    onBrowserPathChanged: (String) -> Unit,
+    onActivateWorkspace: (String) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scrollState = rememberScrollState()
+    val isBrowsing = state.workspaceBrowserPath != null || state.workspaceBrowserEntries.isNotEmpty()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Projects", style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = onRefresh) {
+                    Text("Refresh")
+                }
+            }
+
+            if (state.isWorkspaceBrowserLoading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Current Project", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        text = state.activeWorkspacePath ?: "No project selected",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+
+            if (!isBrowsing) {
+                if (state.recentWorkspaces.isNotEmpty()) {
+                    Text("Recent", style = MaterialTheme.typography.titleMedium)
+                    state.recentWorkspaces.forEach { workspace ->
+                        WorkspaceRow(
+                            title = workspace.name,
+                            subtitle = workspace.path,
+                            active = workspace.isActive,
+                            onClick = { onActivateWorkspace(workspace.path) },
+                        )
+                    }
+                }
+
+                FilledTonalButton(
+                    onClick = { onBrowse(null) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Browse Folders")
+                }
+            } else {
+                Text("Browse Host Folders", style = MaterialTheme.typography.titleMedium)
+                TextField(
+                    value = state.workspaceBrowserPath.orEmpty(),
+                    onValueChange = onBrowserPathChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Folder path") },
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { onBrowse(state.workspaceBrowserParentPath) },
+                        enabled = state.workspaceBrowserParentPath != null,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Up")
+                    }
+                    Button(
+                        onClick = { onBrowse(state.workspaceBrowserPath) },
+                        enabled = !state.workspaceBrowserPath.isNullOrBlank(),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Open")
+                    }
+                }
+
+                state.workspaceBrowserEntries.forEach { entry ->
+                    WorkspaceRow(
+                        title = entry.name,
+                        subtitle = entry.path,
+                        active = entry.isActive,
+                        onClick = {
+                            if (entry.source == "recent") {
+                                onActivateWorkspace(entry.path)
+                            } else {
+                                onBrowse(entry.path)
+                            }
+                        },
+                    )
+                }
+
+                Button(
+                    onClick = { state.workspaceBrowserPath?.let(onActivateWorkspace) },
+                    enabled = !state.workspaceBrowserPath.isNullOrBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Use This Folder")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceRow(
+    title: String,
+    subtitle: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = if (active) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer
+        },
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                if (active) {
+                    Text("Active", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
