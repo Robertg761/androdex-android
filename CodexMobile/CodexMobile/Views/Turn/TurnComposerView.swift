@@ -170,7 +170,7 @@ struct TurnComposerView: View {
 
                 ZStack(alignment: .topLeading) {
                     if input.isEmpty {
-                        Text("Ask Remodex anything, @ to add files, $ for skills")
+                        Text("Ask Androdex anything, @ to add files, $ for skills")
                             .font(AppFont.body())
                             .foregroundStyle(Color(.placeholderText))
                             .allowsHitTesting(false)

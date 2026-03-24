@@ -2,7 +2,7 @@
 
 This folder contains the thin WebSocket relay used by the durable Androdex pairing flow.
 
-In production, the default hosted relay runs on my VPS. If you want, you can inspect this code, fork it, and host the same relay yourself.
+This repository does not assume a hosted relay you do not control. If you use this relay, run it on infrastructure you control and point the bridge at it explicitly.
 
 ## What It Does
 
@@ -20,7 +20,7 @@ In production, the default hosted relay runs on my VPS. If you want, you can ins
 - it does not persist the local workspace on the server
 
 Codex, git, and local file operations still run on the user's host computer.
-The relay is intentionally blind to Remodex application contents once the secure handshake completes.
+The relay is intentionally blind to Androdex application contents once the secure handshake completes.
 
 ## Security Model
 

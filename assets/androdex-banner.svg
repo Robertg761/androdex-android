@@ -1,0 +1,49 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8ED"/>
+      <stop offset="0.52" stop-color="#F2DFC3"/>
+      <stop offset="1" stop-color="#D9E9E2"/>
+    </linearGradient>
+    <linearGradient id="card" x1="767" y1="102" x2="1039" y2="574" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#103C34"/>
+      <stop offset="1" stop-color="#0B2823"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="801" y1="162" x2="988" y2="532" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9F0"/>
+      <stop offset="1" stop-color="#EEF5F0"/>
+    </linearGradient>
+    <filter id="shadow" x="702" y="70" width="386" height="540" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="28"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0705882 0 0 0 0 0.239216 0 0 0 0 0.207843 0 0 0 0.14 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="640" rx="40" fill="url(#bg)"/>
+  <rect x="704" y="142" width="436" height="436" rx="104" transform="rotate(-8 704 142)" fill="#FFF8ED" fill-opacity="0.56"/>
+  <circle cx="1088" cy="404" r="170" fill="#1F6B54" fill-opacity="0.12"/>
+  <text x="88" y="114" fill="#5C564D" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="0.12em">ANDRODEX</text>
+  <text x="88" y="224" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="86" font-weight="800">Local Codex on Windows,</text>
+  <text x="88" y="314" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="86" font-weight="800">remote control from Android.</text>
+  <text x="88" y="406" fill="#33413C" font-family="Segoe UI, Arial, sans-serif" font-size="34">Local-first Codex remote control for the Windows host + Android workflow.</text>
+  <g filter="url(#shadow)">
+    <rect x="760" y="110" width="280" height="496" rx="44" fill="url(#card)"/>
+    <rect x="775" y="125" width="250" height="466" rx="34" fill="url(#screen)"/>
+    <rect x="855" y="136" width="90" height="18" rx="9" fill="#171717"/>
+    <text x="805" y="214" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Androdex</text>
+    <text x="805" y="244" fill="#6C675F" font-family="Segoe UI, Arial, sans-serif" font-size="16">Windows host + Android remote</text>
+    <rect x="805" y="282" width="190" height="74" rx="18" fill="#247B61"/>
+    <text x="824" y="315" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="18">CONNECTED</text>
+    <text x="824" y="340" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="16">Secure bridge session active</text>
+    <rect x="805" y="378" width="190" height="88" rx="18" fill="#FFFAF2" stroke="#E0D5C5"/>
+    <text x="824" y="412" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">Threads</text>
+    <text x="824" y="438" fill="#5C564D" font-family="Segoe UI, Arial, sans-serif" font-size="15">Browse local sessions from Android</text>
+    <rect x="805" y="484" width="190" height="88" rx="18" fill="#FFFAF2" stroke="#E0D5C5"/>
+    <text x="824" y="518" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">Approvals</text>
+    <text x="824" y="544" fill="#5C564D" font-family="Segoe UI, Arial, sans-serif" font-size="15">Review host-side actions on the go</text>
+  </g>
+</svg>

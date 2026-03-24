@@ -1,5 +1,5 @@
 // FILE: CodexSecureTransportModels.swift
-// Purpose: Defines the wire payloads, device trust records, and crypto helpers for Remodex E2EE.
+// Purpose: Defines the wire payloads, device trust records, and crypto helpers for Androdex E2EE.
 // Layer: Service support
 // Exports: Pairing/session models plus transcript, nonce, and key utility helpers
 // Depends on: Foundation, CryptoKit
@@ -9,7 +9,7 @@ import Foundation
 
 let codexSecureProtocolVersion = 1
 let codexPairingQRVersion = 2
-let codexSecureHandshakeTag = "remodex-e2ee-v1"
+let codexSecureHandshakeTag = "androdex-e2ee-v1"
 let codexSecureHandshakeLabel = "client-auth"
 let codexSecureClockSkewToleranceSeconds: TimeInterval = 60
 
@@ -161,7 +161,7 @@ enum CodexSecureTransportError: LocalizedError {
              .timedOut(let message):
             return message
         case .decryptFailed:
-            return "Unable to decrypt the secure Remodex payload."
+            return "Unable to decrypt the secure Androdex payload."
         }
     }
 }

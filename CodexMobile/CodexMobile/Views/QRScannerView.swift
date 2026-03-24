@@ -53,7 +53,7 @@ struct QRScannerView: View {
                 .stroke(Color.white.opacity(0.6), lineWidth: 2)
                 .frame(width: 250, height: 250)
 
-            Text("Scan QR code from Remodex CLI")
+            Text("Scan QR code from Androdex CLI")
                 .font(AppFont.subheadline(weight: .medium))
                 .foregroundStyle(.white)
 
@@ -108,7 +108,7 @@ struct QRScannerView: View {
 
         let decoder = JSONDecoder()
         guard let payload = try? decoder.decode(CodexPairingQRPayload.self, from: data) else {
-            scannerError = "Not a valid secure pairing code. Make sure you're scanning a QR from the latest Remodex bridge."
+            scannerError = "Not a valid secure pairing code. Make sure you're scanning a QR from the latest Androdex bridge."
             resetScanLock()
             return
         }
@@ -164,7 +164,7 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     var onScan: ((String) -> Void)?
 
     private let captureSession = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "com.phodex.qr-camera")
+    private let sessionQueue = DispatchQueue(label: "com.androdex.qr-camera")
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var hasScanned = false
 

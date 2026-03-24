@@ -6,7 +6,6 @@
 
 [![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
-[Follow on X](https://x.com/Ranats85)
 
 [Japanese README](README.ja.md)
 
@@ -65,8 +64,6 @@ Androdex does **not** run Codex on the phone itself.
 - the public Google Play release is still being prepared
 
 If you want to try the Android client now, build it from source from the `android/` directory.
-
-The legacy `relaydex` CLI name still works as a compatibility alias.
 
 ## Install the Bridge
 
@@ -160,7 +157,7 @@ The desktop Codex app can still read persisted sessions from `~/.codex/sessions`
 
 ```text
 androdex/
-|-- phodex-bridge/                # CLI bridge package
+|-- androdex-bridge/              # CLI bridge package
 |   |-- bin/                      # CLI entrypoints
 |   `-- src/                      # Bridge runtime and handlers
 |-- android/                      # Android Studio project
@@ -186,8 +183,7 @@ The actual Play opt-in and install step will be shared later.
 
 If you tried a source build and hit a bug, pairing issue, reconnect problem, or UI confusion:
 
-- GitHub Issues: `https://github.com/Ranats/androdex/issues`
-- X: `https://x.com/Ranats85`
+- GitHub Issues: `https://github.com/Robertg761/androdex/issues`
 
 Helpful details:
 
@@ -210,7 +206,7 @@ The bridge accepts `ANDRODEX_*` names, the legacy `RELAYDEX_*` names, and the ol
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 
-If you are building from source or self-hosting, set these explicitly instead of assuming hosted defaults.
+If you are building from source or self-hosting, set these explicitly. The public repo does not assume a hosted relay default.
 
 ## Self-Hosting
 
@@ -241,7 +237,7 @@ Yes. That is one of the intended public-repo paths.
 
 ## Security Notes
 
-The mobile client and bridge use the same end-to-end encrypted session model as upstream Remodex. This fork keeps wire-level compatibility where practical, so some internal field names still say `mac` or `iphone`. Those are protocol leftovers, not actual platform restrictions.
+The mobile client and bridge use an end-to-end encrypted session model derived from the upstream projects. Some internal protocol field names still say `mac` or `iphone`; those are implementation leftovers, not actual platform restrictions.
 
 ## Credits
 

@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-12
 
-Androdex is an independent fork of Remodex focused on controlling local Codex running on a user's own computer from Android.
+Androdex is a local-first Android remote client and host bridge for controlling Codex running on the user's own computer.
 
 ## Who this policy applies to
 
@@ -84,5 +84,5 @@ Users can remove the app and clear locally stored app data from their Android de
 
 Support:
 
-- GitHub repository: `https://github.com/Ranats/androdex`
-- Issue tracker: `https://github.com/Ranats/androdex/issues`
+- GitHub repository: `https://github.com/Robertg761/androdex`
+- Issue tracker: `https://github.com/Robertg761/androdex/issues`

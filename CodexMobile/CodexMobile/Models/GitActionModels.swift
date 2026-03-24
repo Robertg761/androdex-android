@@ -1,5 +1,5 @@
 // FILE: GitActionModels.swift
-// Purpose: Data models for git operations executed via the phodex-bridge.
+// Purpose: Data models for git operations executed via the androdex-bridge.
 // Layer: Model
 // Exports: GitDiffTotals, GitRepoSyncResult, GitRepoDiffResult, GitCommitResult, GitPushResult, GitBranchesResult, GitCheckoutResult, GitPullResult, GitResetResult, TurnGitActionKind, TurnGitSyncAlert, TurnGitSyncAlertAction
 // Depends on: JSONValue

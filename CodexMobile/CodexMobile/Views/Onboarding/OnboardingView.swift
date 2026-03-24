@@ -43,7 +43,7 @@ struct OnboardingView: View {
                                     .frame(width: 56, height: 56)
                                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                                Text("Remodex")
+                                Text("Androdex")
                                     .font(AppFont.title2(weight: .bold))
 
                                 Text("Control Codex from your iPhone.")
@@ -57,13 +57,13 @@ struct OnboardingView: View {
                                 OnboardingStepRow(
                                     number: "1",
                                     title: "Install the package",
-                                    command: "npm install -g remodex"
+                                    command: "npm install -g androdex"
                                 )
 
                                 OnboardingStepRow(
                                     number: "2",
                                     title: "Start the relay",
-                                    command: "remodex up"
+                                    command: "androdex up"
                                 )
 
                                 OnboardingStepRow(

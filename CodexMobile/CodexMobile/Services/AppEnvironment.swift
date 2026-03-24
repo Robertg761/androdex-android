@@ -7,10 +7,10 @@
 import Foundation
 
 enum AppEnvironment {
-    private static let defaultRelayURLInfoPlistKey = "PHODEX_DEFAULT_RELAY_URL"
+    private static let defaultRelayURLInfoPlistKey = "ANDRODEX_DEFAULT_RELAY_URL"
 
-    // Keeps a working default relay when no explicit value is configured.
-    static let defaultRelayURLString = "wss://api.phodex.app/relay"
+    // The public repo does not ship with a hosted relay default.
+    static let defaultRelayURLString = ""
 
     static var relayBaseURL: String {
         if let infoURL = resolvedString(forInfoPlistKey: defaultRelayURLInfoPlistKey) {

@@ -12,12 +12,11 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    // Keep the legacy package id so existing installs and app data stay compatible.
-    namespace = "io.relaydex.android"
+    namespace = "io.androdex.android"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.relaydex.android"
+        applicationId = "io.androdex.android"
         minSdk = 24
         targetSdk = 36
         versionCode = 9
