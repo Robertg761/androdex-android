@@ -12,6 +12,7 @@ const { execFileSync } = require("child_process");
 
 const STORE_DIR = path.join(os.homedir(), ".androdex");
 const STORE_FILE = path.join(STORE_DIR, "device-state.json");
+const STORE_BACKUP_FILE = path.join(STORE_DIR, "device-state.backup.json");
 const KEYCHAIN_SERVICE = "io.androdex.bridge.device-state";
 const KEYCHAIN_ACCOUNT = "default";
 
@@ -81,47 +82,82 @@ function createBridgeDeviceState() {
 }
 
 function readBridgeDeviceState() {
-  const rawState = readStoredDeviceStateString();
-  if (!rawState) {
-    return null;
+  for (const rawState of readStoredDeviceStateStrings()) {
+    try {
+      return normalizeBridgeDeviceState(JSON.parse(rawState));
+    } catch {
+      // Try the next persisted copy before giving up and minting a new host identity.
+    }
   }
-
-  try {
-    return normalizeBridgeDeviceState(JSON.parse(rawState));
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function writeBridgeDeviceState(state) {
   const serialized = JSON.stringify(state, null, 2);
-  if (process.platform === "darwin" && writeKeychainStateString(serialized)) {
-    return;
+  if (process.platform === "darwin") {
+    writeKeychainStateString(serialized);
   }
 
-  fs.mkdirSync(STORE_DIR, { recursive: true });
-  fs.writeFileSync(STORE_FILE, serialized, { mode: 0o600 });
+  writeStateFile(STORE_FILE, serialized);
   try {
-    fs.chmodSync(STORE_FILE, 0o600);
+    writeStateFile(STORE_BACKUP_FILE, serialized);
   } catch {
-    // Best-effort only on filesystems that support POSIX modes.
+    // Keep the primary identity state even if the recovery copy cannot be refreshed.
   }
 }
 
-function readStoredDeviceStateString() {
+function readStoredDeviceStateStrings() {
+  const candidates = [];
+  const primaryState = readStateFile(STORE_FILE);
+  if (primaryState) {
+    candidates.push(primaryState);
+  }
+
+  const backupState = readStateFile(STORE_BACKUP_FILE);
+  if (backupState) {
+    candidates.push(backupState);
+  }
+
   if (process.platform === "darwin") {
     const keychainValue = readKeychainStateString();
     if (keychainValue) {
-      return keychainValue;
+      candidates.push(keychainValue);
     }
   }
 
-  if (!fs.existsSync(STORE_FILE)) {
+  return candidates;
+}
+
+function writeStateFile(filePath, serialized) {
+  fs.mkdirSync(STORE_DIR, { recursive: true });
+  const tempFilePath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFilePath, serialized, { mode: 0o600 });
+  try {
+    fs.chmodSync(tempFilePath, 0o600);
+  } catch {
+    // Best-effort only on filesystems that support POSIX modes.
+  }
+
+  try {
+    fs.rmSync(filePath, { force: true });
+    fs.renameSync(tempFilePath, filePath);
+  } catch (error) {
+    try {
+      fs.rmSync(tempFilePath, { force: true });
+    } catch {
+      // Ignore temp cleanup failures and surface the original write problem.
+    }
+    throw error;
+  }
+}
+
+function readStateFile(filePath) {
+  if (!fs.existsSync(filePath)) {
     return null;
   }
 
   try {
-    return fs.readFileSync(STORE_FILE, "utf8");
+    return fs.readFileSync(filePath, "utf8");
   } catch {
     return null;
   }
@@ -169,9 +205,10 @@ function writeKeychainStateString(value) {
 }
 
 function deleteStoredDeviceStateString() {
-  const existed = fs.existsSync(STORE_FILE);
+  const existed = fs.existsSync(STORE_FILE) || fs.existsSync(STORE_BACKUP_FILE);
   try {
     fs.rmSync(STORE_FILE, { force: true });
+    fs.rmSync(STORE_BACKUP_FILE, { force: true });
     return existed;
   } catch {
     return false;

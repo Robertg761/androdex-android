@@ -15,8 +15,21 @@ class SecureStore(context: Context) {
     private val preferences = context.getSharedPreferences("androdex.secure", Context.MODE_PRIVATE)
 
     fun readString(key: String): String? {
-        val stored = preferences.getString(key, null) ?: return null
-        return runCatching { decrypt(stored) }.getOrNull()
+        return readStringState(key).value
+    }
+
+    fun readStringState(key: String): SecureReadState {
+        val stored = preferences.getString(key, null) ?: return SecureReadState(
+            value = null,
+            wasPresent = false,
+            isUnreadable = false,
+        )
+        val decrypted = runCatching { decrypt(stored) }.getOrNull()
+        return SecureReadState(
+            value = decrypted,
+            wasPresent = true,
+            isUnreadable = decrypted == null,
+        )
     }
 
     fun writeString(key: String, value: String) {
@@ -72,4 +85,10 @@ class SecureStore(context: Context) {
         const val KEY_ALIAS = "androdex_android_secure_store"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
+
+    data class SecureReadState(
+        val value: String?,
+        val wasPresent: Boolean,
+        val isUnreadable: Boolean,
+    )
 }

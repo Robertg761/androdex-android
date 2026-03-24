@@ -9,8 +9,15 @@ import org.json.JSONObject
 
 class AndrodexPersistence(context: Context) {
     private val secureStore = SecureStore(context)
+    private var startupNotice: String? = sanitizeUnreadableSecureState()
 
     fun hasSavedPairing(): Boolean = loadPairing() != null
+
+    fun takeStartupNotice(): String? {
+        val notice = startupNotice
+        startupNotice = null
+        return notice
+    }
 
     fun loadPairing(): PairingPayload? {
         val raw = secureStore.readString(KEY_PAIRING) ?: return null
@@ -75,6 +82,39 @@ class AndrodexPersistence(context: Context) {
             secureStore.remove(KEY_SELECTED_REASONING_EFFORT)
         } else {
             secureStore.writeString(KEY_SELECTED_REASONING_EFFORT, normalized)
+        }
+    }
+
+    private fun sanitizeUnreadableSecureState(): String? {
+        val pairingState = secureStore.readStringState(KEY_PAIRING)
+        val phoneIdentityState = secureStore.readStringState(KEY_PHONE_IDENTITY)
+        val trustedMacState = secureStore.readStringState(KEY_TRUSTED_MACS)
+        val lastAppliedSeqState = secureStore.readStringState(KEY_LAST_APPLIED_SEQ)
+        val selectedModelState = secureStore.readStringState(KEY_SELECTED_MODEL_ID)
+        val selectedReasoningState = secureStore.readStringState(KEY_SELECTED_REASONING_EFFORT)
+
+        val lostSecurePairingState = pairingState.isUnreadable
+            || phoneIdentityState.isUnreadable
+            || trustedMacState.isUnreadable
+            || lastAppliedSeqState.isUnreadable
+
+        if (lostSecurePairingState) {
+            clearPairing()
+            secureStore.remove(KEY_PHONE_IDENTITY)
+            secureStore.remove(KEY_TRUSTED_MACS)
+        }
+
+        if (selectedModelState.isUnreadable) {
+            secureStore.remove(KEY_SELECTED_MODEL_ID)
+        }
+        if (selectedReasoningState.isUnreadable) {
+            secureStore.remove(KEY_SELECTED_REASONING_EFFORT)
+        }
+
+        return if (lostSecurePairingState) {
+            "Saved pairing from a previous Android install or device restore is no longer readable on this device. Scan a fresh QR code to pair again."
+        } else {
+            null
         }
     }
 

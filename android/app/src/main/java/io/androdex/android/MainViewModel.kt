@@ -68,6 +68,7 @@ class MainViewModel(
             hasSavedPairing = repository.hasSavedPairing(),
             defaultRelayUrl = AppEnvironment.defaultRelayUrl.takeIf { it.isNotEmpty() },
             secureFingerprint = repository.currentFingerprint(),
+            errorMessage = repository.startupNotice(),
         )
     )
 

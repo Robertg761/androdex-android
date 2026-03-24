@@ -93,12 +93,24 @@ class MainViewModelWorkspaceTest {
         assertEquals("C:\\Projects\\AppA", repository.startedThreadCwds.single())
         assertTrue(viewModel.uiState.value.selectedThreadId == "thread-created")
     }
+
+    @Test
+    fun startupNotice_populatesInitialErrorMessage() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            startupNotice = "Pair again on this Android install."
+        }
+
+        val viewModel = MainViewModel(repository)
+
+        assertEquals("Pair again on this Android install.", viewModel.uiState.value.errorMessage)
+    }
 }
 
 private class FakeRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>()
 
     var recentState = WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
+    var startupNotice: String? = null
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
@@ -112,6 +124,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     override fun hasSavedPairing(): Boolean = false
 
     override fun currentFingerprint(): String? = null
+
+    override fun startupNotice(): String? = startupNotice
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
 

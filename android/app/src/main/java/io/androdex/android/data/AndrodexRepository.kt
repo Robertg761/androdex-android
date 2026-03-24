@@ -15,6 +15,7 @@ interface AndrodexRepositoryContract {
     val updates: SharedFlow<ClientUpdate>
     fun hasSavedPairing(): Boolean
     fun currentFingerprint(): String?
+    fun startupNotice(): String?
     suspend fun connectWithPairingPayload(rawPayload: String)
     suspend fun reconnectSaved()
     suspend fun disconnect(clearSavedPairing: Boolean = false)
@@ -40,6 +41,8 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     override fun hasSavedPairing(): Boolean = client.hasSavedPairing()
 
     override fun currentFingerprint(): String? = client.currentFingerprint()
+
+    override fun startupNotice(): String? = persistence.takeStartupNotice()
 
     override suspend fun connectWithPairingPayload(rawPayload: String) {
         client.connectWithPairingPayload(rawPayload)
