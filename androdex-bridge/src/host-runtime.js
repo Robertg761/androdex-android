@@ -56,6 +56,7 @@ class HostRuntime {
     this.reconnectAttempt = 0;
     this.reconnectTimer = null;
     this.connectTimeoutTimer = null;
+    this.connectGeneration = 0;
     this.activationQueue = Promise.resolve();
     this.activationSequence = 0;
     this.relayStatus = "disconnected";
@@ -150,19 +151,21 @@ class HostRuntime {
     this.reconnectTimer = null;
   }
 
-  clearConnectTimeout() {
-    if (!this.connectTimeoutTimer) {
+  clearConnectTimeout(timer = this.connectTimeoutTimer) {
+    if (!timer) {
       return;
     }
-    this.clearTimeoutFn(this.connectTimeoutTimer);
-    this.connectTimeoutTimer = null;
+    this.clearTimeoutFn(timer);
+    if (this.connectTimeoutTimer === timer) {
+      this.connectTimeoutTimer = null;
+    }
   }
 
   scheduleRelayReconnect(closeCode) {
     if (this.isStopping) {
       return;
     }
-    if (closeCode === 4000 || closeCode === 4001) {
+    if (closeCode === 4000) {
       this.relayStatus = "disconnected";
       return;
     }
@@ -190,27 +193,30 @@ class HostRuntime {
       return;
     }
 
+    this.clearReconnectTimer();
     this.relayStatus = "connecting";
+    const connectGeneration = ++this.connectGeneration;
     const nextSocket = new this.WebSocketImpl(this.relayHostUrl, {
       headers: { "x-role": "mac" },
     });
     this.socket = nextSocket;
     this.clearConnectTimeout();
-    this.connectTimeoutTimer = this.setTimeoutFn(() => {
-      if (this.isStopping || this.socket !== nextSocket) {
+    const connectTimeoutTimer = this.setTimeoutFn(() => {
+      if (!this.isCurrentRelaySocket(nextSocket, connectGeneration)) {
         return;
       }
       this.relayStatus = "disconnected";
       this.forceCloseSocket(nextSocket);
     }, this.relayConnectTimeoutMs);
+    this.connectTimeoutTimer = connectTimeoutTimer;
 
     nextSocket.on("open", () => {
-      if (this.socket !== nextSocket) {
+      if (!this.isCurrentRelaySocket(nextSocket, connectGeneration)) {
         this.forceCloseSocket(nextSocket);
         return;
       }
       this.clearReconnectTimer();
-      this.clearConnectTimeout();
+      this.clearConnectTimeout(connectTimeoutTimer);
       this.reconnectAttempt = 0;
       this.relayStatus = "connected";
       this.secureTransport.bindLiveSendWireMessage((wireMessage) => {
@@ -221,7 +227,7 @@ class HostRuntime {
     });
 
     nextSocket.on("message", (data) => {
-      if (this.socket !== nextSocket) {
+      if (!this.isCurrentRelaySocket(nextSocket, connectGeneration)) {
         return;
       }
       const message = typeof data === "string" ? data : data.toString("utf8");
@@ -240,10 +246,10 @@ class HostRuntime {
     });
 
     nextSocket.on("close", (code) => {
-      if (this.socket !== nextSocket) {
+      if (!this.isCurrentRelaySocket(nextSocket, connectGeneration)) {
         return;
       }
-      this.clearConnectTimeout();
+      this.clearConnectTimeout(connectTimeoutTimer);
       this.relayStatus = "disconnected";
       this.socket = null;
       this.clearCachedBridgeHandshakeState();
@@ -252,9 +258,10 @@ class HostRuntime {
     });
 
     nextSocket.on("error", () => {
-      if (this.socket !== nextSocket) {
+      if (!this.isCurrentRelaySocket(nextSocket, connectGeneration)) {
         return;
       }
+      this.clearConnectTimeout(connectTimeoutTimer);
       this.relayStatus = "disconnected";
       if (
         nextSocket.readyState === this.WebSocketImpl.CONNECTING
@@ -263,6 +270,12 @@ class HostRuntime {
         this.forceCloseSocket(nextSocket);
       }
     });
+  }
+
+  isCurrentRelaySocket(socket, connectGeneration) {
+    return !this.isStopping
+      && this.socket === socket
+      && this.connectGeneration === connectGeneration;
   }
 
   forceCloseSocket(socket) {

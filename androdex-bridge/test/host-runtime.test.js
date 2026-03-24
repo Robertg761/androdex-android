@@ -214,3 +214,27 @@ test("times out stuck relay connects and schedules a retry", () => {
   assert.equal(FakeWebSocket.instances.length, 2);
   assert.equal(runtime.relayStatus, "connecting");
 });
+
+test("treats mac replacement close as recoverable and retries the relay", () => {
+  const HostRuntime = loadHostRuntime();
+  const timerHarness = createTimerHarness();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+    setTimeoutFn: timerHarness.setTimeoutFn,
+    clearTimeoutFn: timerHarness.clearTimeoutFn,
+  });
+
+  runtime.connectRelay();
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+
+  socket.close(4001);
+
+  const reconnectTimer = timerHarness.nextTimer(1_000);
+  assert.ok(reconnectTimer, "expected a reconnect attempt after a replacement close");
+  reconnectTimer.fn();
+
+  assert.equal(FakeWebSocket.instances.length, 2);
+  assert.equal(runtime.relayStatus, "connecting");
+});
