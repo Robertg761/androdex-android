@@ -10,7 +10,7 @@
 
 [English README](README.md)
 
-Androdex は [Remodex](https://github.com/Emanuele-web04/remodex) をベースにした independent fork で、次のワークフローに絞って開発しています。
+Androdex は [relaydex](https://github.com/Ranats/relaydex) を fork したもので、`relaydex` はさらに [Remodex](https://github.com/Emanuele-web04/remodex) をベースにしています。Androdex では次のワークフローに絞って開発しています。
 
 - Windows 上でローカル Codex を動かす
 - `androdex up` でローカル bridge を起動する
@@ -231,9 +231,11 @@ mobile client と bridge は upstream Remodex と同じ end-to-end encrypted ses
 
 ## クレジット
 
-Androdex は [Remodex](https://github.com/Emanuele-web04/remodex) の independent fork です。元のプロジェクトは Emanuele Di Pietro によって作られました。
+Androdex は Ranats による [relaydex](https://github.com/Ranats/relaydex) を fork したものです。
 
-このリポジトリは公式 Remodex アプリではなく、upstream 作者の公認やサポートを示すものではありません。
+`relaydex` はさらに [Remodex](https://github.com/Emanuele-web04/remodex) をベースにしており、元のプロジェクトは Emanuele Di Pietro によって作られました。
+
+このリポジトリは公式 relaydex / Remodex アプリではなく、upstream 作者の公認やサポートを示すものではありません。
 
 ## ライセンス
 

@@ -10,7 +10,7 @@
 
 [Japanese README](README.ja.md)
 
-Androdex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex) focused on one workflow:
+Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is itself a fork of [Remodex](https://github.com/Emanuele-web04/remodex), focused on one workflow:
 
 - run local Codex on Windows
 - pair the phone once with `androdex pair`
@@ -245,9 +245,11 @@ The mobile client and bridge use the same end-to-end encrypted session model as 
 
 ## Credits
 
-Androdex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex), originally created by Emanuele Di Pietro.
+Androdex is forked from [relaydex](https://github.com/Ranats/relaydex) by Ranats.
 
-This repository is not the official Remodex app and is not affiliated with or endorsed by the upstream author.
+`relaydex` is itself derived from [Remodex](https://github.com/Emanuele-web04/remodex), originally created by Emanuele Di Pietro.
+
+This repository is not the official relaydex or Remodex app and is not affiliated with or endorsed by the upstream authors.
 
 ## License
 
