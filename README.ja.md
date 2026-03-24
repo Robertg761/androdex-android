@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/feature-graphic-1024x500.png" alt="Androdex banner" />
-</p>
-
 # Androdex
 
 [![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
