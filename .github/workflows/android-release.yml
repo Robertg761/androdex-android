@@ -40,6 +40,9 @@ jobs:
           keyPassword=${{ secrets.ANDRODEX_ANDROID_KEY_PASSWORD }}
           EOF
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x android/gradlew
+
       - name: Build signed release APK
         working-directory: android
         run: ./gradlew assembleRelease
