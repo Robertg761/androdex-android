@@ -1,5 +1,7 @@
 # Androdex
 
+Local-first Android remote client and host bridge for controlling Codex on your own computer.
+
 [![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
