@@ -75,7 +75,7 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
       if (parsed.method || parsed.id != null) {
         sendControlMessage(createSecureError({
           code: "update_required",
-          message: "This bridge requires the latest compatible Relaydex mobile app for secure pairing.",
+          message: "This bridge requires the latest compatible Androdex mobile app for secure pairing.",
         }));
         return true;
       }
@@ -533,7 +533,7 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
 }
 
 function debugSecureLog(message) {
-  console.log(`[relaydex][secure] ${message}`);
+  console.log(`[androdex][secure] ${message}`);
 }
 
 function shortId(value) {

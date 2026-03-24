@@ -61,7 +61,7 @@ async function runDaemonProcess() {
   server.on("clientError", (error, socket) => {
     socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
     if (error?.message) {
-      console.error(`[relaydex] Daemon control client error: ${error.message}`);
+      console.error(`[androdex] Daemon control client error: ${error.message}`);
     }
   });
 
@@ -97,7 +97,7 @@ async function runDaemonProcess() {
 }
 
 function authorizeRequest(req, controlToken) {
-  return req.headers["x-relaydex-token"] === controlToken;
+  return req.headers["x-androdex-token"] === controlToken || req.headers["x-relaydex-token"] === controlToken;
 }
 
 function readJsonBody(req) {

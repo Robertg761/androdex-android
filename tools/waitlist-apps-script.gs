@@ -36,7 +36,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return jsonResponse({ ok: true, service: "relaydex-waitlist" });
+  return jsonResponse({ ok: true, service: "androdex-waitlist" });
 }
 
 function normalize(value) {

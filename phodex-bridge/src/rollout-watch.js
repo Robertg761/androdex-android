@@ -136,9 +136,9 @@ function watchThreadRollout(threadId = "") {
   let offset = fs.statSync(rolloutPath).size;
   let partialLine = "";
 
-  console.log(`[relaydex] Watching thread ${resolvedThreadId}`);
-  console.log(`[relaydex] Rollout file: ${rolloutPath}`);
-  console.log("[relaydex] Waiting for new persisted events... (Ctrl+C to stop)");
+  console.log(`[androdex] Watching thread ${resolvedThreadId}`);
+  console.log(`[androdex] Rollout file: ${rolloutPath}`);
+  console.log("[androdex] Waiting for new persisted events... (Ctrl+C to stop)");
 
   const onChange = (current, previous) => {
     if (current.size <= previous.size) {
@@ -192,7 +192,7 @@ function resolveThreadId(threadId) {
     return last.threadId;
   }
 
-  throw new Error("No thread id provided and no remembered Relaydex thread found.");
+  throw new Error("No thread id provided and no remembered Androdex thread found.");
 }
 
 function resolveSessionsRoot() {

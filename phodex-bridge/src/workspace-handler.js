@@ -328,7 +328,7 @@ async function runGitApply(cwd, args, patchText) {
 async function writeTempPatchFile(patchText) {
   const tempPatchPath = path.join(
     os.tmpdir(),
-    `relaydex-revert-${Date.now()}-${Math.random().toString(16).slice(2)}.patch`
+    `androdex-revert-${Date.now()}-${Math.random().toString(16).slice(2)}.patch`
   );
   await fs.promises.writeFile(tempPatchPath, patchText, "utf8");
   return tempPatchPath;

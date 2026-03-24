@@ -61,7 +61,7 @@ class HostRuntime {
     const rememberedCwd = normalizeNonEmptyString(this.runtimeState.lastActiveCwd);
     if (rememberedCwd && isExistingDirectory(rememberedCwd)) {
       void this.activateWorkspace({ cwd: rememberedCwd }).catch((error) => {
-        console.error(`[relaydex] Failed to restore workspace ${rememberedCwd}: ${error.message}`);
+        console.error(`[androdex] Failed to restore workspace ${rememberedCwd}: ${error.message}`);
       });
     }
   }
@@ -241,10 +241,10 @@ class HostRuntime {
         return;
       }
       if (this.config.codexEndpoint) {
-        console.error(`[relaydex] Failed to connect to Codex endpoint: ${this.config.codexEndpoint}`);
+        console.error(`[androdex] Failed to connect to Codex endpoint: ${this.config.codexEndpoint}`);
       } else {
-        console.error("[relaydex] Failed to start `codex app-server` for the active workspace.");
-        console.error(`[relaydex] Launch command: ${codex.describe()}`);
+        console.error("[androdex] Failed to start `codex app-server` for the active workspace.");
+        console.error(`[androdex] Launch command: ${codex.describe()}`);
       }
       console.error(error.message);
       this.codex = null;
@@ -375,7 +375,7 @@ class HostRuntime {
       id: parsed.id,
       error: {
         code: -32000,
-        message: "No active workspace on the host. Run `relaydex up` in the project you want to use.",
+        message: "No active workspace on the host. Run `androdex up` in the project you want to use.",
       },
     }));
   }
@@ -428,7 +428,7 @@ class HostRuntime {
     if (!this.codex) {
       return;
     }
-    const requestId = `relaydex-initialize-${++this.syntheticInitializeCounter}`;
+    const requestId = `androdex-initialize-${++this.syntheticInitializeCounter}`;
     this.syntheticInitializeRequest = {
       id: requestId,
       usingLegacyParams,
@@ -471,7 +471,7 @@ class HostRuntime {
 
     const errorMessage = parsed?.error?.message;
     if (typeof errorMessage === "string" && errorMessage.trim()) {
-      console.error(`[relaydex] Failed to initialize the active Codex workspace: ${errorMessage}`);
+      console.error(`[androdex] Failed to initialize the active Codex workspace: ${errorMessage}`);
     }
     return true;
   }

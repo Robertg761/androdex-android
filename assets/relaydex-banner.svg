@@ -26,7 +26,7 @@
   <rect width="1280" height="640" rx="40" fill="url(#bg)"/>
   <rect x="704" y="142" width="436" height="436" rx="104" transform="rotate(-8 704 142)" fill="#FFF8ED" fill-opacity="0.56"/>
   <circle cx="1088" cy="404" r="170" fill="#1F6B54" fill-opacity="0.12"/>
-  <text x="88" y="114" fill="#5C564D" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="0.12em">RELAYDEX</text>
+  <text x="88" y="114" fill="#5C564D" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="0.12em">ANDRODEX</text>
   <text x="88" y="224" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="86" font-weight="800">Local Codex on Windows,</text>
   <text x="88" y="314" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="86" font-weight="800">remote control from Android.</text>
   <text x="88" y="406" fill="#33413C" font-family="Segoe UI, Arial, sans-serif" font-size="34">Independent fork of Remodex for the Windows host + Android workflow.</text>
@@ -34,7 +34,7 @@
     <rect x="760" y="110" width="280" height="496" rx="44" fill="url(#card)"/>
     <rect x="775" y="125" width="250" height="466" rx="34" fill="url(#screen)"/>
     <rect x="855" y="136" width="90" height="18" rx="9" fill="#171717"/>
-    <text x="805" y="214" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Relaydex</text>
+    <text x="805" y="214" fill="#123D35" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Androdex</text>
     <text x="805" y="244" fill="#6C675F" font-family="Segoe UI, Arial, sans-serif" font-size="16">Windows host + Android remote</text>
     <rect x="805" y="282" width="190" height="74" rx="18" fill="#247B61"/>
     <text x="824" y="315" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="18">CONNECTED</text>

@@ -338,8 +338,8 @@ class RemodexClient(
 
     private suspend fun initializeSession() {
         val clientInfo = JSONObject()
-            .put("name", "relaydex_android")
-            .put("title", "Relaydex Android")
+            .put("name", "androdex_android")
+            .put("title", "Androdex Android")
             .put("version", "0.1.0")
 
         val modernParams = JSONObject()

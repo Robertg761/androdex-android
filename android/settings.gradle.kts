@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "relaydex-android"
+rootProject.name = "androdex-android"
 include(":app")

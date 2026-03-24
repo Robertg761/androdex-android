@@ -1,5 +1,5 @@
 // FILE: relay.js
-// Purpose: Thin WebSocket relay used by the durable Relaydex host-presence flow.
+// Purpose: Thin WebSocket relay used by the durable Androdex host-presence flow.
 // Layer: Standalone server module
 // Exports: setupRelay, getRelayStats
 

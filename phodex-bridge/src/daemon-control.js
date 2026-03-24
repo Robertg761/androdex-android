@@ -1,7 +1,7 @@
 // FILE: daemon-control.js
 // Purpose: CLI-facing helpers for starting, stopping, and talking to the background daemon.
 // Layer: CLI helper
-// Exports: daemon control actions used by the relaydex CLI.
+// Exports: daemon control actions used by the androdex CLI.
 // Depends on: child_process, http, path, ./daemon-store
 
 const fs = require("fs");
@@ -125,13 +125,13 @@ async function ensureDaemonRunning() {
     await sleep(200);
   }
 
-  throw new Error("Timed out while starting the Relaydex daemon.");
+  throw new Error("Timed out while starting the Androdex daemon.");
 }
 
 function requestDaemon(method, requestPath, body = null) {
   const controlState = readDaemonControlState();
   if (!controlState?.port || !controlState?.token) {
-    return Promise.reject(new Error("The Relaydex daemon is not running."));
+    return Promise.reject(new Error("The Androdex daemon is not running."));
   }
 
   return new Promise((resolve, reject) => {
@@ -143,6 +143,7 @@ function requestDaemon(method, requestPath, body = null) {
         path: requestPath,
         method,
         headers: {
+          "x-androdex-token": controlState.token,
           "x-relaydex-token": controlState.token,
           "content-type": "application/json; charset=utf-8",
           "content-length": Buffer.byteLength(payload),

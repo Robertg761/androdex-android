@@ -75,7 +75,7 @@ private val DarkColors: ColorScheme = darkColorScheme(
     onErrorContainer = Color(0xFFFFDAD6),
 )
 
-private val RelaydexShapes = Shapes(
+private val AndrodexShapes = Shapes(
     extraSmall = RoundedCornerShape(6.dp),
     small = RoundedCornerShape(10.dp),
     medium = RoundedCornerShape(16.dp),
@@ -84,14 +84,14 @@ private val RelaydexShapes = Shapes(
 )
 
 @Composable
-fun RelaydexTheme(
+fun AndrodexTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = RelaydexTypography,
-        shapes = RelaydexShapes,
+        typography = AndrodexTypography,
+        shapes = AndrodexShapes,
         content = content,
     )
 }

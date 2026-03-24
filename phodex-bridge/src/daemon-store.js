@@ -1,5 +1,5 @@
 // FILE: daemon-store.js
-// Purpose: Persists daemon control metadata and stable runtime preferences under ~/.relaydex.
+// Purpose: Persists daemon control metadata and stable runtime preferences under ~/.relaydex for compatibility.
 // Layer: CLI helper
 // Exports: read/write helpers for daemon control and runtime state.
 // Depends on: fs, os, path, crypto

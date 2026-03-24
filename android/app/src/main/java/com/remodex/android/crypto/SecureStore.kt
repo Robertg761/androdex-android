@@ -11,6 +11,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class SecureStore(context: Context) {
+    // Keep legacy storage names so the app can reuse existing paired-device state.
     private val preferences = context.getSharedPreferences("relaydex.secure", Context.MODE_PRIVATE)
 
     fun readString(key: String): String? {

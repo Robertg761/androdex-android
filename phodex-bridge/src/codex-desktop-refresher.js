@@ -28,7 +28,7 @@ class CodexDesktopRefresher {
     bundleId = DEFAULT_BUNDLE_ID,
     appPath = DEFAULT_APP_PATH,
     platform = process.platform,
-    logPrefix = "[relaydex]",
+    logPrefix = "[androdex]",
     fallbackNewThreadMs = DEFAULT_FALLBACK_NEW_THREAD_MS,
     midRunRefreshThrottleMs = DEFAULT_MID_RUN_REFRESH_THROTTLE_MS,
     rolloutLookupTimeoutMs = DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS,
@@ -390,7 +390,7 @@ class CodexDesktopRefresher {
     this.fallbackTimer = null;
   }
 
-  // Keeps one lightweight rollout watcher alive for the current Relaydex-controlled thread.
+  // Keeps one lightweight rollout watcher alive for the current Androdex-controlled thread.
   ensureWatcher(threadId) {
     if (!this.canRefresh() || !threadId) {
       return;
@@ -544,23 +544,26 @@ class CodexDesktopRefresher {
 
 function readBridgeConfig({ env = process.env, platform = process.platform } = {}) {
   const codexEndpoint = readFirstDefinedEnv(
-    ["RELAYDEX_CODEX_ENDPOINT", "REMODEX_CODEX_ENDPOINT", "PHODEX_CODEX_ENDPOINT"],
+    ["ANDRODEX_CODEX_ENDPOINT", "RELAYDEX_CODEX_ENDPOINT", "REMODEX_CODEX_ENDPOINT", "PHODEX_CODEX_ENDPOINT"],
     "",
     env
   );
   const refreshCommand = readFirstDefinedEnv(
-    ["RELAYDEX_REFRESH_COMMAND", "REMODEX_REFRESH_COMMAND", "PHODEX_ON_PHONE_MESSAGE"],
+    ["ANDRODEX_REFRESH_COMMAND", "RELAYDEX_REFRESH_COMMAND", "REMODEX_REFRESH_COMMAND", "PHODEX_ON_PHONE_MESSAGE"],
     "",
     env
   );
-  const explicitRefreshEnabled = readOptionalBooleanEnv(["RELAYDEX_REFRESH_ENABLED", "REMODEX_REFRESH_ENABLED"], env);
+  const explicitRefreshEnabled = readOptionalBooleanEnv(
+    ["ANDRODEX_REFRESH_ENABLED", "RELAYDEX_REFRESH_ENABLED", "REMODEX_REFRESH_ENABLED"],
+    env
+  );
   // Windows uses protocol deep links to keep the desktop client aligned with
   // phone-authored activity. macOS keeps the more conservative opt-in default
   // because it still depends on the AppleScript workaround.
   const defaultRefreshEnabled = platform === "win32";
   return {
     relayUrl: readFirstDefinedEnv(
-      ["RELAYDEX_RELAY", "REMODEX_RELAY", "PHODEX_RELAY"],
+      ["ANDRODEX_RELAY", "RELAYDEX_RELAY", "REMODEX_RELAY", "PHODEX_RELAY"],
       "wss://api.phodex.app/relay",
       env
     ),
@@ -568,12 +571,20 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
       ? defaultRefreshEnabled
       : explicitRefreshEnabled,
     refreshDebounceMs: parseIntegerEnv(
-      readFirstDefinedEnv(["RELAYDEX_REFRESH_DEBOUNCE_MS", "REMODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
+      readFirstDefinedEnv(
+        ["ANDRODEX_REFRESH_DEBOUNCE_MS", "RELAYDEX_REFRESH_DEBOUNCE_MS", "REMODEX_REFRESH_DEBOUNCE_MS"],
+        String(DEFAULT_DEBOUNCE_MS),
+        env
+      ),
       DEFAULT_DEBOUNCE_MS
     ),
     codexEndpoint,
     refreshCommand,
-    codexBundleId: readFirstDefinedEnv(["RELAYDEX_CODEX_BUNDLE_ID", "REMODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
+    codexBundleId: readFirstDefinedEnv(
+      ["ANDRODEX_CODEX_BUNDLE_ID", "RELAYDEX_CODEX_BUNDLE_ID", "REMODEX_CODEX_BUNDLE_ID"],
+      DEFAULT_BUNDLE_ID,
+      env
+    ),
     codexAppPath: DEFAULT_APP_PATH,
   };
 }

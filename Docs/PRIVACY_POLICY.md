@@ -1,16 +1,16 @@
-# Privacy Policy for Relaydex
+# Privacy Policy for Androdex
 
 Last updated: 2026-03-12
 
-Relaydex is an independent fork of Remodex focused on controlling local Codex running on a user's own computer from Android.
+Androdex is an independent fork of Remodex focused on controlling local Codex running on a user's own computer from Android.
 
 ## Who this policy applies to
 
-This policy applies to the Relaydex Android app and the Relaydex host bridge.
+This policy applies to the Androdex Android app and the Androdex host bridge.
 
-## What Relaydex does
+## What Androdex does
 
-Relaydex is a local-first remote control system:
+Androdex is a local-first remote control system:
 
 - the Android app acts as a remote control client
 - the host bridge runs on the user's own computer
@@ -18,7 +18,7 @@ Relaydex is a local-first remote control system:
 
 ## Data handled by the app
 
-Depending on how the app is used, Relaydex may handle:
+Depending on how the app is used, Androdex may handle:
 
 - pairing information such as relay URL, session ID, device ID, and cryptographic public keys
 - user-provided content such as prompts and conversation messages
@@ -27,7 +27,7 @@ Depending on how the app is used, Relaydex may handle:
 
 ## How data is used
 
-Relaydex uses data to:
+Androdex uses data to:
 
 - pair the Android client with the user's host bridge
 - route messages between the Android app and the host bridge
@@ -37,7 +37,7 @@ Relaydex uses data to:
 
 ## Encryption and transport
 
-Relaydex uses a secure pairing and encrypted transport design between the Android app and the host bridge.
+Androdex uses a secure pairing and encrypted transport design between the Android app and the host bridge.
 
 The relay may still observe limited connection metadata required to route traffic, such as session identifiers and connection timing, but application payloads are intended to be encrypted after the secure handshake completes.
 
@@ -51,7 +51,7 @@ The Android app may store limited data locally on the device, including:
 
 ## Data sharing
 
-Relaydex is not designed to sell user data.
+Androdex is not designed to sell user data.
 
 Data may be transmitted as part of core app functionality to:
 
@@ -60,15 +60,15 @@ Data may be transmitted as part of core app functionality to:
 
 ## Ads
 
-Relaydex does not display third-party advertising.
+Androdex does not display third-party advertising.
 
 ## Account requirement
 
-Relaydex does not require an in-app account login to function, but it does require the user to operate a compatible host bridge and local Codex environment on their own computer.
+Androdex does not require an in-app account login to function, but it does require the user to operate a compatible host bridge and local Codex environment on their own computer.
 
 ## Children
 
-Relaydex is not directed to children.
+Androdex is not directed to children.
 
 ## Data retention
 
@@ -84,5 +84,5 @@ Users can remove the app and clear locally stored app data from their Android de
 
 Support:
 
-- GitHub repository: `https://github.com/Ranats/relaydex`
-- Issue tracker: `https://github.com/Ranats/relaydex/issues`
+- GitHub repository: `https://github.com/Ranats/androdex`
+- Issue tracker: `https://github.com/Ranats/androdex/issues`

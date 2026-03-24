@@ -12,6 +12,7 @@ const { execFileSync } = require("child_process");
 
 const STORE_DIR = path.join(os.homedir(), ".relaydex");
 const STORE_FILE = path.join(STORE_DIR, "device-state.json");
+// Keep the legacy service id and directory so renamed builds reuse trusted-device state.
 const KEYCHAIN_SERVICE = "io.relaydex.bridge.device-state";
 const KEYCHAIN_ACCOUNT = "default";
 
@@ -46,7 +47,7 @@ function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey) {
     return state;
   }
 
-  // Relaydex supports one trusted mobile client per bridge state, so a new trust record replaces old ones.
+  // Androdex supports one trusted mobile client per bridge state, so a new trust record replaces old ones.
   const nextState = {
     ...state,
     trustedPhones: {

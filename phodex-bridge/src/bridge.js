@@ -49,16 +49,16 @@ function startBridge() {
   const codex = createCodexTransport({
     endpoint: config.codexEndpoint,
     env: process.env,
-    logPrefix: "[relaydex]",
+    logPrefix: "[androdex]",
   });
 
   codex.onError((error) => {
     if (config.codexEndpoint) {
-      console.error(`[relaydex] Failed to connect to Codex endpoint: ${config.codexEndpoint}`);
+      console.error(`[androdex] Failed to connect to Codex endpoint: ${config.codexEndpoint}`);
     } else {
-      console.error("[relaydex] Failed to start `codex app-server`.");
-      console.error(`[relaydex] Launch command: ${codex.describe()}`);
-      console.error("[relaydex] Make sure the Codex CLI is installed and that the launcher works on this OS.");
+      console.error("[androdex] Failed to start `codex app-server`.");
+      console.error(`[androdex] Launch command: ${codex.describe()}`);
+      console.error("[androdex] Make sure the Codex CLI is installed and that the launcher works on this OS.");
     }
     console.error(error.message);
     process.exit(1);
@@ -80,7 +80,7 @@ function startBridge() {
     }
 
     lastConnectionStatus = status;
-    console.log(`[relaydex] ${status}`);
+    console.log(`[androdex] ${status}`);
   }
 
   // Retries the relay socket while preserving the active Codex process and session id.

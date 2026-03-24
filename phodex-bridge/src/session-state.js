@@ -1,5 +1,5 @@
 // FILE: session-state.js
-// Purpose: Persists the latest active Relaydex thread so the user can reopen it on the host for handoff.
+// Purpose: Persists the latest active Androdex thread so the user can reopen it on the host for handoff.
 // Layer: CLI helper
 // Exports: rememberActiveThread, openLastActiveThread, readLastActiveThread
 // Depends on: fs, os, path, ./codex-desktop-launcher
@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 const { openCodexDesktopTargetSync } = require("./codex-desktop-launcher");
 
+// Keep the legacy state directory so resume works across the rename.
 const STATE_DIR = path.join(os.homedir(), ".relaydex");
 const STATE_FILE = path.join(STATE_DIR, "last-thread.json");
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
@@ -33,7 +34,7 @@ function openLastActiveThread({ bundleId = DEFAULT_BUNDLE_ID } = {}) {
   const state = readState();
   const threadId = state?.threadId;
   if (!threadId) {
-    throw new Error("No remembered Relaydex thread found yet.");
+    throw new Error("No remembered Androdex thread found yet.");
   }
 
   const targetUrl = `codex://threads/${threadId}`;

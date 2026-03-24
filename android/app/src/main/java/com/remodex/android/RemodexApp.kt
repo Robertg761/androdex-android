@@ -182,7 +182,7 @@ fun RemodexApp(viewModel: MainViewModel) {
                     scanLauncher.launch(
                         ScanOptions()
                             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            .setPrompt("Scan the Relaydex pairing QR")
+                            .setPrompt("Scan the Androdex pairing QR")
                             .setBeepEnabled(false)
                             .setOrientationLocked(false)
                     )
@@ -283,7 +283,7 @@ private fun PairingScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("Relaydex", style = MaterialTheme.typography.titleLarge)
+                    Text("Androdex", style = MaterialTheme.typography.titleLarge)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
@@ -322,7 +322,7 @@ private fun PairingScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Run relaydex pair once on your host to trust this phone, then just reopen the app to reconnect from the saved pairing. Run relaydex up inside a project when you want that workspace active.",
+                    text = "Run androdex pair once on your host to trust this phone, then just reopen the app to reconnect from the saved pairing. Run androdex up inside a project when you want that workspace active. The old relaydex command still works too.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 8.dp),

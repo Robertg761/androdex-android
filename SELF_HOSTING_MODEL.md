@@ -1,8 +1,8 @@
 # Public Repo and Self-Hosting
 
-This file explains what the public Relaydex repository is for, what it includes, and what it does not include.
+This file explains what the public Androdex repository is for, what it includes, and what it does not include.
 
-If you cloned Relaydex from GitHub, the intended path is local-first usage or self-hosting on infrastructure you control.
+If you cloned Androdex from GitHub, the intended path is local-first usage or self-hosting on infrastructure you control.
 
 ## What the Public Repo Includes
 
@@ -32,7 +32,7 @@ If you are running from source, assume you should provide your own relay setup o
 If you use the public repo, expect one of these flows:
 
 1. local LAN pairing on your own machine
-2. a self-hosted relay on your own VPS, passed in through `RELAYDEX_RELAY`
+2. a self-hosted relay on your own VPS, passed in through `ANDRODEX_RELAY`
 
 That means:
 
@@ -50,13 +50,13 @@ The public repo stays generic on purpose.
 That keeps the self-host path honest:
 
 - people can inspect the transport and pairing code
-- people can run Relaydex locally
+- people can run Androdex locally
 - people can self-host their own relay
 - people are not silently tied to someone else's hosted infrastructure
 
 ## What to Keep Private
 
-If you fork or self-host Relaydex, keep these things out of the public repo:
+If you fork or self-host Androdex, keep these things out of the public repo:
 
 - your deployed hostname
 - your VPS IP addresses

@@ -19,9 +19,11 @@ const {
 const { printQR } = require("../src/qr");
 
 const command = process.argv[2] || "up";
+const CLI_NAME = "androdex";
+const CLI_PREFIX = `[${CLI_NAME}]`;
 
 void main().catch((error) => {
-  console.error(`[relaydex] ${(error && error.message) || "Command failed."}`);
+  console.error(`${CLI_PREFIX} ${(error && error.message) || "Command failed."}`);
   process.exit(1);
 });
 
@@ -33,8 +35,8 @@ async function main() {
 
   if (command === "up") {
     const status = await startBridge();
-    console.log(`[relaydex] Active workspace: ${status.currentCwd || process.cwd()}`);
-    console.log(`[relaydex] Relay: ${status.relayStatus}`);
+    console.log(`${CLI_PREFIX} Active workspace: ${status.currentCwd || process.cwd()}`);
+    console.log(`${CLI_PREFIX} Relay: ${status.relayStatus}`);
     return;
   }
 
@@ -51,14 +53,14 @@ async function main() {
 
   if (command === "reset-pairing") {
     await resetBridgePairing();
-    console.log("[relaydex] Cleared the saved pairing state. Run `relaydex pair` to create a fresh pairing QR.");
+    console.log(`${CLI_PREFIX} Cleared the saved pairing state. Run \`${CLI_NAME} pair\` to create a fresh pairing QR.`);
     return;
   }
 
   if (command === "resume") {
     const state = openLastActiveThread();
     console.log(
-      `[relaydex] Opened last active thread: ${state.threadId} (${state.source || "unknown"})`
+      `${CLI_PREFIX} Opened last active thread: ${state.threadId} (${state.source || "unknown"})`
     );
     return;
   }
@@ -69,7 +71,7 @@ async function main() {
   }
 
   console.error(`Unknown command: ${command}`);
-  console.error("Usage: relaydex up | relaydex pair | relaydex daemon [start|stop|status] | relaydex reset-pairing | relaydex resume | relaydex watch [threadId]");
+  console.error("Usage: androdex up | androdex pair | androdex daemon [start|stop|status] | androdex reset-pairing | androdex resume | androdex watch [threadId]");
   process.exit(1);
 }
 
@@ -82,7 +84,7 @@ async function handleDaemonCommand(subcommand) {
 
   if (subcommand === "stop") {
     await stopDaemonCli();
-    console.log("[relaydex] Daemon stopped.");
+    console.log(`${CLI_PREFIX} Daemon stopped.`);
     return;
   }
 
@@ -96,8 +98,8 @@ async function handleDaemonCommand(subcommand) {
 }
 
 function printDaemonStatus(status) {
-  console.log(`[relaydex] Relay: ${status.relayStatus || "unknown"}`);
-  console.log(`[relaydex] Host ID: ${status.hostId || "unavailable"}`);
-  console.log(`[relaydex] Workspace: ${status.currentCwd || "none"}`);
-  console.log(`[relaydex] Workspace active: ${status.workspaceActive ? "yes" : "no"}`);
+  console.log(`${CLI_PREFIX} Relay: ${status.relayStatus || "unknown"}`);
+  console.log(`${CLI_PREFIX} Host ID: ${status.hostId || "unavailable"}`);
+  console.log(`${CLI_PREFIX} Workspace: ${status.currentCwd || "none"}`);
+  console.log(`${CLI_PREFIX} Workspace active: ${status.workspaceActive ? "yes" : "no"}`);
 }

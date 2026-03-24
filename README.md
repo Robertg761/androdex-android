@@ -1,23 +1,23 @@
 <p align="center">
-  <img src="assets/feature-graphic-1024x500.png" alt="Relaydex banner" />
+  <img src="assets/feature-graphic-1024x500.png" alt="Androdex banner" />
 </p>
 
-# Relaydex
+# Androdex
 
-[![npm version](https://img.shields.io/npm/v/relaydex)](https://www.npmjs.com/package/relaydex)
+[![npm version](https://img.shields.io/npm/v/androdex)](https://www.npmjs.com/package/androdex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 [Follow on X](https://x.com/Ranats85)
 
 [Japanese README](README.ja.md)
 
-Relaydex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex) focused on one workflow:
+Androdex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex) focused on one workflow:
 
 - run local Codex on Windows
-- pair the phone once with `relaydex pair`
-- activate the current local workspace with `relaydex up`
+- pair the phone once with `androdex pair`
+- activate the current local workspace with `androdex up`
 - control that local Codex session from Android
 
-Relaydex is local-first. Codex keeps running on your host computer, while the phone acts as a paired remote control client over a secure session.
+Androdex is local-first. Codex keeps running on your host computer, while the phone acts as a paired remote control client over a secure session.
 
 ## Contents
 
@@ -41,7 +41,7 @@ Relaydex is local-first. Codex keeps running on your host computer, while the ph
 
 ## What It Is
 
-Relaydex does **not** run Codex on the phone itself.
+Androdex does **not** run Codex on the phone itself.
 
 - the host computer runs the local bridge and local Codex runtime
 - the phone acts as a paired remote control client
@@ -60,28 +60,30 @@ Relaydex does **not** run Codex on the phone itself.
 
 ## Current Status
 
-- Windows host bridge is published to npm as `relaydex`
+- Windows host bridge is published to npm as `androdex`
 - the Android app source is public in this repository
 - the public Google Play release is still being prepared
 
 If you want to try the Android client now, build it from source from the `android/` directory.
 
+The legacy `relaydex` CLI name still works as a compatibility alias.
+
 ## Install the Bridge
 
 ```sh
-npm install -g relaydex@latest
+npm install -g androdex@latest
 ```
 
 Start the pairing daemon and print a QR code:
 
 ```sh
-relaydex pair
+androdex pair
 ```
 
 Then run the workspace you want Codex to use:
 
 ```sh
-relaydex up
+androdex up
 ```
 
 Then open the Android app and scan the pairing QR code.
@@ -112,33 +114,33 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 1. Install Node.js and Codex CLI on Windows
 2. Install the bridge package
-3. Run `relaydex pair` once on the host and pair from Android
-4. Run `relaydex up` in the local project directory you want active
+3. Run `androdex pair` once on the host and pair from Android
+4. Run `androdex up` in the local project directory you want active
 5. Open or create a thread and send a message
 
 ## Commands
 
-### `relaydex up`
+### `androdex up`
 
 Activates the current local project in the daemon and launches `codex app-server` there if needed.
 
-### `relaydex pair`
+### `androdex pair`
 
 Asks the daemon for a fresh pairing QR code and pairing payload without changing the current workspace.
 
-### `relaydex daemon [start|stop|status]`
+### `androdex daemon [start|stop|status]`
 
 Manages the background daemon that keeps the stable host identity and relay presence alive.
 
-### `relaydex reset-pairing`
+### `androdex reset-pairing`
 
-Clears the saved trusted-device state so the next `relaydex pair` starts a fresh pairing flow.
+Clears the saved trusted-device state so the next `androdex pair` starts a fresh pairing flow.
 
-### `relaydex resume`
+### `androdex resume`
 
 Reopens the last active thread in the local Codex desktop app if available.
 
-### `relaydex watch [threadId]`
+### `androdex watch [threadId]`
 
 Tails the rollout log for a thread in real time.
 
@@ -147,7 +149,7 @@ Tails the rollout log for a thread in real time.
 ```text
 [Android client]
         <-> paired relay WebSocket session keyed by hostId <->
-[relaydex daemon on host computer]
+[androdex daemon on host computer]
         <-> stdin/stdout JSON-RPC <->
 [codex app-server]
 ```
@@ -157,7 +159,7 @@ The desktop Codex app can still read persisted sessions from `~/.codex/sessions`
 ## Project Structure
 
 ```text
-remodex/
+androdex/
 |-- phodex-bridge/                # CLI bridge package
 |   |-- bin/                      # CLI entrypoints
 |   `-- src/                      # Bridge runtime and handlers
@@ -179,10 +181,10 @@ Right now there are two public paths:
 
 Recommended waitlist page:
 
-- [Waitlist page in English](https://ranats.github.io/relaydex/waitlist.html)
-- [Waitlist page in Japanese](https://ranats.github.io/relaydex/waitlist-ja.html)
+- [Waitlist page in English](https://ranats.github.io/androdex/waitlist.html)
+- [Waitlist page in Japanese](https://ranats.github.io/androdex/waitlist-ja.html)
 
-If you want to be ready for the later Play rollout, you can also search for `relaydex-android-testers` in Google Groups and join from there.
+If you want to be ready for the later Play rollout, you can also search for `androdex-android-testers` in Google Groups and join from there.
 
 - [Google Groups search entry point](https://groups.google.com/)
 
@@ -192,7 +194,7 @@ The actual Play opt-in and install step will be shared later.
 
 If you tried a source build and hit a bug, pairing issue, reconnect problem, or UI confusion:
 
-- GitHub Issues: `https://github.com/Ranats/relaydex/issues`
+- GitHub Issues: `https://github.com/Ranats/androdex/issues`
 - X: `https://x.com/Ranats85`
 
 Helpful details:
@@ -206,15 +208,15 @@ Helpful details:
 
 ## Environment Variables
 
-The bridge accepts both `RELAYDEX_*` names and legacy `REMODEX_*` names.
+The bridge accepts `ANDRODEX_*` names, the legacy `RELAYDEX_*` names, and the older `REMODEX_*` names.
 
 | Variable | Description |
 |----------|-------------|
-| `RELAYDEX_RELAY` | Override the relay URL |
-| `RELAYDEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
-| `RELAYDEX_REFRESH_ENABLED` | Enable the macOS desktop refresh workaround explicitly |
-| `RELAYDEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
-| `RELAYDEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
+| `ANDRODEX_RELAY` | Override the relay URL |
+| `ANDRODEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
+| `ANDRODEX_REFRESH_ENABLED` | Enable the macOS desktop refresh workaround explicitly |
+| `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
+| `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 
 If you are building from source or self-hosting, set these explicitly instead of assuming hosted defaults.
 
@@ -236,11 +238,11 @@ Yes. This fork is specifically focused on the Windows host + Android workflow.
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.
 
-**What happens if I close the terminal running `relaydex up`?**  
+**What happens if I close the terminal running `androdex up`?**  
 The bridge stops. Start it again to create a new live session.
 
 **How do I force a clean pairing state?**  
-Run `relaydex reset-pairing`, then start the bridge again with `relaydex up`.
+Run `androdex reset-pairing`, then start the bridge again with `androdex up`.
 
 **Can I self-host the relay?**  
 Yes. That is one of the intended public-repo paths.
@@ -251,7 +253,7 @@ The mobile client and bridge use the same end-to-end encrypted session model as 
 
 ## Credits
 
-Relaydex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex), originally created by Emanuele Di Pietro.
+Androdex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex), originally created by Emanuele Di Pietro.
 
 This repository is not the official Remodex app and is not affiliated with or endorsed by the upstream author.
 

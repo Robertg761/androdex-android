@@ -1,6 +1,6 @@
 # Relay
 
-This folder contains the thin WebSocket relay used by the durable Relaydex pairing flow.
+This folder contains the thin WebSocket relay used by the durable Androdex pairing flow.
 
 In production, the default hosted relay runs on my VPS. If you want, you can inspect this code, fork it, and host the same relay yourself.
 
@@ -24,12 +24,12 @@ The relay is intentionally blind to Remodex application contents once the secure
 
 ## Security Model
 
-Relaydex uses the relay as a transport hop, not as a trusted application server.
+Androdex uses the relay as a transport hop, not as a trusted application server.
 
 - The pairing QR gives the mobile client the host identity public key plus a short-lived bootstrap token.
 - The mobile client and bridge perform a signed handshake, derive shared AES-256-GCM keys with X25519 + HKDF-SHA256, and then encrypt application payloads end to end.
 - The relay can still observe connection metadata and the plaintext secure control messages needed to establish the encrypted session.
-- The relay does not receive plaintext Relaydex application payloads after the secure session is active.
+- The relay does not receive plaintext Androdex application payloads after the secure session is active.
 
 ## Protocol Notes
 

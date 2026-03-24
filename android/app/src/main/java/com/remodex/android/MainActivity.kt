@@ -9,7 +9,7 @@ import androidx.activity.viewModels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import io.relaydex.android.data.RemodexRepository
-import io.relaydex.android.ui.theme.RelaydexTheme
+import io.relaydex.android.ui.theme.AndrodexTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels {
@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
         viewModel.consumeIntent(intent)
 
         setContent {
-            RelaydexTheme {
+            AndrodexTheme {
                 RemodexApp(viewModel = viewModel)
             }
         }

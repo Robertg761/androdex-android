@@ -1,5 +1,5 @@
 name: Closed Test Feedback
-description: Report a bug, onboarding issue, or UX problem from the Relaydex Android closed test.
+description: Report a bug, onboarding issue, or UX problem from the Androdex Android closed test.
 title: "[Closed Test] "
 labels:
   - closed-test
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping with the Relaydex Android closed test.
+        Thanks for helping with the Androdex Android closed test.
 
         Please include enough detail for us to reproduce the issue.
   - type: input
@@ -35,7 +35,7 @@ body:
       label: Steps to reproduce
       description: Tell us exactly what you did.
       placeholder: |
-        1. Ran relaydex up
+        1. Ran androdex up
         2. Opened the app
         3. Scanned the QR
         4. Opened an existing thread
@@ -60,6 +60,6 @@ body:
     attributes:
       label: Logs or screenshots
       description: Paste text or drag screenshots here if available.
-      placeholder: relaydex up output, error dialog text, screenshots
+      placeholder: androdex up output, error dialog text, screenshots
     validations:
       required: false

@@ -1,9 +1,10 @@
 {
-  "name": "relaydex",
+  "name": "androdex",
   "version": "1.1.3",
-  "description": "Local bridge between Codex and the Relaydex mobile app. Run `relaydex up` to start.",
+  "description": "Local bridge between Codex and the Androdex mobile app. Run `androdex up` to start.",
   "main": "src/index.js",
   "bin": {
+    "androdex": "bin/androdex.js",
     "relaydex": "bin/relaydex.js"
   },
   "files": [
@@ -13,10 +14,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "start": "node ./bin/relaydex.js up",
+    "start": "node ./bin/androdex.js up",
     "test": "node --test ./test/*.test.js"
   },
   "keywords": [
+    "androdex",
     "relaydex",
     "remodex",
     "codex",
