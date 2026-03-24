@@ -2,12 +2,12 @@
 // Purpose: Persists the latest active Relaydex thread so the user can reopen it on the host for handoff.
 // Layer: CLI helper
 // Exports: rememberActiveThread, openLastActiveThread, readLastActiveThread
-// Depends on: fs, os, path, child_process
+// Depends on: fs, os, path, ./codex-desktop-launcher
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { openCodexDesktopTargetSync } = require("./codex-desktop-launcher");
 
 const STATE_DIR = path.join(os.homedir(), ".relaydex");
 const STATE_FILE = path.join(STATE_DIR, "last-thread.json");
@@ -37,7 +37,10 @@ function openLastActiveThread({ bundleId = DEFAULT_BUNDLE_ID } = {}) {
   }
 
   const targetUrl = `codex://threads/${threadId}`;
-  execFileSync("open", ["-b", bundleId, targetUrl], { stdio: "ignore" });
+  openCodexDesktopTargetSync({
+    targetUrl,
+    bundleId,
+  });
   return state;
 }
 

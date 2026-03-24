@@ -11,6 +11,7 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("../src/codex-desktop-refresher");
+const { createDesktopLaunchPlan } = require("../src/codex-desktop-launcher");
 const { createThreadRolloutActivityWatcher } = require("../src/rollout-watch");
 
 function wait(ms) {
@@ -24,6 +25,7 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     platform: "darwin",
   });
   const linuxConfig = readBridgeConfig({ env: {}, platform: "linux" });
+  const windowsConfig = readBridgeConfig({ env: {}, platform: "win32" });
   const linuxCommandConfig = readBridgeConfig({
     env: { REMODEX_REFRESH_COMMAND: "echo refresh" },
     platform: "linux",
@@ -46,9 +48,21 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(macConfig.refreshEnabled, false);
   assert.equal(macEndpointConfig.refreshEnabled, false);
   assert.equal(linuxConfig.refreshEnabled, false);
+  assert.equal(windowsConfig.refreshEnabled, true);
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
+});
+
+test("createDesktopLaunchPlan uses the Codex protocol launcher on Windows", () => {
+  const launchPlan = createDesktopLaunchPlan({
+    targetUrl: "codex://threads/thread-123",
+    platform: "win32",
+  });
+
+  assert.equal(launchPlan.command, "cmd.exe");
+  assert.deepEqual(launchPlan.args, ["/d", "/c", "start", "\"\"", "codex://threads/thread-123"]);
+  assert.equal(launchPlan.options.windowsHide, true);
 });
 
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {

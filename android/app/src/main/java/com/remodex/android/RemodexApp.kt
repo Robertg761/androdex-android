@@ -322,7 +322,7 @@ private fun PairingScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Run relaydex pair on your host to generate a pairing QR, then scan it or paste the pairing payload. Run relaydex up inside a project when you want that workspace active.",
+                    text = "Run relaydex pair once on your host to trust this phone, then just reopen the app to reconnect from the saved pairing. Run relaydex up inside a project when you want that workspace active.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 8.dp),

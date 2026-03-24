@@ -44,6 +44,8 @@ data class RemodexUiState(
 class MainViewModel(
     private val repository: RemodexRepository,
 ) : ViewModel() {
+    private var savedReconnectInFlight = false
+
     private val uiStateFlow = MutableStateFlow(
         RemodexUiState(
             hasSavedPairing = repository.hasSavedPairing(),
@@ -97,6 +99,34 @@ class MainViewModel(
         runBusyAction {
             repository.reconnectSaved()
             repository.refreshThreads()
+        }
+    }
+
+    fun reconnectSavedIfAvailable() {
+        val snapshot = uiStateFlow.value
+        if (!snapshot.hasSavedPairing || savedReconnectInFlight) {
+            return
+        }
+        if (snapshot.isBusy || snapshot.pairingInput.isNotBlank()) {
+            return
+        }
+        if (snapshot.connectionStatus == ConnectionStatus.CONNECTED
+            || snapshot.connectionStatus == ConnectionStatus.CONNECTING
+            || snapshot.connectionStatus == ConnectionStatus.HANDSHAKING
+        ) {
+            return
+        }
+
+        viewModelScope.launch {
+            savedReconnectInFlight = true
+            try {
+                repository.reconnectSaved()
+                repository.refreshThreads()
+            } catch (_: Throwable) {
+                // The pairing screen already shows connection status and retry affordances.
+            } finally {
+                savedReconnectInFlight = false
+            }
         }
     }
 

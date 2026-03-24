@@ -2,10 +2,11 @@
 // Purpose: Debounced Mac desktop refresh controller for Codex.app after phone-authored conversation changes.
 // Layer: CLI helper
 // Exports: CodexDesktopRefresher, readBridgeConfig
-// Depends on: child_process, path, ./rollout-watch
+// Depends on: child_process, path, ./codex-desktop-launcher, ./rollout-watch
 
 const { execFile } = require("child_process");
 const path = require("path");
+const { openCodexDesktopTarget } = require("./codex-desktop-launcher");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
@@ -26,6 +27,7 @@ class CodexDesktopRefresher {
     refreshCommand = "",
     bundleId = DEFAULT_BUNDLE_ID,
     appPath = DEFAULT_APP_PATH,
+    platform = process.platform,
     logPrefix = "[relaydex]",
     fallbackNewThreadMs = DEFAULT_FALLBACK_NEW_THREAD_MS,
     midRunRefreshThrottleMs = DEFAULT_MID_RUN_REFRESH_THROTTLE_MS,
@@ -42,6 +44,7 @@ class CodexDesktopRefresher {
     this.refreshCommand = refreshCommand;
     this.bundleId = bundleId;
     this.appPath = appPath;
+    this.platform = platform;
     this.logPrefix = logPrefix;
     this.fallbackNewThreadMs = fallbackNewThreadMs;
     this.midRunRefreshThrottleMs = midRunRefreshThrottleMs;
@@ -51,7 +54,11 @@ class CodexDesktopRefresher {
     this.refreshExecutor = refreshExecutor;
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
     this.refreshBackend = refreshBackend
-      || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
+      || (this.refreshCommand
+        ? "command"
+        : (this.refreshExecutor
+          ? "command"
+          : (this.platform === "darwin" ? "applescript" : "protocol")));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
 
     this.mode = "idle";
@@ -307,15 +314,30 @@ class CodexDesktopRefresher {
     }
 
     if (this.refreshCommand) {
+      if (this.platform === "win32") {
+        return execFilePromise("cmd.exe", ["/d", "/c", this.refreshCommand], {
+          windowsHide: true,
+        });
+      }
+
       return execFilePromise("/bin/sh", ["-lc", this.refreshCommand]);
     }
 
-    return execFilePromise("osascript", [
-      REFRESH_SCRIPT_PATH,
-      this.bundleId,
-      this.appPath,
-      targetUrl || "",
-    ]);
+    if (this.refreshBackend === "applescript") {
+      return execFilePromise("osascript", [
+        REFRESH_SCRIPT_PATH,
+        this.bundleId,
+        this.appPath,
+        targetUrl || "",
+      ]);
+    }
+
+    return openCodexDesktopTarget({
+      targetUrl,
+      bundleId: this.bundleId,
+      appPath: this.appPath,
+      platform: this.platform,
+    });
   }
 
   clearPendingState() {
@@ -484,6 +506,11 @@ class CodexDesktopRefresher {
       if (this.consecutiveRefreshFailures >= this.customRefreshFailureThreshold) {
         this.disableRuntimeRefresh("custom refresh command kept failing");
       }
+      return;
+    }
+
+    if (this.refreshBackend === "protocol") {
+      this.disableRuntimeRefresh("desktop protocol refresh is unavailable on this host");
     }
   }
 
@@ -527,8 +554,10 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
     env
   );
   const explicitRefreshEnabled = readOptionalBooleanEnv(["RELAYDEX_REFRESH_ENABLED", "REMODEX_REFRESH_ENABLED"], env);
-  // Desktop refresh is opt-in for now because Codex.app still lacks true live updates.
-  const defaultRefreshEnabled = false;
+  // Windows uses protocol deep links to keep the desktop client aligned with
+  // phone-authored activity. macOS keeps the more conservative opt-in default
+  // because it still depends on the AppleScript workaround.
+  const defaultRefreshEnabled = platform === "win32";
   return {
     relayUrl: readFirstDefinedEnv(
       ["RELAYDEX_RELAY", "REMODEX_RELAY", "PHODEX_RELAY"],

@@ -876,11 +876,6 @@ class RemodexClient(
             val error = JSONObject(rawText)
             val code = error.optString("code")
             val message = error.optString("message").ifBlank { "Secure handshake failed." }
-            if (code in setOf("phone_not_trusted", "phone_identity_changed", "phone_replacement_required")) {
-                persistence.clearPairing()
-                savedPairingPayload = null
-                emitPairingAvailability()
-            }
             val status = when (code) {
                 "update_required" -> ConnectionStatus.UPDATE_REQUIRED
                 "pairing_expired", "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> ConnectionStatus.RECONNECT_REQUIRED
