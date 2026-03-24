@@ -106,11 +106,12 @@ class RemodexClient(
 
     suspend fun connectWithPairingPayload(rawPayload: String) {
         val pairing = parsePairingPayload(rawPayload)
-        persistence.savePairing(pairing)
-        savedPairingPayload = pairing
+        connect(pairing)
+        val savedPairing = pairing.toSavedPairing()
+        persistence.savePairing(savedPairing)
+        savedPairingPayload = savedPairing
         lastAppliedBridgeOutboundSeq = persistence.loadLastAppliedBridgeOutboundSeq()
         emitPairingAvailability()
-        connect(pairing)
     }
 
     suspend fun reconnectSaved() {
@@ -264,7 +265,7 @@ class RemodexClient(
 
         val relayUrl = pairing.relay.trimEnd('/')
         val request = Request.Builder()
-            .url("$relayUrl/${pairing.sessionId}")
+            .url("$relayUrl/${pairing.routingId}")
             .header("x-role", "iphone")
             .build()
 
@@ -329,7 +330,7 @@ class RemodexClient(
         updatesFlow.emit(
             ClientUpdate.Connection(
                 status = ConnectionStatus.CONNECTED,
-                detail = "Connected to ${pairing.macDeviceId.take(8)}",
+                detail = "Connected to ${pairing.routingId.take(8)}",
                 fingerprint = secureSession?.macIdentityPublicKey?.let(::fingerprint),
             )
         )
@@ -376,6 +377,7 @@ class RemodexClient(
         val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
         val handshakeMode = if (trustedMac != null) handshakeModeTrustedReconnect else handshakeModeQrBootstrap
         val expectedMacIdentityPublicKey = trustedMac?.macIdentityPublicKey ?: pairing.macIdentityPublicKey
+        val routingId = pairing.routingId
 
         val phoneEphemeralPrivateKey = generateX25519PrivateKey()
         val clientNonce = randomNonce()
@@ -384,12 +386,16 @@ class RemodexClient(
         val clientHello = JSONObject()
             .put("kind", "clientHello")
             .put("protocolVersion", secureProtocolVersion)
-            .put("sessionId", pairing.sessionId)
+            .put("hostId", routingId)
+            .put("sessionId", pairing.sessionId ?: routingId)
             .put("handshakeMode", handshakeMode)
             .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
             .put("phoneIdentityPublicKey", phoneIdentityState.phoneIdentityPublicKey)
             .put("phoneEphemeralPublicKey", phoneEphemeralPublicKey)
             .put("clientNonce", encodeBase64(clientNonce))
+        if (handshakeMode == handshakeModeQrBootstrap && !pairing.bootstrapToken.isNullOrBlank()) {
+            clientHello.put("bootstrapToken", pairing.bootstrapToken)
+        }
 
         pendingHandshake = PendingHandshake(
             mode = handshakeMode,
@@ -400,7 +406,7 @@ class RemodexClient(
         sendRawText(clientHello.toString())
 
         val serverHelloRaw = waitForMatchingServerHello(
-            expectedSessionId = pairing.sessionId,
+            expectedSessionId = routingId,
             expectedMacDeviceId = pairing.macDeviceId,
             expectedMacIdentityPublicKey = expectedMacIdentityPublicKey,
             expectedClientNonce = clientHello.getString("clientNonce"),
@@ -415,7 +421,7 @@ class RemodexClient(
         }
 
         val transcriptBytes = buildTranscriptBytes(
-            sessionId = pairing.sessionId,
+            sessionId = routingId,
             protocolVersion = protocolVersion,
             handshakeMode = serverHello.optString("handshakeMode"),
             keyEpoch = serverHello.optInt("keyEpoch"),
@@ -454,7 +460,8 @@ class RemodexClient(
         sendRawText(
             JSONObject()
                 .put("kind", "clientAuth")
-                .put("sessionId", pairing.sessionId)
+                .put("hostId", routingId)
+                .put("sessionId", pairing.sessionId ?: routingId)
                 .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
                 .put("keyEpoch", serverHello.optInt("keyEpoch"))
                 .put("phoneSignature", encodeBase64(phoneSignature))
@@ -462,7 +469,7 @@ class RemodexClient(
         )
 
         waitForMatchingSecureReady(
-            expectedSessionId = pairing.sessionId,
+            expectedSessionId = routingId,
             expectedKeyEpoch = serverHello.optInt("keyEpoch"),
             expectedMacDeviceId = pairing.macDeviceId,
         )
@@ -472,12 +479,12 @@ class RemodexClient(
             publicKeyBase64 = serverHello.optString("macEphemeralPublicKey"),
         )
         val salt = sha256(transcriptBytes)
-        val infoPrefix = "${io.relaydex.android.crypto.secureHandshakeTag}|${pairing.sessionId}|${pairing.macDeviceId}|${phoneIdentityState.phoneDeviceId}|${serverHello.optInt("keyEpoch")}"
+        val infoPrefix = "${io.relaydex.android.crypto.secureHandshakeTag}|$routingId|${pairing.macDeviceId}|${phoneIdentityState.phoneDeviceId}|${serverHello.optInt("keyEpoch")}"
         val phoneToMacKey = hkdfSha256(sharedSecret, salt, "$infoPrefix|phoneToMac".toByteArray(), 32)
         val macToPhoneKey = hkdfSha256(sharedSecret, salt, "$infoPrefix|macToPhone".toByteArray(), 32)
 
         secureSession = SecureSession(
-            sessionId = pairing.sessionId,
+            sessionId = routingId,
             keyEpoch = serverHello.optInt("keyEpoch"),
             macDeviceId = pairing.macDeviceId,
             macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
@@ -504,7 +511,8 @@ class RemodexClient(
         sendRawText(
             JSONObject()
                 .put("kind", "resumeState")
-                .put("sessionId", pairing.sessionId)
+                .put("hostId", routingId)
+                .put("sessionId", pairing.sessionId ?: routingId)
                 .put("keyEpoch", serverHello.optInt("keyEpoch"))
                 .put("lastAppliedBridgeOutboundSeq", lastAppliedBridgeOutboundSeq)
                 .toString()
@@ -553,7 +561,7 @@ class RemodexClient(
             }
 
             if (
-                hello.optString("sessionId") == expectedSessionId
+                (hello.optString("hostId").ifBlank { hello.optString("sessionId") }) == expectedSessionId
                 && hello.optString("macDeviceId") == expectedMacDeviceId
                 && hello.optString("macIdentityPublicKey") == expectedMacIdentityPublicKey
                 && isLegacyMatch
@@ -831,16 +839,13 @@ class RemodexClient(
         clearSecureWaiters(IllegalStateException("Socket closed"))
 
         if (code in setOf(4000, 4001, 4002, 4003)) {
-            persistence.clearPairing()
-            savedPairingPayload = null
-            emitPairingAvailability()
             updatesFlow.emit(
                 ClientUpdate.Connection(
                     status = ConnectionStatus.RECONNECT_REQUIRED,
                     detail = when (code) {
-                        4002 -> "The host bridge session closed. Scan a new QR code."
-                        4003 -> "This device was replaced by a newer connection. Pair again."
-                        else -> "This relay pairing is no longer valid. Pair again."
+                        4002 -> "The host is offline right now. Retry from saved pairing when the daemon reconnects."
+                        4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
+                        else -> "The relay connection closed. Reconnect from saved pairing."
                     }
                 )
             )
@@ -871,6 +876,11 @@ class RemodexClient(
             val error = JSONObject(rawText)
             val code = error.optString("code")
             val message = error.optString("message").ifBlank { "Secure handshake failed." }
+            if (code in setOf("phone_not_trusted", "phone_identity_changed", "phone_replacement_required")) {
+                persistence.clearPairing()
+                savedPairingPayload = null
+                emitPairingAvailability()
+            }
             val status = when (code) {
                 "update_required" -> ConnectionStatus.UPDATE_REQUIRED
                 "pairing_expired", "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> ConnectionStatus.RECONNECT_REQUIRED
@@ -917,14 +927,23 @@ class RemodexClient(
     private fun parsePairingPayload(rawPayload: String): PairingPayload {
         val payload = PairingPayload.fromJson(JSONObject(rawPayload))
             ?: throw IllegalArgumentException("The QR payload is missing required pairing fields.")
-        require(payload.version == pairingQrVersion) {
+        require(payload.version == 2 || payload.version == pairingQrVersion) {
             "Unsupported pairing format. Update the Android client or the bridge."
         }
         require(payload.relay.isNotBlank()) { "The pairing payload is missing the relay URL." }
-        require(payload.sessionId.isNotBlank()) { "The pairing payload is missing the session ID." }
-        val expiryWithSkew = payload.expiresAt + (secureClockSkewToleranceSeconds * 1000)
-        require(expiryWithSkew >= System.currentTimeMillis()) {
-            "The pairing QR code has expired. Generate a new QR code from the bridge."
+        require(payload.routingId.isNotBlank()) { "The pairing payload is missing the host identity." }
+        if (payload.version >= pairingQrVersion) {
+            require(!payload.bootstrapToken.isNullOrBlank()) { "The pairing payload is missing the bootstrap token." }
+            val expiryWithSkew = payload.expiresAt + (secureClockSkewToleranceSeconds * 1000)
+            require(expiryWithSkew >= System.currentTimeMillis()) {
+                "The pairing QR code has expired. Generate a new QR code from the daemon."
+            }
+        } else {
+            require(!payload.sessionId.isNullOrBlank()) { "The pairing payload is missing the session ID." }
+            val expiryWithSkew = payload.expiresAt + (secureClockSkewToleranceSeconds * 1000)
+            require(expiryWithSkew >= System.currentTimeMillis()) {
+                "The pairing QR code has expired. Generate a new QR code from the bridge."
+            }
         }
         return payload
     }
@@ -1086,7 +1105,7 @@ class RemodexClient(
             val raw = waitForSecureControlMessage("secureReady")
             val ready = JSONObject(raw)
             if (
-                ready.optString("sessionId") == expectedSessionId
+                ready.optString("hostId").ifBlank { ready.optString("sessionId") } == expectedSessionId
                 && ready.optInt("keyEpoch") == expectedKeyEpoch
                 && ready.optString("macDeviceId") == expectedMacDeviceId
             ) {

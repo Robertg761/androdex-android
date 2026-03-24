@@ -61,6 +61,24 @@ test("secure transport rejects plaintext JSON-RPC before the secure handshake", 
   assert.equal(controlMessages[0]?.code, "update_required");
 });
 
+test("secure transport preserves legacy sessionId callers as the bridge identity", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const privateJwk = privateKey.export({ format: "jwk" });
+  const publicJwk = publicKey.export({ format: "jwk" });
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-legacy",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "mac-legacy",
+      macIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
+      macIdentityPublicKey: base64UrlToBase64(publicJwk.x),
+      trustedPhones: {},
+    },
+  });
+
+  assert.equal(secureTransport.createPairingPayload().hostId, "session-legacy");
+});
+
 test("secure transport round-trips encrypted payloads after a trusted reconnect handshake", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");

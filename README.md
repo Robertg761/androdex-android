@@ -13,7 +13,8 @@
 Relaydex is an independent fork of [Remodex](https://github.com/Emanuele-web04/remodex) focused on one workflow:
 
 - run local Codex on Windows
-- start a local bridge with `relaydex up`
+- pair the phone once with `relaydex pair`
+- activate the current local workspace with `relaydex up`
 - control that local Codex session from Android
 
 Relaydex is local-first. Codex keeps running on your host computer, while the phone acts as a paired remote control client over a secure session.
@@ -71,7 +72,13 @@ If you want to try the Android client now, build it from source from the `androi
 npm install -g relaydex@latest
 ```
 
-Run the bridge in the local project directory you want Codex to work on:
+Start the pairing daemon and print a QR code:
+
+```sh
+relaydex pair
+```
+
+Then run the workspace you want Codex to use:
 
 ```sh
 relaydex up
@@ -105,20 +112,27 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 1. Install Node.js and Codex CLI on Windows
 2. Install the bridge package
-3. Run `relaydex up` in your local project directory
-4. Open the Android app
-5. Scan the QR code or paste the pairing payload shown under the QR
-6. Open or create a thread and send a message
+3. Run `relaydex pair` once on the host and pair from Android
+4. Run `relaydex up` in the local project directory you want active
+5. Open or create a thread and send a message
 
 ## Commands
 
 ### `relaydex up`
 
-Starts the local bridge, launches `codex app-server`, and prints a fresh pairing QR code.
+Activates the current local project in the daemon and launches `codex app-server` there if needed.
+
+### `relaydex pair`
+
+Asks the daemon for a fresh pairing QR code and pairing payload without changing the current workspace.
+
+### `relaydex daemon [start|stop|status]`
+
+Manages the background daemon that keeps the stable host identity and relay presence alive.
 
 ### `relaydex reset-pairing`
 
-Clears the saved trusted-device state so the next `relaydex up` starts a fresh pairing flow.
+Clears the saved trusted-device state so the next `relaydex pair` starts a fresh pairing flow.
 
 ### `relaydex resume`
 
@@ -132,8 +146,8 @@ Tails the rollout log for a thread in real time.
 
 ```text
 [Android client]
-        <-> paired relay WebSocket session <->
-[relaydex bridge on host computer]
+        <-> paired relay WebSocket session keyed by hostId <->
+[relaydex daemon on host computer]
         <-> stdin/stdout JSON-RPC <->
 [codex app-server]
 ```

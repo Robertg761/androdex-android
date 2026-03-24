@@ -18,6 +18,9 @@ const KEYCHAIN_ACCOUNT = "default";
 function loadOrCreateBridgeDeviceState() {
   const existingState = readBridgeDeviceState();
   if (existingState) {
+    if (!existingState.hostId || existingState.version < 2) {
+      writeBridgeDeviceState(existingState);
+    }
     return existingState;
   }
 
@@ -68,7 +71,8 @@ function createBridgeDeviceState() {
   const publicJwk = publicKey.export({ format: "jwk" });
 
   return {
-    version: 1,
+    version: 2,
+    hostId: randomUUID(),
     macDeviceId: randomUUID(),
     macIdentityPublicKey: base64UrlToBase64(publicJwk.x),
     macIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
@@ -198,6 +202,7 @@ function deleteKeychainStateString() {
 }
 
 function normalizeBridgeDeviceState(rawState) {
+  const hostId = normalizeNonEmptyString(rawState?.hostId) || randomUUID();
   const macDeviceId = normalizeNonEmptyString(rawState?.macDeviceId);
   const macIdentityPublicKey = normalizeNonEmptyString(rawState?.macIdentityPublicKey);
   const macIdentityPrivateKey = normalizeNonEmptyString(rawState?.macIdentityPrivateKey);
@@ -219,7 +224,8 @@ function normalizeBridgeDeviceState(rawState) {
   }
 
   return {
-    version: 1,
+    version: 2,
+    hostId,
     macDeviceId,
     macIdentityPublicKey,
     macIdentityPrivateKey,

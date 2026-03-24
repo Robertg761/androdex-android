@@ -7,16 +7,16 @@
 const { spawn } = require("child_process");
 const WebSocket = require("ws");
 
-function createCodexTransport({ endpoint = "", env = process.env } = {}) {
+function createCodexTransport({ endpoint = "", env = process.env, cwd = "" } = {}) {
   if (endpoint) {
     return createWebSocketTransport({ endpoint });
   }
 
-  return createSpawnTransport({ env });
+  return createSpawnTransport({ env, cwd });
 }
 
-function createSpawnTransport({ env }) {
-  const launch = createCodexLaunchPlan({ env });
+function createSpawnTransport({ env, cwd }) {
+  const launch = createCodexLaunchPlan({ env, cwd });
   const codex = spawn(launch.command, launch.args, launch.options);
 
   let stdoutBuffer = "";
@@ -92,10 +92,11 @@ function createSpawnTransport({ env }) {
 
 // Builds a single, platform-aware launch path so the bridge never "guesses"
 // between multiple commands and accidentally starts duplicate runtimes.
-function createCodexLaunchPlan({ env }) {
+function createCodexLaunchPlan({ env, cwd }) {
   const sharedOptions = {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...env },
+    cwd: cwd || process.cwd(),
   };
 
   if (process.platform === "win32") {

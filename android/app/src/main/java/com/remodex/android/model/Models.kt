@@ -6,36 +6,59 @@ import org.json.JSONObject
 data class PairingPayload(
     val version: Int,
     val relay: String,
-    val sessionId: String,
+    val hostId: String?,
     val macDeviceId: String,
     val macIdentityPublicKey: String,
+    val bootstrapToken: String?,
     val expiresAt: Long,
+    val sessionId: String? = null,
 ) {
+    val routingId: String
+        get() = hostId?.takeIf { it.isNotBlank() }
+            ?: sessionId?.takeIf { it.isNotBlank() }
+            ?: ""
+
+    fun toSavedPairing(): PairingPayload = PairingPayload(
+        version = if (version >= 3) version else 2,
+        relay = relay,
+        hostId = hostId ?: sessionId,
+        macDeviceId = macDeviceId,
+        macIdentityPublicKey = macIdentityPublicKey,
+        bootstrapToken = null,
+        expiresAt = 0L,
+        sessionId = null,
+    )
+
     fun toJson(): JSONObject = JSONObject()
         .put("v", version)
         .put("relay", relay)
+        .put("hostId", hostId)
         .put("sessionId", sessionId)
         .put("macDeviceId", macDeviceId)
         .put("macIdentityPublicKey", macIdentityPublicKey)
+        .put("bootstrapToken", bootstrapToken)
         .put("expiresAt", expiresAt)
 
     companion object {
         fun fromJson(json: JSONObject): PairingPayload? {
             val relay = json.optString("relay").trim()
-            val sessionId = json.optString("sessionId").trim()
+            val hostId = json.optString("hostId").trim().ifEmpty { null }
+            val sessionId = json.optString("sessionId").trim().ifEmpty { null }
             val macDeviceId = json.optString("macDeviceId").trim()
             val macIdentityPublicKey = json.optString("macIdentityPublicKey").trim()
-            if (relay.isEmpty() || sessionId.isEmpty() || macDeviceId.isEmpty() || macIdentityPublicKey.isEmpty()) {
+            if (relay.isEmpty() || (hostId == null && sessionId == null) || macDeviceId.isEmpty() || macIdentityPublicKey.isEmpty()) {
                 return null
             }
 
             return PairingPayload(
                 version = json.optInt("v", 0),
                 relay = relay,
-                sessionId = sessionId,
+                hostId = hostId,
                 macDeviceId = macDeviceId,
                 macIdentityPublicKey = macIdentityPublicKey,
+                bootstrapToken = json.optString("bootstrapToken").trim().ifEmpty { null },
                 expiresAt = json.optLong("expiresAt", 0L),
+                sessionId = sessionId,
             )
         }
     }

@@ -16,7 +16,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 const val secureProtocolVersion = 1
-const val pairingQrVersion = 2
+const val pairingQrVersion = 3
 const val secureHandshakeTag = "remodex-e2ee-v1"
 private const val secureHandshakeLabel = "client-auth"
 const val secureClockSkewToleranceSeconds = 60L
