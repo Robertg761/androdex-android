@@ -47,3 +47,4 @@ gradlew assembleDebug
 - Set `ANDRODEX_RELAY` explicitly when testing relay-based flows.
 - Do not commit private relay hostnames, credentials, signing secrets, or device-specific overrides.
 - If you touch docs, keep the distinction clear between the host-local Codex runtime and remote relay-backed device access.
+- Keep local scratch files and one-off generated outputs under `tmp/` or `tmp-gh-artifact/`; those paths are intentionally gitignored.

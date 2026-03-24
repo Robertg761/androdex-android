@@ -55,8 +55,9 @@ keystore.properties
 /initial-route-atom-*.js
 /use-navigate-to-local-conversation-*.js
 
-# Temp files
-$TMP_PLACEHOLDER
+# Local scratch / generated outputs
+/tmp/
+/tmp-gh-artifact/
 
 # Claude project config (local only)
 .claude/
