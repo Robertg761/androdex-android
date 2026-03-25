@@ -14,8 +14,15 @@ function openCodexDesktopTarget({
   bundleId = "com.openai.codex",
   appPath = "/Applications/Codex.app",
   platform = process.platform,
+  platformAdapter = null,
 } = {}) {
-  const plan = createDesktopLaunchPlan({ targetUrl, bundleId, appPath, platform });
+  const plan = createDesktopLaunchPlan({
+    targetUrl,
+    bundleId,
+    appPath,
+    platform,
+    platformAdapter,
+  });
   return execFilePromise(plan.command, plan.args, plan.options);
 }
 
@@ -24,8 +31,15 @@ function openCodexDesktopTargetSync({
   bundleId = "com.openai.codex",
   appPath = "/Applications/Codex.app",
   platform = process.platform,
+  platformAdapter = null,
 } = {}) {
-  const plan = createDesktopLaunchPlan({ targetUrl, bundleId, appPath, platform });
+  const plan = createDesktopLaunchPlan({
+    targetUrl,
+    bundleId,
+    appPath,
+    platform,
+    platformAdapter,
+  });
   execFileSync(plan.command, plan.args, plan.options);
 }
 
@@ -34,7 +48,17 @@ function createDesktopLaunchPlan({
   bundleId = "com.openai.codex",
   appPath = "/Applications/Codex.app",
   platform = process.platform,
+  platformAdapter = null,
 } = {}) {
+  if (platformAdapter?.createDesktopLaunchPlan) {
+    return platformAdapter.createDesktopLaunchPlan({
+      targetUrl,
+      bundleId,
+      appPath,
+      platform,
+    });
+  }
+
   const safeTargetUrl = typeof targetUrl === "string" ? targetUrl.trim() : "";
 
   if (platform === "darwin") {

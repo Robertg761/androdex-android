@@ -2,12 +2,13 @@
 // Purpose: Persists the latest active Androdex thread so the user can reopen it on the host for handoff.
 // Layer: CLI helper
 // Exports: rememberActiveThread, openLastActiveThread, readLastActiveThread
-// Depends on: fs, os, path, ./codex-desktop-launcher
+// Depends on: fs, os, path, ./codex-desktop-launcher, ./platform
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { openCodexDesktopTargetSync } = require("./codex-desktop-launcher");
+const { createHostPlatform } = require("./platform");
 
 const STATE_DIR = path.join(os.homedir(), ".androdex");
 const STATE_FILE = path.join(STATE_DIR, "last-thread.json");
@@ -29,7 +30,10 @@ function rememberActiveThread(threadId, source) {
   return true;
 }
 
-function openLastActiveThread({ bundleId = DEFAULT_BUNDLE_ID } = {}) {
+function openLastActiveThread({
+  bundleId = DEFAULT_BUNDLE_ID,
+  platformAdapter = createHostPlatform(),
+} = {}) {
   const state = readState();
   const threadId = state?.threadId;
   if (!threadId) {
@@ -40,6 +44,7 @@ function openLastActiveThread({ bundleId = DEFAULT_BUNDLE_ID } = {}) {
   openCodexDesktopTargetSync({
     targetUrl,
     bundleId,
+    platformAdapter,
   });
   return state;
 }

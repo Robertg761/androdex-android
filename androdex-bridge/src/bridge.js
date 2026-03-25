@@ -6,6 +6,7 @@
 
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const { createHostPlatform } = require("./platform");
 const {
   CodexDesktopRefresher,
   readBridgeConfig,
@@ -19,20 +20,22 @@ const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
 
 function startBridge() {
-  const config = readBridgeConfig();
+  const platformAdapter = createHostPlatform();
+  const config = readBridgeConfig({ platformAdapter });
   if (!config.relayUrl) {
     throw new Error("Set ANDRODEX_RELAY to a reachable relay URL before pairing or starting the bridge.");
   }
   const sessionId = uuidv4();
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
-  const deviceState = loadOrCreateBridgeDeviceState();
+  const deviceState = loadOrCreateBridgeDeviceState({ platformAdapter });
   const desktopRefresher = new CodexDesktopRefresher({
     enabled: config.refreshEnabled,
     debounceMs: config.refreshDebounceMs,
     refreshCommand: config.refreshCommand,
     bundleId: config.codexBundleId,
     appPath: config.codexAppPath,
+    platformAdapter,
   });
 
   // Keep the local Codex runtime alive across transient relay disconnects.
@@ -47,12 +50,14 @@ function startBridge() {
     sessionId,
     relayUrl: relayBaseUrl,
     deviceState,
+    platformAdapter,
   });
 
   const codex = createCodexTransport({
     endpoint: config.codexEndpoint,
     env: process.env,
     logPrefix: "[androdex]",
+    platformAdapter,
   });
 
   codex.onError((error) => {

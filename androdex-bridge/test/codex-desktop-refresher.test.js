@@ -86,6 +86,27 @@ test("createDesktopLaunchPlan uses the Codex protocol launcher on Windows", () =
   assert.equal(launchPlan.options.windowsHide, true);
 });
 
+test("createDesktopLaunchPlan uses open -b for thread deep links on macOS", () => {
+  const launchPlan = createDesktopLaunchPlan({
+    targetUrl: "codex://threads/thread-123",
+    bundleId: "com.openai.codex",
+    platform: "darwin",
+  });
+
+  assert.equal(launchPlan.command, "open");
+  assert.deepEqual(launchPlan.args, ["-b", "com.openai.codex", "codex://threads/thread-123"]);
+});
+
+test("createDesktopLaunchPlan opens the app directly when no target URL is provided on macOS", () => {
+  const launchPlan = createDesktopLaunchPlan({
+    appPath: "/Applications/Codex.app",
+    platform: "darwin",
+  });
+
+  assert.equal(launchPlan.command, "open");
+  assert.deepEqual(launchPlan.args, ["-a", "/Applications/Codex.app"]);
+});
+
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
   const refreshCalls = [];
   const refresher = new CodexDesktopRefresher({

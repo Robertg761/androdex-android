@@ -2,22 +2,28 @@
 // Purpose: Abstracts the Codex-side transport so the bridge can talk to either a spawned app-server or an existing WebSocket endpoint.
 // Layer: CLI helper
 // Exports: createCodexTransport
-// Depends on: child_process, ws
+// Depends on: child_process, ws, ./platform
 
 const { spawn } = require("child_process");
-const WebSocket = require("ws");
+const { createHostPlatform } = require("./platform");
 
-function createCodexTransport({ endpoint = "", env = process.env, cwd = "" } = {}) {
+function createCodexTransport({
+  endpoint = "",
+  env = process.env,
+  cwd = "",
+  platformAdapter = createHostPlatform({ env }),
+  spawnFn = spawn,
+} = {}) {
   if (endpoint) {
     return createWebSocketTransport({ endpoint });
   }
 
-  return createSpawnTransport({ env, cwd });
+  return createSpawnTransport({ env, cwd, platformAdapter, spawnFn });
 }
 
-function createSpawnTransport({ env, cwd }) {
-  const launch = createCodexLaunchPlan({ env, cwd });
-  const codex = spawn(launch.command, launch.args, launch.options);
+function createSpawnTransport({ env, cwd, platformAdapter, spawnFn }) {
+  const launch = createCodexLaunchPlan({ env, cwd, platformAdapter });
+  const codex = spawnFn(launch.command, launch.args, launch.options);
 
   let stdoutBuffer = "";
   let stderrBuffer = "";
@@ -85,59 +91,25 @@ function createSpawnTransport({ env, cwd }) {
     },
     shutdown() {
       didRequestShutdown = true;
-      shutdownCodexProcess(codex);
+      shutdownCodexProcess(codex, platformAdapter);
     },
   };
 }
 
 // Builds a single, platform-aware launch path so the bridge never "guesses"
 // between multiple commands and accidentally starts duplicate runtimes.
-function createCodexLaunchPlan({ env, cwd }) {
-  const sharedOptions = {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...env },
-    cwd: cwd || process.cwd(),
-  };
-
-  if (process.platform === "win32") {
-    return {
-      command: env.ComSpec || "cmd.exe",
-      args: ["/d", "/c", "codex app-server"],
-      options: {
-        ...sharedOptions,
-        windowsHide: true,
-      },
-      description: "`cmd.exe /d /c codex app-server`",
-    };
-  }
-
-  return {
-    command: "codex",
-    args: ["app-server"],
-    options: sharedOptions,
-    description: "`codex app-server`",
-  };
+function createCodexLaunchPlan({
+  env = process.env,
+  cwd = "",
+  platformAdapter = createHostPlatform({ env }),
+} = {}) {
+  return platformAdapter.createCodexLaunchPlan({ env, cwd });
 }
 
 // Stops the exact process tree we launched on Windows so the shell wrapper
 // does not leave a child Codex process running in the background.
-function shutdownCodexProcess(codex) {
-  if (codex.killed || codex.exitCode !== null) {
-    return;
-  }
-
-  if (process.platform === "win32" && codex.pid) {
-    const killer = spawn("taskkill", ["/pid", String(codex.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.on("error", () => {
-      codex.kill();
-    });
-    return;
-  }
-
-  codex.kill("SIGTERM");
+function shutdownCodexProcess(codex, platformAdapter = createHostPlatform()) {
+  platformAdapter.shutdownCodexProcess(codex);
 }
 
 function createCodexCloseError({ code, signal, stderrBuffer, launchDescription }) {
@@ -152,6 +124,7 @@ function appendOutputBuffer(buffer, chunk) {
 }
 
 function createWebSocketTransport({ endpoint }) {
+  const WebSocket = require("ws");
   const socket = new WebSocket(endpoint);
   const listeners = createListenerBag();
 
@@ -215,4 +188,8 @@ function createListenerBag() {
   };
 }
 
-module.exports = { createCodexTransport };
+module.exports = {
+  createCodexLaunchPlan,
+  createCodexTransport,
+  shutdownCodexProcess,
+};

@@ -34,7 +34,13 @@ const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
 
-function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState } = {}) {
+function createBridgeSecureTransport({
+  hostId,
+  sessionId,
+  relayUrl,
+  deviceState,
+  platformAdapter,
+} = {}) {
   const stableHostId = normalizeNonEmptyString(hostId)
     || normalizeNonEmptyString(sessionId)
     || normalizeNonEmptyString(deviceState?.hostId)
@@ -377,7 +383,8 @@ function createBridgeSecureTransport({ hostId, sessionId, relayUrl, deviceState 
       currentDeviceState = rememberTrustedPhone(
         currentDeviceState,
         pendingHandshake.phoneDeviceId,
-        pendingHandshake.phoneIdentityPublicKey
+        pendingHandshake.phoneIdentityPublicKey,
+        { platformAdapter }
       );
     }
     if (pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP) {
