@@ -28,7 +28,7 @@ androdex watch
 - activates local `codex app-server` for the current workspace
 - lets the Android client browse host folders and switch workspaces remotely
 - forwards JSON-RPC traffic between the host and the Android client
-- handles git and workspace actions on the host machine
+- handles git and workspace actions on the host machine, including branch/worktree management and reverse-patch safety checks
 - keeps the local Codex desktop app aligned with phone-authored thread activity when desktop refresh is enabled
 
 ## Commands
