@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "start": "node ./bin/androdex.js up",
-    "test": "node --test ./test/*.test.js"
+    "test": "node --test --test-concurrency=1 ./test/*.test.js"
   },
   "keywords": [
     "androdex",
