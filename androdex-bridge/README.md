@@ -29,6 +29,7 @@ androdex watch
 - lets the Android client browse host folders and switch workspaces remotely
 - forwards JSON-RPC traffic between the host and the Android client
 - handles git and workspace actions on the host machine
+- keeps the local Codex desktop app aligned with phone-authored thread activity when desktop refresh is enabled
 
 ## Commands
 
@@ -67,9 +68,15 @@ Useful variables:
 - `ANDRODEX_RELAY`: set the relay URL explicitly and override any packaged default
 - `ANDRODEX_DEFAULT_RELAY_URL`: set the default relay URL for managed builds when no explicit override is present
 - `ANDRODEX_CODEX_ENDPOINT`: connect to an existing Codex WebSocket instead of spawning a local runtime
-- `ANDRODEX_REFRESH_ENABLED`: enable the macOS desktop refresh workaround explicitly
+- `ANDRODEX_REFRESH_ENABLED`: enable or disable desktop refresh explicitly. Windows defaults on, macOS stays opt-in
 - `ANDRODEX_REFRESH_DEBOUNCE_MS`: adjust refresh debounce timing
 - `ANDRODEX_REFRESH_COMMAND`: override desktop refresh with a custom command
+
+Windows refresh notes:
+
+- the bridge targets the installed Codex desktop executable directly instead of trusting the raw `codex://...` protocol handler
+- this avoids opening the wrong Codex build if the machine has a stale or developer protocol registration
+- repeated phone activity on the same already-open thread may trigger a stronger refresh or relaunch workaround so the desktop transcript catches up
 
 The bridge resolves relay configuration in this order:
 

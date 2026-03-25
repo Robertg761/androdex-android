@@ -153,6 +153,8 @@ Tails the rollout log for a thread in real time.
 
 The desktop Codex app can still read persisted sessions from `~/.codex/sessions` when available.
 
+On Windows, the bridge also includes a desktop refresh workaround for phone-authored activity. It targets the installed Codex desktop executable directly instead of falling back to the raw `codex://...` protocol handler, because a misregistered protocol handler can open the wrong Codex build and break live thread sync.
+
 ## Project Structure
 
 ```text
@@ -190,7 +192,7 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_RELAY` | Override the relay URL explicitly |
 | `ANDRODEX_DEFAULT_RELAY_URL` | Provide the default hosted relay URL for managed builds |
 | `ANDRODEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
-| `ANDRODEX_REFRESH_ENABLED` | Enable the macOS desktop refresh workaround explicitly |
+| `ANDRODEX_REFRESH_ENABLED` | Enable or disable desktop refresh explicitly. Windows defaults on, macOS stays opt-in |
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
@@ -230,6 +232,9 @@ For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/
 
 **Does this work on Windows?**  
 Yes. This fork is currently aimed at the host-machine-plus-Android workflow, with Windows as the main supported host setup today.
+
+**How does desktop sync work on Windows?**  
+The bridge watches phone-authored thread activity and nudges the installed Codex desktop app onto the same thread. For repeated phone activity on an already-open thread, the Windows path may use a stronger refresh or relaunch workaround so the desktop transcript catches up without reopening the wrong Electron build through a stale `codex://` registration.
 
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.
