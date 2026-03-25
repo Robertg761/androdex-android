@@ -7,12 +7,38 @@ const childProcess = require("child_process");
 
 const modulePath = path.resolve(__dirname, "../src/secure-device-state.js");
 
-function withTempHome(run) {
+function withTempHome(optionsOrRun, maybeRun) {
+  const options = typeof optionsOrRun === "function" ? {} : (optionsOrRun || {});
+  const run = typeof optionsOrRun === "function" ? optionsOrRun : maybeRun;
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "androdex-device-state-"));
   const previousHome = process.env.HOME;
   const previousUserProfile = process.env.USERPROFILE;
+  const previousExecFileSync = childProcess.execFileSync;
+  const previousPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  const effectivePlatform = options.platform || process.platform;
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
+  childProcess.execFileSync = (...args) => {
+    if (typeof options.execFileSyncHandler === "function") {
+      return options.execFileSyncHandler(previousExecFileSync, ...args);
+    }
+
+    const [command, commandArgs] = args;
+    if (effectivePlatform === "darwin" && command === "security") {
+      if (Array.isArray(commandArgs) && commandArgs[0] === "find-generic-password") {
+        return "";
+      }
+      return "";
+    }
+
+    return previousExecFileSync(...args);
+  };
+  if (options.platform) {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: options.platform,
+    });
+  }
   delete require.cache[modulePath];
 
   try {
@@ -22,6 +48,10 @@ function withTempHome(run) {
     });
   } finally {
     delete require.cache[modulePath];
+    childProcess.execFileSync = previousExecFileSync;
+    if (options.platform) {
+      Object.defineProperty(process, "platform", previousPlatformDescriptor);
+    }
     if (previousHome == null) {
       delete process.env.HOME;
     } else {
@@ -43,29 +73,6 @@ function getStatePaths(tempHome) {
     primaryFile: path.join(storeDir, "device-state.json"),
     backupFile: path.join(storeDir, "device-state.backup.json"),
   };
-}
-
-function withMockPlatform(platform, run) {
-  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: platform,
-  });
-  try {
-    return run();
-  } finally {
-    Object.defineProperty(process, "platform", descriptor);
-  }
-}
-
-function withMockKeychain(handler, run) {
-  const previousExecFileSync = childProcess.execFileSync;
-  childProcess.execFileSync = (...args) => handler(previousExecFileSync, ...args);
-  try {
-    return run();
-  } finally {
-    childProcess.execFileSync = previousExecFileSync;
-  }
 }
 
 test("trusted phone state is reloaded from persisted bridge device state", () => {
@@ -168,55 +175,58 @@ test("reloads host identity and trusted phone state from the backup file when th
 });
 
 test("darwin prefers fresher file state over stale keychain state", () => {
-  withMockPlatform("darwin", () => {
-    withTempHome(({ tempHome, secureDeviceState }) => {
-      const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
-      const updatedState = secureDeviceState.rememberTrustedPhone(
-        initialState,
-        "phone-file",
-        "public-key-file"
-      );
-      const { primaryFile } = getStatePaths(tempHome);
-      const staleState = {
-        ...updatedState,
-        trustedPhones: {
-          "phone-stale": "public-key-stale",
-        },
-      };
+  let staleKeychainState = "";
+  withTempHome({
+    platform: "darwin",
+    execFileSyncHandler(execFileSync, command, args, options) {
+      if (
+        command === "security"
+        && Array.isArray(args)
+        && args[0] === "find-generic-password"
+        && args.includes("-w")
+      ) {
+        return staleKeychainState;
+      }
+      if (
+        command === "security"
+        && Array.isArray(args)
+        && (args[0] === "add-generic-password" || args[0] === "delete-generic-password")
+      ) {
+        return "";
+      }
+      return execFileSync(command, args, options);
+    },
+  }, ({ tempHome, secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const updatedState = secureDeviceState.rememberTrustedPhone(
+      initialState,
+      "phone-file",
+      "public-key-file"
+    );
+    const { primaryFile } = getStatePaths(tempHome);
+    const staleState = {
+      ...updatedState,
+      trustedPhones: {
+        "phone-stale": "public-key-stale",
+      },
+    };
+    staleKeychainState = JSON.stringify(staleState);
 
-      withMockKeychain((execFileSync, command, args, options) => {
-        if (
-          command === "security"
-          && args[0] === "find-generic-password"
-          && args.includes("-w")
-        ) {
-          return JSON.stringify(staleState);
-        }
-        if (
-          command === "security"
-          && (args[0] === "add-generic-password" || args[0] === "delete-generic-password")
-        ) {
-          return "";
-        }
-        return execFileSync(command, args, options);
-      }, () => {
-        fs.writeFileSync(primaryFile, JSON.stringify(updatedState, null, 2), "utf8");
+    fs.writeFileSync(primaryFile, JSON.stringify(updatedState, null, 2), "utf8");
 
-        delete require.cache[modulePath];
-        const reloadedModule = require(modulePath);
-        const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
+    delete require.cache[modulePath];
+    const reloadedModule = require(modulePath);
+    const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
 
-        assert.equal(recoveredState.hostId, updatedState.hostId);
-        assert.equal(
-          reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-file"),
-          "public-key-file"
-        );
-        assert.equal(
-          reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-stale"),
-          null
-        );
-      });
-    });
+    assert.equal(recoveredState.hostId, updatedState.hostId);
+    assert.equal(
+      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-file"),
+      "public-key-file"
+    );
+    assert.equal(
+      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-stale"),
+      null
+    );
   });
 });
 

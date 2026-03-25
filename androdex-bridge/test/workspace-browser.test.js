@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("path");
 
 const { arePathsEqual, createWorkspaceBrowser } = require("../src/workspace-browser");
 
@@ -11,6 +12,7 @@ test("arePathsEqual respects Windows case-insensitive paths and macOS case-sensi
 test("Windows root browsing dedupes case-variant recent workspaces", () => {
   const browser = createWorkspaceBrowser({
     platform: "win32",
+    pathModule: path.win32,
     osModule: { homedir: () => "C:\\Users\\rober" },
     fsModule: {
       existsSync(candidate) {

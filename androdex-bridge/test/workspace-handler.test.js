@@ -6,6 +6,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("path");
 
 const { createWorkspaceBrowser } = require("../src/workspace-browser");
 const { handleWorkspaceRequest } = require("../src/workspace-handler");
@@ -17,6 +18,7 @@ function flushMicrotasks() {
 test("workspace browser root view lists drives, home, and recent workspaces on Windows", () => {
   const browser = createWorkspaceBrowser({
     platform: "win32",
+    pathModule: path.win32,
     osModule: { homedir: () => "C:\\Users\\rober" },
     fsModule: {
       existsSync(candidate) {
@@ -43,6 +45,7 @@ test("workspace browser root view lists drives, home, and recent workspaces on W
 test("workspace browser child listing returns only directories", () => {
   const browser = createWorkspaceBrowser({
     platform: "win32",
+    pathModule: path.win32,
     fsModule: {
       statSync() {
         return { isDirectory: () => true };
@@ -84,6 +87,10 @@ test("workspace/listRecent marks the active workspace", async () => {
     (response) => responses.push(JSON.parse(response)),
     {
       platform: "win32",
+      workspaceBrowser: createWorkspaceBrowser({
+        platform: "win32",
+        pathModule: path.win32,
+      }),
       getWorkspaceState: () => ({
         activeCwd: "C:\\Projects\\AppA",
         recentWorkspaces: ["C:\\Projects\\AppA", "D:\\Client\\SiteB"],
@@ -124,6 +131,7 @@ test("workspace/activate delegates to the runtime activator", async () => {
       },
       workspaceBrowser: createWorkspaceBrowser({
         platform: "win32",
+        pathModule: path.win32,
         fsModule: {
           statSync() {
             return { isDirectory: () => true };
@@ -151,6 +159,10 @@ test("workspace/activate rejects non-absolute paths", async () => {
     (response) => responses.push(JSON.parse(response)),
     {
       platform: "win32",
+      workspaceBrowser: createWorkspaceBrowser({
+        platform: "win32",
+        pathModule: path.win32,
+      }),
       activateWorkspace: async ({ cwd }) => ({ currentCwd: cwd }),
     }
   );
