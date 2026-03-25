@@ -2,9 +2,12 @@
 // Purpose: Opens Codex desktop deep links across supported host platforms.
 // Layer: CLI helper
 // Exports: openCodexDesktopTarget, openCodexDesktopTargetSync
-// Depends on: child_process
+// Depends on: child_process, path
 
 const { execFile, execFileSync } = require("child_process");
+const path = require("path");
+
+const WINDOWS_OPEN_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-open-windows.ps1");
 
 function openCodexDesktopTarget({
   targetUrl = "",
@@ -56,8 +59,15 @@ function createDesktopLaunchPlan({
 
   if (platform === "win32") {
     return {
-      command: "cmd.exe",
-      args: ["/d", "/c", "start", "\"\"", safeTargetUrl],
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        WINDOWS_OPEN_SCRIPT_PATH,
+        safeTargetUrl,
+      ],
       options: {
         stdio: "ignore",
         windowsHide: true,

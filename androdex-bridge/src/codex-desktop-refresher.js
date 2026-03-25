@@ -17,7 +17,10 @@ const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS = 120;
+const DEFAULT_WINDOWS_HARD_RESTART_COOLDOWN_MS = 8_000;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
+const WINDOWS_RESTART_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-relaunch-windows.ps1");
 const NEW_THREAD_DEEP_LINK = "codex://threads/new";
 
 class CodexDesktopRefresher {
@@ -36,8 +39,13 @@ class CodexDesktopRefresher {
     now = () => Date.now(),
     refreshExecutor = null,
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
+    protocolRefreshExecutor = openCodexDesktopTarget,
+    hardRefreshExecutor = null,
+    sleepFn = waitForDelay,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    windowsThreadBounceDelayMs = DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS,
+    windowsHardRestartCooldownMs = DEFAULT_WINDOWS_HARD_RESTART_COOLDOWN_MS,
   } = {}) {
     this.enabled = enabled;
     this.debounceMs = debounceMs;
@@ -53,6 +61,9 @@ class CodexDesktopRefresher {
     this.now = now;
     this.refreshExecutor = refreshExecutor;
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
+    this.protocolRefreshExecutor = protocolRefreshExecutor;
+    this.hardRefreshExecutor = hardRefreshExecutor;
+    this.sleepFn = sleepFn;
     this.refreshBackend = refreshBackend
       || (this.refreshCommand
         ? "command"
@@ -60,6 +71,8 @@ class CodexDesktopRefresher {
           ? "command"
           : (this.platform === "darwin" ? "applescript" : "protocol")));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.windowsThreadBounceDelayMs = windowsThreadBounceDelayMs;
+    this.windowsHardRestartCooldownMs = windowsHardRestartCooldownMs;
 
     this.mode = "idle";
     this.pendingNewThread = false;
@@ -74,6 +87,8 @@ class CodexDesktopRefresher {
     this.lastRefreshSignature = "";
     this.lastTurnIdRefreshed = null;
     this.lastMidRunRefreshAt = 0;
+    this.lastWindowsHardRestartAt = 0;
+    this.lastWindowsHardRestartTargetUrl = "";
     this.refreshTimer = null;
     this.refreshRunning = false;
     this.fallbackTimer = null;
@@ -160,6 +175,8 @@ class CodexDesktopRefresher {
     this.clearPendingState();
     this.lastRefreshAt = 0;
     this.lastRefreshSignature = "";
+    this.lastWindowsHardRestartAt = 0;
+    this.lastWindowsHardRestartTargetUrl = "";
     this.mode = "idle";
     this.clearFallbackTimer();
     this.stopWatcher();
@@ -279,7 +296,10 @@ class CodexDesktopRefresher {
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
-        await this.executeRefresh(targetUrl);
+        await this.executeRefresh(targetUrl, {
+          refreshKinds: pendingRefreshKinds,
+          isCompletionRun,
+        });
         this.lastRefreshAt = this.now();
         this.lastRefreshSignature = refreshSignature;
         this.consecutiveRefreshFailures = 0;
@@ -308,7 +328,7 @@ class CodexDesktopRefresher {
     }
   }
 
-  executeRefresh(targetUrl) {
+  executeRefresh(targetUrl, options = {}) {
     if (this.refreshExecutor) {
       return this.refreshExecutor(targetUrl || "");
     }
@@ -332,12 +352,115 @@ class CodexDesktopRefresher {
       ]);
     }
 
+    if (this.refreshBackend === "protocol") {
+      return this.executeProtocolRefresh(targetUrl, options);
+    }
+
     return openCodexDesktopTarget({
       targetUrl,
       bundleId: this.bundleId,
       appPath: this.appPath,
       platform: this.platform,
     });
+  }
+
+  async executeProtocolRefresh(targetUrl, {
+    refreshKinds = new Set(),
+    isCompletionRun = false,
+  } = {}) {
+    const refreshTarget = targetUrl || "";
+    if (this.shouldHardRestartThreadRefresh({
+      targetUrl: refreshTarget,
+      refreshKinds,
+      isCompletionRun,
+    })) {
+      return this.executeWindowsHardRestart(refreshTarget);
+    }
+
+    if (this.shouldBounceThreadRefresh(refreshTarget)) {
+      await this.protocolRefreshExecutor({
+        targetUrl: NEW_THREAD_DEEP_LINK,
+        bundleId: this.bundleId,
+        appPath: this.appPath,
+        platform: this.platform,
+      });
+      await this.sleepFn(this.windowsThreadBounceDelayMs);
+    }
+
+    return this.protocolRefreshExecutor({
+      targetUrl,
+      bundleId: this.bundleId,
+      appPath: this.appPath,
+      platform: this.platform,
+    });
+  }
+
+  executeWindowsHardRestart(targetUrl) {
+    const refreshTarget = targetUrl || "";
+    const executor = this.hardRefreshExecutor || ((payload) => execFilePromise(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        WINDOWS_RESTART_SCRIPT_PATH,
+        payload.targetUrl || "",
+      ],
+      {
+        stdio: "ignore",
+        windowsHide: true,
+      }
+    ));
+
+    return Promise.resolve(executor({
+      targetUrl: refreshTarget,
+      bundleId: this.bundleId,
+      appPath: this.appPath,
+      platform: this.platform,
+    })).then((result) => {
+      this.lastWindowsHardRestartAt = this.now();
+      this.lastWindowsHardRestartTargetUrl = refreshTarget;
+      return result;
+    });
+  }
+
+  shouldHardRestartThreadRefresh({
+    targetUrl,
+    refreshKinds = new Set(),
+    isCompletionRun = false,
+  } = {}) {
+    if (this.refreshBackend !== "protocol" || this.platform !== "win32") {
+      return false;
+    }
+
+    if (isCompletionRun || !refreshKinds.has("phone") || !isConcreteThreadDeepLink(targetUrl)) {
+      return false;
+    }
+
+    const lastTargetUrl = this.lastRefreshSignature.split("|")[0] || "";
+    if (lastTargetUrl !== targetUrl) {
+      return false;
+    }
+
+    if (targetUrl === this.lastWindowsHardRestartTargetUrl) {
+      return this.now() - this.lastWindowsHardRestartAt >= this.windowsHardRestartCooldownMs;
+    }
+
+    return true;
+  }
+
+  shouldBounceThreadRefresh(targetUrl) {
+    if (this.refreshBackend !== "protocol" || this.platform !== "win32") {
+      return false;
+    }
+
+    if (!isConcreteThreadDeepLink(targetUrl)) {
+      return false;
+    }
+
+    const lastTargetUrl = this.lastRefreshSignature.split("|")[0] || "";
+    return lastTargetUrl === targetUrl;
   }
 
   clearPendingState() {
@@ -575,9 +698,9 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
   };
 }
 
-function execFilePromise(command, args) {
+function execFilePromise(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, (error, stdout, stderr) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
       if (error) {
         error.stdout = stdout;
         error.stderr = stderr;
@@ -696,6 +819,18 @@ function parseBooleanEnv(value) {
 function parseIntegerEnv(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function isConcreteThreadDeepLink(targetUrl) {
+  return typeof targetUrl === "string"
+    && targetUrl.startsWith("codex://threads/")
+    && targetUrl !== NEW_THREAD_DEEP_LINK;
+}
+
+function waitForDelay(delayMs) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 function extractErrorMessage(error) {

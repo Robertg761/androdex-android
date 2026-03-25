@@ -60,8 +60,10 @@ test("createDesktopLaunchPlan uses the Codex protocol launcher on Windows", () =
     platform: "win32",
   });
 
-  assert.equal(launchPlan.command, "cmd.exe");
-  assert.deepEqual(launchPlan.args, ["/d", "/c", "start", "\"\"", "codex://threads/thread-123"]);
+  assert.equal(launchPlan.command, "powershell.exe");
+  assert.equal(launchPlan.args[0], "-NoProfile");
+  assert.equal(launchPlan.args[3], "-File");
+  assert.equal(launchPlan.args.at(-1), "codex://threads/thread-123");
   assert.equal(launchPlan.options.windowsHide, true);
 });
 
@@ -243,6 +245,84 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
     "codex://threads/thread-789",
   ]);
   assert.equal(stopCount, 1);
+});
+
+test("windows same-thread phone refresh uses a hard restart workaround", async () => {
+  const softRefreshCalls = [];
+  const hardRefreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "win32",
+    refreshBackend: "protocol",
+    windowsHardRestartCooldownMs: 0,
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      softRefreshCalls.push(targetUrl);
+    },
+    hardRefreshExecutor: async ({ targetUrl }) => {
+      hardRefreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-live-sync",
+    },
+  }));
+  await wait(10);
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-live-sync",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(softRefreshCalls, [
+    "codex://threads/thread-live-sync",
+  ]);
+  assert.deepEqual(hardRefreshCalls, ["codex://threads/thread-live-sync"]);
+});
+
+test("windows rollout refresh still bounces away and back on the same thread", async () => {
+  const refreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "win32",
+    refreshBackend: "protocol",
+    windowsThreadBounceDelayMs: 0,
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    sleepFn: async () => {},
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-rollout-sync",
+    },
+  }));
+  await wait(10);
+  refreshCalls.length = 0;
+
+  refresher.queueRefresh("rollout_growth", {
+    threadId: "thread-rollout-sync",
+    url: "codex://threads/thread-rollout-sync",
+  }, "test rollout");
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/new",
+    "codex://threads/thread-rollout-sync",
+  ]);
 });
 
 test("turn/completed is retried after a slow in-flight refresh finishes", async () => {
