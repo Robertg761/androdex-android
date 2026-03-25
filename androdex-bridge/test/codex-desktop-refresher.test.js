@@ -54,6 +54,25 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(explicitOffConfig.refreshEnabled, false);
 });
 
+test("CodexDesktopRefresher picks the expected desktop refresh backend per platform", () => {
+  const macRefresher = new CodexDesktopRefresher({
+    enabled: true,
+    platform: "darwin",
+  });
+  const windowsRefresher = new CodexDesktopRefresher({
+    enabled: true,
+    platform: "win32",
+  });
+  const linuxRefresher = new CodexDesktopRefresher({
+    enabled: true,
+    platform: "linux",
+  });
+
+  assert.equal(macRefresher.refreshBackend, "applescript");
+  assert.equal(windowsRefresher.refreshBackend, "protocol");
+  assert.equal(linuxRefresher.refreshBackend, "protocol");
+});
+
 test("createDesktopLaunchPlan uses the Codex protocol launcher on Windows", () => {
   const launchPlan = createDesktopLaunchPlan({
     targetUrl: "codex://threads/thread-123",

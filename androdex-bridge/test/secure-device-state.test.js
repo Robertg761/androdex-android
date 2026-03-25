@@ -219,3 +219,24 @@ test("darwin prefers fresher file state over stale keychain state", () => {
     });
   });
 });
+
+test("rememberTrustedPhone trims identifiers and replaces older trusted phone entries", () => {
+  withTempHome(({ secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const updatedState = secureDeviceState.rememberTrustedPhone(
+      initialState,
+      "  phone-trimmed  ",
+      "  public-key-trimmed  "
+    );
+
+    assert.equal(
+      secureDeviceState.getTrustedPhonePublicKey(updatedState, "phone-trimmed"),
+      "public-key-trimmed"
+    );
+    assert.equal(
+      secureDeviceState.getTrustedPhonePublicKey(updatedState, "  phone-trimmed  "),
+      "public-key-trimmed"
+    );
+    assert.deepEqual(Object.keys(updatedState.trustedPhones), ["phone-trimmed"]);
+  });
+});

@@ -113,6 +113,16 @@ android/app/build/outputs/apk/debug/app-debug.apk
 5. Optionally run `androdex up` in a local project directory if you want to seed the first active workspace from the host
 6. Open the Android app, choose a project, then open or create a thread and send a message
 
+## Manual Smoke Checklist
+
+Use this after host-side changes to make sure Windows and macOS still behave the same way where they should.
+
+1. Run `androdex pair` and confirm the phone can pair successfully.
+2. Run `androdex up`, choose a workspace, and confirm the host-local Codex session opens in that project.
+3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
+4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
+5. Restart the daemon or reconnect the phone and confirm the saved pairing and active workspace recover cleanly.
+
 ## Commands
 
 ### `androdex up`
