@@ -16,8 +16,12 @@ const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
+const { createNotificationsHandler } = require("./notifications-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
+const { createPushNotificationServiceClient } = require("./push-notification-service-client");
+const { createPushNotificationTracker } = require("./push-notification-tracker");
+const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const {
   extractBridgeMessageContext,
   normalizeRuntimeCompatibleRequest,
@@ -63,6 +67,23 @@ function startBridge() {
     relayUrl: relayBaseUrl,
     deviceState,
   });
+  const pushServiceClient = createPushNotificationServiceClient({
+    baseUrl: config.pushServiceUrl,
+    sessionId,
+  });
+  const notificationsHandler = createNotificationsHandler({
+    pushServiceClient,
+  });
+  const pushNotificationTracker = createPushNotificationTracker({
+    sessionId,
+    pushServiceClient,
+    previewMaxChars: config.pushPreviewMaxChars,
+  });
+  const rolloutLiveMirror = !config.codexEndpoint
+    ? createRolloutLiveMirrorController({
+      sendApplicationResponse,
+    })
+    : null;
 
   const codex = createCodexTransport({
     endpoint: config.codexEndpoint,
@@ -173,6 +194,7 @@ function startBridge() {
         socket = null;
       }
       stopContextUsageWatcher();
+      rolloutLiveMirror?.stopAll();
       desktopRefresher.handleTransportReset();
       scheduleRelayReconnect(code);
     });
@@ -183,11 +205,13 @@ function startBridge() {
   }
 
   printQR(secureTransport.createPairingPayload());
+  pushServiceClient.logUnavailable();
   connectRelay();
 
   codex.onMessage((message) => {
     trackCodexHandshakeState(message);
     desktopRefresher.handleOutbound(message);
+    pushNotificationTracker.handleOutbound(message);
     rememberThreadFromMessage("codex", message);
     secureTransport.queueOutboundApplicationMessage(sanitizeRelayBoundCodexMessage(message), (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
@@ -201,6 +225,7 @@ function startBridge() {
     isShuttingDown = true;
     clearReconnectTimer();
     stopContextUsageWatcher();
+    rolloutLiveMirror?.stopAll();
     desktopRefresher.handleTransportReset();
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
       socket.close();
@@ -227,10 +252,14 @@ function startBridge() {
     if (handleWorkspaceRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
+    if (notificationsHandler.handleNotificationsRequest(normalizedRawMessage, sendApplicationResponse)) {
+      return;
+    }
     if (handleGitRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
     desktopRefresher.handleInbound(normalizedRawMessage);
+    rolloutLiveMirror?.observeInbound(normalizedRawMessage);
     rememberForwardedRequestMethod(normalizedRawMessage);
     rememberThreadFromMessage("android", normalizedRawMessage);
     codex.send(normalizedRawMessage);

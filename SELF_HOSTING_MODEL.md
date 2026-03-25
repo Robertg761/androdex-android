@@ -23,6 +23,7 @@ The public repository does not include:
 - private Google Play defaults
 - private npm publish-time defaults
 - private notification credentials
+- private Android push service endpoints or FCM secrets
 - private deployment secrets
 
 If you are running from source, assume you should provide your own relay setup or use the defaults exposed by the public bridge package.
@@ -67,10 +68,13 @@ If you fork or self-host Androdex, keep these things out of the public repo:
 - your deployed hostname
 - your VPS IP addresses
 - any APNs or notification credentials
+- any Android push service credentials or FCM server keys
 - any private build overrides
 - any publish-time package defaults
 
 If you ship managed builds for end users, prefer injecting the hosted relay URL at build or release time through `ANDRODEX_DEFAULT_RELAY_URL`, while continuing to honor explicit self-host overrides through `ANDRODEX_RELAY`.
+
+If you offer Android completion notifications, inject the bridge-facing push endpoint through `ANDRODEX_PUSH_SERVICE_URL` in your own environment or release pipeline. Keep the hosted service, credentials, and routing secrets out of the public repo.
 
 Those belong in your own environment, private config, or release pipeline.
 

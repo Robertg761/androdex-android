@@ -695,6 +695,15 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
       env
     ),
     codexAppPath: DEFAULT_APP_PATH,
+    pushServiceUrl: readFirstDefinedEnv(
+      ["ANDRODEX_PUSH_SERVICE_URL"],
+      "",
+      env
+    ),
+    pushPreviewMaxChars: parseIntegerEnv(
+      readFirstDefinedEnv(["ANDRODEX_PUSH_PREVIEW_MAX_CHARS"], "160", env),
+      160
+    ),
   };
 }
 

@@ -15,6 +15,10 @@ const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
+const { createNotificationsHandler } = require("./notifications-handler");
+const { createPushNotificationServiceClient } = require("./push-notification-service-client");
+const { createPushNotificationTracker } = require("./push-notification-tracker");
+const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
@@ -57,6 +61,23 @@ class HostRuntime {
       relayUrl: this.relayBaseUrl,
       deviceState: this.deviceState,
     });
+    this.pushServiceClient = createPushNotificationServiceClient({
+      baseUrl: this.config.pushServiceUrl,
+      sessionId: this.hostId,
+    });
+    this.notificationsHandler = createNotificationsHandler({
+      pushServiceClient: this.pushServiceClient,
+    });
+    this.pushNotificationTracker = createPushNotificationTracker({
+      sessionId: this.hostId,
+      pushServiceClient: this.pushServiceClient,
+      previewMaxChars: this.config.pushPreviewMaxChars,
+    });
+    this.rolloutLiveMirror = !this.config.codexEndpoint
+      ? createRolloutLiveMirrorController({
+        sendApplicationResponse: this.sendApplicationResponse.bind(this),
+      })
+      : null;
     this.socket = null;
     this.codex = null;
     this.currentCwd = "";
@@ -87,6 +108,7 @@ class HostRuntime {
   }
 
   start() {
+    this.pushServiceClient.logUnavailable();
     this.connectRelay();
     const rememberedCwd = normalizeNonEmptyString(this.runtimeState.lastActiveCwd);
     if (rememberedCwd && isExistingDirectory(rememberedCwd)) {
@@ -102,6 +124,7 @@ class HostRuntime {
     this.clearConnectTimeout();
     this.clearCachedBridgeHandshakeState();
     this.stopContextUsageWatcher();
+    this.rolloutLiveMirror?.stopAll();
     this.desktopRefresher.handleTransportReset();
     if (
       this.socket?.readyState === this.WebSocketImpl.OPEN
@@ -270,6 +293,7 @@ class HostRuntime {
       this.socket = null;
       this.clearCachedBridgeHandshakeState();
       this.stopContextUsageWatcher();
+      this.rolloutLiveMirror?.stopAll();
       this.desktopRefresher.handleTransportReset();
       this.scheduleRelayReconnect(code);
     });
@@ -314,6 +338,7 @@ class HostRuntime {
     const activeCodex = this.codex;
     this.syntheticInitializeRequest = null;
     this.stopContextUsageWatcher();
+    this.rolloutLiveMirror?.stopAll();
     if (!activeCodex) {
       this.codex = null;
       return;
@@ -374,6 +399,7 @@ class HostRuntime {
       }
       this.trackCodexHandshakeState(message);
       this.desktopRefresher.handleOutbound(message);
+      this.pushNotificationTracker.handleOutbound(message);
       this.rememberThreadFromMessage("codex", message);
       this.secureTransport.queueOutboundApplicationMessage(this.sanitizeRelayBoundCodexMessage(message), (wireMessage) => {
         if (this.socket?.readyState === WebSocket.OPEN) {
@@ -388,6 +414,7 @@ class HostRuntime {
       }
       this.desktopRefresher.handleTransportReset();
       this.stopContextUsageWatcher();
+      this.rolloutLiveMirror?.stopAll();
       this.codex = null;
       this.codexHandshakeState = "cold";
     });
@@ -408,6 +435,9 @@ class HostRuntime {
     })) {
       return;
     }
+    if (this.notificationsHandler.handleNotificationsRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
+      return;
+    }
     if (handleGitRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
@@ -418,6 +448,7 @@ class HostRuntime {
     }
 
     this.desktopRefresher.handleInbound(normalizedRawMessage);
+    this.rolloutLiveMirror?.observeInbound(normalizedRawMessage);
     this.rememberForwardedRequestMethod(normalizedRawMessage);
     this.rememberThreadFromMessage("android", normalizedRawMessage);
     this.codex.send(normalizedRawMessage);

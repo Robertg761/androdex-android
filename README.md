@@ -48,9 +48,11 @@ Androdex does **not** run Codex on the phone itself.
 - QR pairing and pairing-payload paste
 - open existing threads and create new ones from Android
 - stream Codex output on the phone while work continues on the host
+- reconnect-safe rollout mirroring for desktop-started runs reopened on Android
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android
+- optional bridge-side Android push registration and run-completion forwarding
 
 ## Current Status
 
@@ -206,6 +208,8 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
+| `ANDRODEX_PUSH_SERVICE_URL` | Optional Android push service endpoint for device registration and completion notifications |
+| `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` | Maximum stored preview length used when building completion notification payloads |
 
 The bridge resolves relay configuration in this order:
 
@@ -222,6 +226,24 @@ ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex pair
 
 # Public relay you control
 ANDRODEX_RELAY=wss://relay.example.com/relay androdex pair
+```
+
+### Android Push Environment
+
+If you want completion notifications while the Android app is backgrounded or temporarily disconnected, configure a push service the bridge can call after the phone registers.
+
+- Androdex keeps this bridge-side and platform-neutral: the bridge only forwards `notifications/push/register` requests and completion events to your configured service.
+- Use Android/FCM-oriented identifiers and routing in that service. The public repo does not ship private FCM credentials, hosted endpoints, or deployment runbooks.
+- Set `ANDRODEX_PUSH_SERVICE_URL` on the host before pairing or reconnecting the phone so registration requests have a destination.
+- `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` only affects the bridge-side completion preview cache; it does not change Android UI rendering.
+- Apple-specific launchd or APNs host setup from Remodex is intentionally not part of Androdex.
+
+Example:
+
+```sh
+ANDRODEX_RELAY=wss://relay.example.com/relay \
+ANDRODEX_PUSH_SERVICE_URL=https://push.example.com \
+androdex up
 ```
 
 ## Remote Access
