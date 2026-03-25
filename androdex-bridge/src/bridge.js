@@ -2,7 +2,7 @@
 // Purpose: Runs Codex locally, bridges relay traffic, and coordinates desktop refreshes for Codex.app.
 // Layer: CLI service
 // Exports: startBridge
-// Depends on: ws, uuid, ./qr, ./codex-desktop-refresher, ./codex-transport
+// Depends on: ws, uuid, ./qr, ./codex-desktop-refresher, ./codex-transport, ./rollout-watch, ./runtime-compat
 
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
@@ -11,12 +11,19 @@ const {
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
 const { createCodexTransport } = require("./codex-transport");
+const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
+const {
+  extractBridgeMessageContext,
+  normalizeRuntimeCompatibleRequest,
+  sanitizeThreadHistoryImagesForRelay,
+  shouldStartContextUsageWatcher,
+} = require("./runtime-compat");
 
 function startBridge() {
   const config = readBridgeConfig();
@@ -43,6 +50,14 @@ function startBridge() {
   let lastConnectionStatus = null;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
+  const relaySanitizedResponseMethodsById = new Map();
+  const relaySanitizedRequestMethods = new Set([
+    "thread/read",
+    "thread/resume",
+  ]);
+  const forwardedRequestMethodTTLms = 2 * 60_000;
+  let contextUsageWatcher = null;
+  let watchedContextUsageKey = null;
   const secureTransport = createBridgeSecureTransport({
     sessionId,
     relayUrl: relayBaseUrl,
@@ -157,6 +172,7 @@ function startBridge() {
       if (socket === nextSocket) {
         socket = null;
       }
+      stopContextUsageWatcher();
       desktopRefresher.handleTransportReset();
       scheduleRelayReconnect(code);
     });
@@ -173,7 +189,7 @@ function startBridge() {
     trackCodexHandshakeState(message);
     desktopRefresher.handleOutbound(message);
     rememberThreadFromMessage("codex", message);
-    secureTransport.queueOutboundApplicationMessage(message, (wireMessage) => {
+    secureTransport.queueOutboundApplicationMessage(sanitizeRelayBoundCodexMessage(message), (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(wireMessage);
       }
@@ -184,6 +200,7 @@ function startBridge() {
     logConnectionStatus("disconnected");
     isShuttingDown = true;
     clearReconnectTimer();
+    stopContextUsageWatcher();
     desktopRefresher.handleTransportReset();
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
       socket.close();
@@ -193,26 +210,30 @@ function startBridge() {
   process.on("SIGINT", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
+    stopContextUsageWatcher();
   }));
   process.on("SIGTERM", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
+    stopContextUsageWatcher();
   }));
 
   // Routes decrypted app payloads through the same bridge handlers as before.
   function handleApplicationMessage(rawMessage) {
-    if (handleBridgeManagedHandshakeMessage(rawMessage)) {
+    const normalizedRawMessage = normalizeRuntimeCompatibleRequest(rawMessage);
+    if (handleBridgeManagedHandshakeMessage(normalizedRawMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse)) {
+    if (handleWorkspaceRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleGitRequest(rawMessage, sendApplicationResponse)) {
+    if (handleGitRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
-    desktopRefresher.handleInbound(rawMessage);
-    rememberThreadFromMessage("android", rawMessage);
-    codex.send(rawMessage);
+    desktopRefresher.handleInbound(normalizedRawMessage);
+    rememberForwardedRequestMethod(normalizedRawMessage);
+    rememberThreadFromMessage("android", normalizedRawMessage);
+    codex.send(normalizedRawMessage);
   }
 
   // Encrypts bridge-generated responses instead of letting the relay see plaintext.
@@ -225,12 +246,118 @@ function startBridge() {
   }
 
   function rememberThreadFromMessage(source, rawMessage) {
-    const threadId = extractThreadId(rawMessage);
-    if (!threadId) {
+    const context = extractBridgeMessageContext(rawMessage);
+    if (!context.threadId) {
       return;
     }
 
-    rememberActiveThread(threadId, source);
+    rememberActiveThread(context.threadId, source);
+    if (shouldStartContextUsageWatcher(context)) {
+      ensureContextUsageWatcher(context);
+    }
+  }
+
+  function rememberForwardedRequestMethod(rawMessage) {
+    const context = extractBridgeMessageContext(rawMessage);
+    const parsed = safeParseJSON(rawMessage);
+    const requestId = parsed?.id;
+    if (!context.method || requestId == null) {
+      return;
+    }
+
+    pruneExpiredForwardedRequestMethods();
+    if (relaySanitizedRequestMethods.has(context.method)) {
+      relaySanitizedResponseMethodsById.set(String(requestId), {
+        method: context.method,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  function sanitizeRelayBoundCodexMessage(rawMessage) {
+    pruneExpiredForwardedRequestMethods();
+    const parsed = safeParseJSON(rawMessage);
+    const responseId = parsed?.id;
+    if (responseId == null) {
+      return rawMessage;
+    }
+
+    const trackedRequest = relaySanitizedResponseMethodsById.get(String(responseId));
+    if (!trackedRequest) {
+      return rawMessage;
+    }
+    relaySanitizedResponseMethodsById.delete(String(responseId));
+
+    return sanitizeThreadHistoryImagesForRelay(rawMessage, trackedRequest.method);
+  }
+
+  function pruneExpiredForwardedRequestMethods(now = Date.now()) {
+    for (const [requestId, trackedRequest] of relaySanitizedResponseMethodsById.entries()) {
+      if (!trackedRequest || (now - trackedRequest.createdAt) >= forwardedRequestMethodTTLms) {
+        relaySanitizedResponseMethodsById.delete(requestId);
+      }
+    }
+  }
+
+  function ensureContextUsageWatcher({ threadId, turnId }) {
+    const normalizedThreadId = readString(threadId);
+    const normalizedTurnId = readString(turnId);
+    if (!normalizedThreadId) {
+      return;
+    }
+
+    const nextWatcherKey = `${normalizedThreadId}|${normalizedTurnId || "pending-turn"}`;
+    if (watchedContextUsageKey === nextWatcherKey && contextUsageWatcher) {
+      return;
+    }
+
+    stopContextUsageWatcher();
+    watchedContextUsageKey = nextWatcherKey;
+    contextUsageWatcher = createThreadRolloutActivityWatcher({
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+      onUsage: ({ threadId: usageThreadId, usage }) => {
+        sendContextUsageNotification(usageThreadId, usage);
+      },
+      onIdle: () => {
+        if (watchedContextUsageKey === nextWatcherKey) {
+          stopContextUsageWatcher();
+        }
+      },
+      onTimeout: () => {
+        if (watchedContextUsageKey === nextWatcherKey) {
+          stopContextUsageWatcher();
+        }
+      },
+      onError: () => {
+        if (watchedContextUsageKey === nextWatcherKey) {
+          stopContextUsageWatcher();
+        }
+      },
+    });
+  }
+
+  function stopContextUsageWatcher() {
+    if (contextUsageWatcher) {
+      contextUsageWatcher.stop();
+    }
+
+    contextUsageWatcher = null;
+    watchedContextUsageKey = null;
+  }
+
+  function sendContextUsageNotification(threadId, usage) {
+    if (!threadId || !usage) {
+      return;
+    }
+
+    sendApplicationResponse(JSON.stringify({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId,
+        usage,
+      },
+    }));
   }
 
   // The spawned/shared Codex app-server stays warm across Android reconnects.
@@ -319,45 +446,19 @@ function shutdown(codex, getSocket, beforeExit = () => {}) {
   setTimeout(() => process.exit(0), 100);
 }
 
-function extractThreadId(rawMessage) {
-  let parsed = null;
+function readString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function safeParseJSON(value) {
   try {
-    parsed = JSON.parse(rawMessage);
+    return JSON.parse(value);
   } catch {
     return null;
   }
-
-  const method = parsed?.method;
-  const params = parsed?.params;
-
-  if (method === "turn/start") {
-    return readString(params?.threadId) || readString(params?.thread_id);
-  }
-
-  if (method === "thread/start" || method === "thread/started") {
-    return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.thread?.id)
-      || readString(params?.thread?.threadId)
-      || readString(params?.thread?.thread_id)
-    );
-  }
-
-  if (method === "turn/completed") {
-    return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.turn?.threadId)
-      || readString(params?.turn?.thread_id)
-    );
-  }
-
-  return null;
 }
 
-function readString(value) {
-  return typeof value === "string" && value ? value : null;
-}
-
-module.exports = { startBridge };
+module.exports = {
+  sanitizeThreadHistoryImagesForRelay,
+  startBridge,
+};
