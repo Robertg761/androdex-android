@@ -1,20 +1,29 @@
 package io.androdex.android.ui.turn
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -25,9 +34,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import io.androdex.android.ui.state.ComposerUiState
+import io.androdex.android.ComposerSlashCommand
+import io.androdex.android.model.ComposerMentionedFile
+import io.androdex.android.model.ComposerMentionedSkill
+import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.ui.state.ComposerSubmitMode
+import io.androdex.android.ui.state.ComposerUiState
 
 @Composable
 internal fun ComposerBar(
@@ -35,6 +50,11 @@ internal fun ComposerBar(
     onTextChange: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
+    onSelectFileAutocomplete: (FuzzyFileMatch) -> Unit,
+    onRemoveMentionedFile: (String) -> Unit,
+    onSelectSkillAutocomplete: (SkillMetadata) -> Unit,
+    onRemoveMentionedSkill: (String) -> Unit,
+    onSelectSlashCommand: (ComposerSlashCommand) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -70,6 +90,40 @@ internal fun ComposerBar(
                 )
             }
 
+            if (state.mentionedFiles.isNotEmpty()) {
+                ComposerChipRow {
+                    state.mentionedFiles.forEach { file ->
+                        ComposerChip(
+                            label = file.fileName,
+                            tint = Color(0xFF2563EB),
+                            onRemove = { onRemoveMentionedFile(file.id) },
+                        )
+                    }
+                }
+            }
+
+            if (state.mentionedSkills.isNotEmpty()) {
+                ComposerChipRow {
+                    state.mentionedSkills.forEach { skill ->
+                        ComposerChip(
+                            label = "$ ${skill.name}",
+                            tint = Color(0xFF4F46E5),
+                            onRemove = { onRemoveMentionedSkill(skill.id) },
+                        )
+                    }
+                }
+            }
+
+            if (state.isSubagentsEnabled) {
+                ComposerChipRow {
+                    ComposerChip(
+                        label = "Subagents",
+                        tint = Color(0xFF0F766E),
+                        onRemove = { onSubagentsModeChanged(false) },
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -88,7 +142,7 @@ internal fun ComposerBar(
                             } else if (state.isSubagentsEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
                                 "Queue a delegated follow-up for when this run finishes"
                             } else if (state.isSubagentsEnabled) {
-                                "Ask Codex to delegate distinct work in parallel"
+                                "Ask anything... @files, \$skills, /commands"
                             } else if (state.isPlanModeEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
                                 "Queue a plan request for when this run finishes"
                             } else if (state.isPlanModeEnabled) {
@@ -96,7 +150,7 @@ internal fun ComposerBar(
                             } else if (state.submitMode == ComposerSubmitMode.QUEUE) {
                                 "Queue a follow-up for when this run finishes"
                             } else {
-                                "Ask Codex..."
+                                "Ask anything... @files, \$skills, /commands"
                             },
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -198,6 +252,159 @@ internal fun ComposerBar(
                     }
                 }
             }
+
+            if (state.isFileAutocompleteVisible) {
+                AutocompletePanel {
+                    if (state.isFileAutocompleteLoading) {
+                        AutocompleteStatus("Searching files...")
+                    } else {
+                        state.fileAutocompleteItems.forEach { item ->
+                            AutocompleteRow(
+                                title = item.fileName,
+                                subtitle = item.path,
+                                onClick = { onSelectFileAutocomplete(item) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.isSkillAutocompleteVisible) {
+                AutocompletePanel {
+                    if (state.isSkillAutocompleteLoading) {
+                        AutocompleteStatus("Searching skills...")
+                    } else {
+                        state.skillAutocompleteItems.forEach { skill ->
+                            AutocompleteRow(
+                                title = skill.name,
+                                subtitle = skill.description ?: skill.path,
+                                onClick = { onSelectSkillAutocomplete(skill) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.isSlashCommandAutocompleteVisible) {
+                AutocompletePanel {
+                    state.slashCommandItems.forEach { command ->
+                        AutocompleteRow(
+                            title = command.commandToken,
+                            subtitle = command.subtitle,
+                            onClick = { onSelectSlashCommand(command) },
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun ComposerChipRow(content: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun ComposerChip(
+    label: String,
+    tint: Color,
+    onRemove: () -> Unit,
+) {
+    Surface(
+        color = tint.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                color = tint,
+                fontWeight = FontWeight.Medium,
+            )
+            IconButton(
+                onClick = onRemove,
+                modifier = Modifier.size(18.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .background(tint.copy(alpha = 0.16f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Remove",
+                        tint = tint,
+                        modifier = Modifier.size(10.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutocompletePanel(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun AutocompleteRow(
+    title: String,
+    subtitle: String?,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium,
+        )
+        subtitle?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AutocompleteStatus(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+    )
 }

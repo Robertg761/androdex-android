@@ -24,14 +24,17 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.TurnTerminalState
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.TrustedMacRecord
 import io.androdex.android.model.TrustedMacRegistry
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -197,6 +200,47 @@ class AndrodexClient(
         return decodeWorkspaceRecentState(result)
     }
 
+    suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String? = null,
+    ): List<FuzzyFileMatch> {
+        val normalizedQuery = query.trim()
+        val normalizedRoots = roots.map { it.trim() }.filter { it.isNotEmpty() }
+        if (normalizedQuery.isEmpty() || normalizedRoots.isEmpty()) {
+            return emptyList()
+        }
+
+        val params = JSONObject()
+            .put("query", normalizedQuery)
+            .put("roots", JSONArray(normalizedRoots))
+            .put("cancellationToken", cancellationToken?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+        val result = sendRequest("fuzzyFileSearch", params)
+        return decodeFuzzyFileMatches(result)
+    }
+
+    suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> {
+        val normalizedCwds = cwds.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+        val params = JSONObject()
+        if (normalizedCwds.isNotEmpty()) {
+            params.put("cwds", JSONArray(normalizedCwds))
+        }
+
+        return try {
+            decodeSkillMetadata(sendRequest("skills/list", params))
+        } catch (error: RpcException) {
+            if (!shouldRetrySkillsListWithCwdFallback(error.message) || normalizedCwds.isEmpty()) {
+                throw error
+            }
+            decodeSkillMetadata(
+                sendRequest(
+                    "skills/list",
+                    JSONObject().put("cwd", normalizedCwds.first()),
+                )
+            )
+        }
+    }
+
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
         val params = JSONObject()
         path?.trim()?.takeIf { it.isNotEmpty() }?.let { params.put("path", it) }
@@ -267,14 +311,18 @@ class AndrodexClient(
     suspend fun startTurn(
         threadId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
         var effectiveCollaborationMode = collaborationMode
+        var includeStructuredSkillItems = skillMentions.isNotEmpty()
         while (true) {
             val params = buildTurnStartParams(
                 threadId = threadId,
                 userInput = userInput,
+                skillMentions = skillMentions,
+                includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForSelectedModel(),
                 collaborationMode = effectiveCollaborationMode,
@@ -283,6 +331,10 @@ class AndrodexClient(
                 sendRequest("turn/start", params)
                 return
             } catch (error: RpcException) {
+                if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
+                    includeStructuredSkillItems = false
+                    continue
+                }
                 if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
                     effectiveCollaborationMode = null
                     continue
@@ -296,15 +348,19 @@ class AndrodexClient(
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
         var effectiveCollaborationMode = collaborationMode
+        var includeStructuredSkillItems = skillMentions.isNotEmpty()
         while (true) {
             val params = buildTurnSteerParams(
                 threadId = threadId,
                 expectedTurnId = expectedTurnId,
                 userInput = userInput,
+                skillMentions = skillMentions,
+                includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForSelectedModel(),
                 collaborationMode = effectiveCollaborationMode,
@@ -313,6 +369,10 @@ class AndrodexClient(
                 sendRequest("turn/steer", params)
                 return
             } catch (error: RpcException) {
+                if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
+                    includeStructuredSkillItems = false
+                    continue
+                }
                 if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
                     effectiveCollaborationMode = null
                     continue
@@ -1588,22 +1648,55 @@ internal fun connectionUpdateForSocketClose(
     }
 }
 
-internal fun buildTurnInputPayloadSpec(userInput: String): List<Map<String, String>> {
-    return listOf(
-        mapOf(
+internal fun buildTurnInputPayloadSpec(
+    userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
+): List<Map<String, Any?>> {
+    val payload = mutableListOf<Map<String, Any?>>()
+    val trimmedInput = userInput.trim()
+    if (trimmedInput.isNotEmpty()) {
+        payload += mapOf(
             "type" to "text",
-            "text" to userInput.trim(),
+            "text" to trimmedInput,
         )
-    )
+    }
+
+    if (includeStructuredSkillItems) {
+        skillMentions.forEach { mention ->
+            val normalizedSkillId = mention.id.trim()
+            if (normalizedSkillId.isEmpty()) {
+                return@forEach
+            }
+            val item = linkedMapOf<String, Any?>(
+                "type" to "skill",
+                "id" to normalizedSkillId,
+            )
+            mention.name?.trim()?.takeIf { it.isNotEmpty() }?.let { item["name"] = it }
+            mention.path?.trim()?.takeIf { it.isNotEmpty() }?.let { item["path"] = it }
+            payload += item
+        }
+    }
+    return payload
 }
 
-internal fun buildTurnInputPayload(userInput: String): JSONArray {
-    return buildTurnInputPayloadSpec(userInput).toJsonArray()
+internal fun buildTurnInputPayload(
+    userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
+): JSONArray {
+    return buildTurnInputPayloadSpec(
+        userInput = userInput,
+        skillMentions = skillMentions,
+        includeStructuredSkillItems = includeStructuredSkillItems,
+    ).toJsonArray()
 }
 
 internal fun buildTurnStartParams(
     threadId: String,
     userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
     collaborationMode: CollaborationModeKind?,
@@ -1620,13 +1713,19 @@ internal fun buildTurnStartParams(
 internal fun buildTurnStartPayloadSpec(
     threadId: String,
     userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
     collaborationMode: CollaborationModeKind?,
 ): Map<String, Any?> {
     val params = linkedMapOf<String, Any?>(
         "threadId" to threadId,
-        "input" to buildTurnInputPayloadSpec(userInput),
+        "input" to buildTurnInputPayloadSpec(
+            userInput = userInput,
+            skillMentions = skillMentions,
+            includeStructuredSkillItems = includeStructuredSkillItems,
+        ),
     )
     model?.let { params["model"] = it }
     reasoningEffort?.let { params["effort"] = it }
@@ -1642,6 +1741,8 @@ internal fun buildTurnSteerParams(
     threadId: String,
     expectedTurnId: String,
     userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
     collaborationMode: CollaborationModeKind?,
@@ -1660,6 +1761,8 @@ internal fun buildTurnSteerPayloadSpec(
     threadId: String,
     expectedTurnId: String,
     userInput: String,
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
     collaborationMode: CollaborationModeKind?,
@@ -1667,7 +1770,11 @@ internal fun buildTurnSteerPayloadSpec(
     val params = linkedMapOf<String, Any?>(
         "threadId" to threadId,
         "expectedTurnId" to expectedTurnId,
-        "input" to buildTurnInputPayloadSpec(userInput),
+        "input" to buildTurnInputPayloadSpec(
+            userInput = userInput,
+            skillMentions = skillMentions,
+            includeStructuredSkillItems = includeStructuredSkillItems,
+        ),
     )
     reasoningEffort?.let { params["effort"] = it }
     buildCollaborationModePayloadSpec(
@@ -1714,6 +1821,30 @@ internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boo
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
         && !normalizedMessage.contains("experimentalapi")
+}
+
+internal fun shouldRetryTurnWithoutSkillItems(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    if (!normalizedMessage.contains("skill")) {
+        return false
+    }
+    return normalizedMessage.contains("unknown")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("invalid")
+        || normalizedMessage.contains("expected")
+        || normalizedMessage.contains("unrecognized")
+        || normalizedMessage.contains("type")
+        || normalizedMessage.contains("field")
+}
+
+private fun shouldRetrySkillsListWithCwdFallback(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("cwds")
+        && (normalizedMessage.contains("unknown")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("invalid")
+        || normalizedMessage.contains("field")
+        || normalizedMessage.contains("param"))
 }
 
 private fun Map<String, Any?>.toJsonObject(): JSONObject {

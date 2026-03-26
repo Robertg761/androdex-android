@@ -4,10 +4,13 @@ import android.content.Context
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
@@ -25,15 +28,23 @@ interface AndrodexRepositoryContract {
     suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary
     suspend fun loadThread(threadId: String): ThreadLoadResult
     suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot
+    suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String? = null,
+    ): List<FuzzyFileMatch>
+    suspend fun listSkills(cwds: List<String>?): List<SkillMetadata>
     suspend fun startTurn(
         threadId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     )
     suspend fun steerTurn(
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     )
     suspend fun interruptTurn(threadId: String, turnId: String)
@@ -82,21 +93,35 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         return client.readThreadRunSnapshot(threadId)
     }
 
+    override suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String?,
+    ): List<FuzzyFileMatch> {
+        return client.fuzzyFileSearch(query, roots, cancellationToken)
+    }
+
+    override suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> {
+        return client.listSkills(cwds)
+    }
+
     override suspend fun startTurn(
         threadId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
-        client.startTurn(threadId, userInput, collaborationMode)
+        client.startTurn(threadId, userInput, skillMentions, collaborationMode)
     }
 
     override suspend fun steerTurn(
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
-        client.steerTurn(threadId, expectedTurnId, userInput, collaborationMode)
+        client.steerTurn(threadId, expectedTurnId, userInput, skillMentions, collaborationMode)
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {

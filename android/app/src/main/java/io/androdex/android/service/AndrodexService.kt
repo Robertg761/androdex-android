@@ -17,6 +17,7 @@ import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.TurnTerminalState
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import kotlinx.coroutines.CoroutineScope
@@ -210,6 +211,7 @@ class AndrodexService(
     suspend fun sendMessage(
         input: String,
         preferredThreadId: String? = stateFlow.value.selectedThreadId,
+        skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         val trimmedInput = input.trim()
@@ -236,7 +238,13 @@ class AndrodexService(
             isThreadConsideredRunning(threadId) -> {
                 when (val resolution = resolveActiveTurn(threadId)) {
                     is ActiveTurnResolution.Resolved -> {
-                        repository.steerTurn(threadId, resolution.turnId, trimmedInput, collaborationMode)
+                        repository.steerTurn(
+                            threadId = threadId,
+                            expectedTurnId = resolution.turnId,
+                            userInput = trimmedInput,
+                            skillMentions = skillMentions,
+                            collaborationMode = collaborationMode,
+                        )
                         markThreadRunning(threadId, resolution.turnId)
                     }
 
@@ -247,14 +255,24 @@ class AndrodexService(
                     }
 
                     ActiveTurnResolution.NoActiveTurn -> {
-                        repository.startTurn(threadId, trimmedInput, collaborationMode)
+                        repository.startTurn(
+                            threadId = threadId,
+                            userInput = trimmedInput,
+                            skillMentions = skillMentions,
+                            collaborationMode = collaborationMode,
+                        )
                         markThreadRunning(threadId = threadId, turnId = null)
                     }
                 }
             }
 
             else -> {
-                repository.startTurn(threadId, trimmedInput, collaborationMode)
+                repository.startTurn(
+                    threadId = threadId,
+                    userInput = trimmedInput,
+                    skillMentions = skillMentions,
+                    collaborationMode = collaborationMode,
+                )
                 markThreadRunning(threadId = threadId, turnId = null)
             }
         }

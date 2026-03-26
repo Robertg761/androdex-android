@@ -2,6 +2,7 @@ package io.androdex.android.model
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 data class PairingPayload(
     val version: Int,
@@ -215,6 +216,44 @@ data class WorkspaceActivationStatus(
     val hasTrustedPhone: Boolean,
 )
 
+data class FuzzyFileMatch(
+    val root: String? = null,
+    val path: String,
+    val fileName: String,
+    val score: Double? = null,
+    val indices: List<Int> = emptyList(),
+)
+
+data class SkillMetadata(
+    val name: String,
+    val description: String? = null,
+    val path: String? = null,
+    val scope: String? = null,
+    val enabled: Boolean = true,
+) {
+    val normalizedName: String
+        get() = name.trim().lowercase()
+}
+
+data class TurnSkillMention(
+    val id: String,
+    val name: String? = null,
+    val path: String? = null,
+)
+
+data class ComposerMentionedFile(
+    val id: String = UUID.randomUUID().toString(),
+    val fileName: String,
+    val path: String,
+)
+
+data class ComposerMentionedSkill(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val path: String? = null,
+    val description: String? = null,
+)
+
 data class ReasoningEffortOption(
     val reasoningEffort: String,
     val description: String,
@@ -405,6 +444,8 @@ data class QueuedTurnDraft(
     val createdAtEpochMs: Long,
     val collaborationMode: CollaborationModeKind? = null,
     val subagentsSelectionEnabled: Boolean = false,
+    val mentionedFiles: List<ComposerMentionedFile> = emptyList(),
+    val mentionedSkills: List<ComposerMentionedSkill> = emptyList(),
 )
 
 enum class QueuePauseState {

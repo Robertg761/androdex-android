@@ -53,6 +53,7 @@ Androdex does **not** run Codex on the phone itself.
 - Stop-button recovery that falls back to `thread/read` when a live turn has not published a usable `turnId`
 - queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
 - Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
+- Android composer `@file`, `$skill`, and `/subagents` affordances with autocomplete chips and structured skill turn payloads
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android

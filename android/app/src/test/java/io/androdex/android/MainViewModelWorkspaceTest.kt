@@ -4,12 +4,15 @@ import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.QueuePauseState
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
@@ -433,9 +436,18 @@ private class FakeRepository : AndrodexRepositoryContract {
         )
     }
 
+    override suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String?,
+    ): List<FuzzyFileMatch> = emptyList()
+
+    override suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> = emptyList()
+
     override suspend fun startTurn(
         threadId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
         val failure = startTurnFailures.firstOrNull()
@@ -451,6 +463,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit
 

@@ -1,6 +1,7 @@
 package io.androdex.android.data
 
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.TurnSkillMention
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -46,6 +47,31 @@ class AndrodexClientTurnPayloadTest {
         assertEquals("turn-9", params["expectedTurnId"])
         assertEquals("medium", params["effort"])
         assertFalse(params.containsKey("collaborationMode"))
+    }
+
+    @Test
+    fun buildTurnInputPayload_includesStructuredSkillItemsWhenRequested() {
+        val payload = buildTurnInputPayloadSpec(
+            userInput = "Use \$frontend-design",
+            skillMentions = listOf(
+                TurnSkillMention(
+                    id = "frontend-design",
+                    name = "frontend-design",
+                    path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
+                )
+            ),
+        )
+
+        assertEquals(2, payload.size)
+        assertEquals("text", payload[0]["type"])
+        assertEquals("Use \$frontend-design", payload[0]["text"])
+        assertEquals("skill", payload[1]["type"])
+        assertEquals("frontend-design", payload[1]["id"])
+        assertEquals("frontend-design", payload[1]["name"])
+        assertEquals(
+            "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
+            payload[1]["path"],
+        )
     }
 
     @Test(expected = IllegalStateException::class)

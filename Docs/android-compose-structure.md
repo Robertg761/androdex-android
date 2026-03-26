@@ -13,7 +13,7 @@ Key pieces:
 - `android/app/src/main/java/io/androdex/android/ui/sidebar/`
   Thread list rendering and empty-state behavior.
 - `android/app/src/main/java/io/androdex/android/ui/turn/`
-  Thread timeline and composer UI.
+  Thread timeline and composer UI, including Remodex-style `@file`, `$skill`, and `/subagents` affordances.
 - `android/app/src/main/java/io/androdex/android/ui/shared/`
   Approval/error overlays and shared connection or busy presentation.
 - `android/app/src/main/java/io/androdex/android/ui/settings/`
@@ -23,4 +23,5 @@ Why this split:
 
 - Keeps host-local runtime and connection behavior in the existing service/view-model layer.
 - Preserves item-aware timeline rendering while making the turn screen easier to modify.
+- Keeps composer parsing, autocomplete state, and structured skill payload wiring centralized in the view-model/service layer instead of duplicating it in the Compose views.
 - Mirrors the Remodex-style separation between home, sidebar, and turn surfaces without reintroducing repo filtering or changing reconnect behavior.

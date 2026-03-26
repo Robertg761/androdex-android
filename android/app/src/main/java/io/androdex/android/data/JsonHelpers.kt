@@ -3,9 +3,11 @@ package io.androdex.android.data
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
@@ -376,6 +378,68 @@ fun decodeWorkspaceActivationStatus(resultObject: JSONObject): WorkspaceActivati
   )
 }
 
+fun decodeFuzzyFileMatches(resultObject: JSONObject): List<FuzzyFileMatch> {
+    val files = resultObject.optJSONArray("files")
+        ?: resultObject.optJSONObject("result")?.optJSONArray("files")
+        ?: resultObject.optJSONObject("data")?.optJSONArray("files")
+        ?: resultObject.optJSONArray("data")
+        ?: JSONArray()
+    val decoded = mutableListOf<FuzzyFileMatch>()
+    for (index in 0 until files.length()) {
+        val item = files.optJSONObject(index) ?: continue
+        val path = item.stringOrNull("path") ?: continue
+        val fileName = item.stringOrNull("fileName", "file_name", "name")
+            ?: path.substringAfterLast('/').substringAfterLast('\\')
+        decoded += FuzzyFileMatch(
+            root = item.stringOrNull("root"),
+            path = path,
+            fileName = fileName,
+            score = ((item.opt("score") as? Number) ?: (item.opt("rank") as? Number))
+                ?.toDouble(),
+            indices = decodeIndices(item.optJSONArray("indices")),
+        )
+    }
+    return decoded
+}
+
+fun decodeSkillMetadata(resultObject: JSONObject): List<SkillMetadata> {
+    val candidates = mutableListOf<JSONObject>()
+    resultObject.optJSONArray("data")?.let { topLevel ->
+        for (index in 0 until topLevel.length()) {
+            topLevel.optJSONObject(index)?.let(candidates::add)
+        }
+    }
+    resultObject.optJSONArray("skills")?.let { direct ->
+        for (index in 0 until direct.length()) {
+            direct.optJSONObject(index)?.let(candidates::add)
+        }
+    }
+    resultObject.optJSONObject("result")?.optJSONArray("data")?.let { nested ->
+        for (index in 0 until nested.length()) {
+            nested.optJSONObject(index)?.let(candidates::add)
+        }
+    }
+
+    val decoded = mutableListOf<SkillMetadata>()
+    candidates.forEach { candidate ->
+        val nestedSkills = candidate.optJSONArray("skills")
+        if (nestedSkills != null) {
+            for (skillIndex in 0 until nestedSkills.length()) {
+                nestedSkills.optJSONObject(skillIndex)?.let { skill ->
+                    decodeSingleSkillMetadata(skill)?.let(decoded::add)
+                }
+            }
+        } else {
+            decodeSingleSkillMetadata(candidate)?.let(decoded::add)
+        }
+    }
+    return decoded
+        .groupBy { it.normalizedName }
+        .values
+        .mapNotNull { bucket -> bucket.firstOrNull { it.enabled } ?: bucket.firstOrNull() }
+        .sortedBy { it.name.lowercase(Locale.US) }
+}
+
 private fun decodeWorkspacePathSummaries(items: JSONArray): List<WorkspacePathSummary> {
   val decoded = mutableListOf<WorkspacePathSummary>()
   for (index in 0 until items.length()) {
@@ -415,6 +479,31 @@ private fun decodeReasoningEffortOptions(items: JSONArray): List<ReasoningEffort
             reasoningEffort = effort,
             description = item.stringOrNull("description") ?: "",
         )
+    }
+    return decoded
+}
+
+private fun decodeSingleSkillMetadata(item: JSONObject): SkillMetadata? {
+    val name = item.stringOrNull("name") ?: return null
+    return SkillMetadata(
+        name = name,
+        description = item.stringOrNull("description"),
+        path = item.stringOrNull("path"),
+        scope = item.stringOrNull("scope"),
+        enabled = item.optBoolean("enabled", true),
+    )
+}
+
+private fun decodeIndices(items: JSONArray?): List<Int> {
+    if (items == null) {
+        return emptyList()
+    }
+    val decoded = mutableListOf<Int>()
+    for (index in 0 until items.length()) {
+        val value = items.opt(index)
+        when (value) {
+            is Number -> decoded += value.toInt()
+        }
     }
     return decoded
 }

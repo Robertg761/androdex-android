@@ -1,11 +1,16 @@
 package io.androdex.android.ui.state
 
 import io.androdex.android.AndrodexUiState
+import io.androdex.android.ComposerSlashCommand
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.ComposerMentionedFile
+import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.model.SkillMetadata
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -116,6 +121,19 @@ internal data class ThreadTimelineUiState(
 
 internal data class ComposerUiState(
     val text: String,
+    val mentionedFiles: List<ComposerMentionedFile>,
+    val mentionedSkills: List<ComposerMentionedSkill>,
+    val fileAutocompleteItems: List<FuzzyFileMatch>,
+    val isFileAutocompleteVisible: Boolean,
+    val isFileAutocompleteLoading: Boolean,
+    val fileAutocompleteQuery: String,
+    val skillAutocompleteItems: List<SkillMetadata>,
+    val isSkillAutocompleteVisible: Boolean,
+    val isSkillAutocompleteLoading: Boolean,
+    val skillAutocompleteQuery: String,
+    val slashCommandItems: List<ComposerSlashCommand>,
+    val isSlashCommandAutocompleteVisible: Boolean,
+    val slashCommandQuery: String,
     val inputEnabled: Boolean,
     val submitMode: ComposerSubmitMode,
     val isPlanModeEnabled: Boolean,
@@ -308,7 +326,10 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         queuePauseMessage = queueState?.pauseMessage,
         canRestoreQueuedDrafts = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
-            && composerText.isBlank(),
+            && composerText.isBlank()
+            && composerMentionedFilesByThread[threadId].orEmpty().isEmpty()
+            && composerMentionedSkillsByThread[threadId].orEmpty().isEmpty()
+            && !isSubagentsEnabled,
         canPauseQueue = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
             && queueState?.isPaused != true,
@@ -317,6 +338,19 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             && queueState?.isPaused == true,
         composer = ComposerUiState(
             text = composerText,
+            mentionedFiles = composerMentionedFilesByThread[threadId].orEmpty(),
+            mentionedSkills = composerMentionedSkillsByThread[threadId].orEmpty(),
+            fileAutocompleteItems = composerFileAutocompleteItems,
+            isFileAutocompleteVisible = isFileAutocompleteVisible,
+            isFileAutocompleteLoading = isFileAutocompleteLoading,
+            fileAutocompleteQuery = fileAutocompleteQuery,
+            skillAutocompleteItems = composerSkillAutocompleteItems,
+            isSkillAutocompleteVisible = isSkillAutocompleteVisible,
+            isSkillAutocompleteLoading = isSkillAutocompleteLoading,
+            skillAutocompleteQuery = skillAutocompleteQuery,
+            slashCommandItems = composerSlashCommandItems,
+            isSlashCommandAutocompleteVisible = isSlashCommandAutocompleteVisible,
+            slashCommandQuery = slashCommandQuery,
             inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND,
             isPlanModeEnabled = isPlanModeEnabled,

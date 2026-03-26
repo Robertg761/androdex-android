@@ -65,12 +65,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.androdex.android.applyingSubagentsSelection
+import io.androdex.android.ComposerSlashCommand
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
@@ -88,6 +91,11 @@ internal fun ThreadTimelineScreen(
     onComposerChanged: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
+    onSelectFileAutocomplete: (FuzzyFileMatch) -> Unit,
+    onRemoveMentionedFile: (String) -> Unit,
+    onSelectSkillAutocomplete: (SkillMetadata) -> Unit,
+    onRemoveMentionedSkill: (String) -> Unit,
+    onSelectSlashCommand: (ComposerSlashCommand) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -216,6 +224,11 @@ internal fun ThreadTimelineScreen(
                 onTextChange = onComposerChanged,
                 onPlanModeChanged = onPlanModeChanged,
                 onSubagentsModeChanged = onSubagentsModeChanged,
+                onSelectFileAutocomplete = onSelectFileAutocomplete,
+                onRemoveMentionedFile = onRemoveMentionedFile,
+                onSelectSkillAutocomplete = onSelectSkillAutocomplete,
+                onRemoveMentionedSkill = onRemoveMentionedSkill,
+                onSelectSlashCommand = onSelectSlashCommand,
                 onSend = onSend,
                 onStop = onStop,
             )

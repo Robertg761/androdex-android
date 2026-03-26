@@ -1,0 +1,323 @@
+package io.androdex.android
+
+import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.ClientUpdate
+import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRunSnapshot
+import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TurnSkillMention
+import io.androdex.android.model.WorkspaceActivationStatus
+import io.androdex.android.model.WorkspaceBrowseResult
+import io.androdex.android.model.WorkspaceRecentState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class MainViewModelComposerAutocompleteTest {
+    private val dispatcher = StandardTestDispatcher()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun fileAutocomplete_selectionAddsChipAndRewritesText() = runTest(dispatcher) {
+        val repository = ComposerRepository().apply {
+            fuzzyMatches = listOf(
+                FuzzyFileMatch(
+                    root = "C:\\Projects\\Androdex",
+                    path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
+                    fileName = "MainViewModel.kt",
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "C:\\Projects\\Androdex",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Inspect @Ma")
+        dispatcher.scheduler.advanceTimeBy(200)
+        dispatcher.scheduler.runCurrent()
+
+        val beforeSelect = viewModel.uiState.value
+        assertTrue(beforeSelect.isFileAutocompleteVisible)
+        assertEquals(1, beforeSelect.composerFileAutocompleteItems.size)
+
+        viewModel.selectFileAutocomplete(beforeSelect.composerFileAutocompleteItems.single())
+
+        val afterSelect = viewModel.uiState.value
+        assertEquals("Inspect @MainViewModel.kt ", afterSelect.composerText)
+        assertEquals(1, afterSelect.composerMentionedFilesByThread["thread-1"]?.size)
+        assertFalse(afterSelect.isFileAutocompleteVisible)
+    }
+
+    @Test
+    fun skillAutocomplete_andSlashCommandSelectionUpdateComposerState() = runTest(dispatcher) {
+        val repository = ComposerRepository().apply {
+            skills = listOf(
+                SkillMetadata(
+                    name = "frontend-design",
+                    description = "Build polished UI",
+                    path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Use \$fr")
+        dispatcher.scheduler.advanceTimeBy(200)
+        dispatcher.scheduler.runCurrent()
+
+        val skillState = viewModel.uiState.value
+        assertTrue(skillState.isSkillAutocompleteVisible)
+        viewModel.selectSkillAutocomplete(skillState.composerSkillAutocompleteItems.single())
+
+        val selectedSkillState = viewModel.uiState.value
+        assertEquals("Use \$frontend-design ", selectedSkillState.composerText)
+        assertEquals(1, selectedSkillState.composerMentionedSkillsByThread["thread-1"]?.size)
+
+        viewModel.updateComposerText("/sub")
+        dispatcher.scheduler.runCurrent()
+
+        val slashState = viewModel.uiState.value
+        assertTrue(slashState.isSlashCommandAutocompleteVisible)
+        assertEquals(listOf(ComposerSlashCommand.SUBAGENTS), slashState.composerSlashCommandItems)
+
+        viewModel.selectSlashCommand(ComposerSlashCommand.SUBAGENTS)
+
+        val selectedSlashState = viewModel.uiState.value
+        assertTrue(selectedSlashState.isComposerSubagentsEnabled)
+        assertEquals("", selectedSlashState.composerText)
+        assertFalse(selectedSlashState.isSlashCommandAutocompleteVisible)
+    }
+
+    @Test
+    fun sendMessage_buildsCanonicalFilePayloadAndStructuredSkillMentions() = runTest(dispatcher) {
+        val repository = ComposerRepository().apply {
+            fuzzyMatches = listOf(
+                FuzzyFileMatch(
+                    root = "C:\\Projects\\Androdex",
+                    path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
+                    fileName = "MainViewModel.kt",
+                )
+            )
+            skills = listOf(
+                SkillMetadata(
+                    name = "frontend-design",
+                    description = "Build polished UI",
+                    path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Inspect @Ma")
+        dispatcher.scheduler.advanceTimeBy(200)
+        dispatcher.scheduler.runCurrent()
+        viewModel.selectFileAutocomplete(viewModel.uiState.value.composerFileAutocompleteItems.single())
+        viewModel.updateComposerText(viewModel.uiState.value.composerText + "with \$fr")
+        dispatcher.scheduler.advanceTimeBy(200)
+        dispatcher.scheduler.runCurrent()
+        viewModel.selectSkillAutocomplete(viewModel.uiState.value.composerSkillAutocompleteItems.single())
+
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf("thread-1:Inspect @android/app/src/main/java/io/androdex/android/MainViewModel.kt with \$frontend-design"),
+            repository.startedTurns,
+        )
+        assertEquals(
+            listOf(
+                listOf(
+                    TurnSkillMention(
+                        id = "frontend-design",
+                        name = "frontend-design",
+                        path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
+                    )
+                )
+            ),
+            repository.startedTurnSkillMentions,
+        )
+    }
+}
+
+private class ComposerRepository : AndrodexRepositoryContract {
+    private val updatesFlow = MutableSharedFlow<ClientUpdate>()
+
+    var fuzzyMatches: List<FuzzyFileMatch> = emptyList()
+    var skills: List<SkillMetadata> = emptyList()
+    val startedTurns = mutableListOf<String>()
+    val startedTurnSkillMentions = mutableListOf<List<TurnSkillMention>>()
+
+    override val updates: SharedFlow<ClientUpdate> = updatesFlow
+
+    suspend fun emit(update: ClientUpdate) {
+        updatesFlow.emit(update)
+    }
+
+    override fun hasSavedPairing(): Boolean = false
+
+    override fun currentFingerprint(): String? = null
+
+    override fun startupNotice(): String? = null
+
+    override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
+
+    override suspend fun reconnectSaved() = Unit
+
+    override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
+
+    override suspend fun refreshThreads(): List<ThreadSummary> = emptyList()
+
+    override suspend fun startThread(preferredProjectPath: String?): ThreadSummary {
+        return ThreadSummary("thread-created", "Conversation", null, preferredProjectPath, null, null)
+    }
+
+    override suspend fun loadThread(threadId: String): ThreadLoadResult {
+        return ThreadLoadResult(
+            thread = null,
+            messages = emptyList(),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = null,
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+    }
+
+    override suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
+        return ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = null,
+            latestTurnTerminalState = null,
+            shouldAssumeRunningFromLatestTurn = false,
+        )
+    }
+
+    override suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String?,
+    ): List<FuzzyFileMatch> = fuzzyMatches
+
+    override suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> = skills
+
+    override suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        skillMentions: List<TurnSkillMention>,
+        collaborationMode: CollaborationModeKind?,
+    ) {
+        startedTurns += "$threadId:$userInput"
+        startedTurnSkillMentions += skillMentions
+    }
+
+    override suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        skillMentions: List<TurnSkillMention>,
+        collaborationMode: CollaborationModeKind?,
+    ) = Unit
+
+    override suspend fun interruptTurn(threadId: String, turnId: String) = Unit
+
+    override suspend fun loadRuntimeConfig() = Unit
+
+    override suspend fun setSelectedModelId(modelId: String?) = Unit
+
+    override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
+
+    override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) = Unit
+
+    override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
+        return WorkspaceRecentState(activeCwd = "C:\\Projects\\Androdex", recentWorkspaces = emptyList())
+    }
+
+    override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
+        return WorkspaceBrowseResult(
+            requestedPath = path,
+            parentPath = null,
+            entries = emptyList(),
+            rootEntries = emptyList(),
+            activeCwd = "C:\\Projects\\Androdex",
+            recentWorkspaces = emptyList(),
+        )
+    }
+
+    override suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus {
+        return WorkspaceActivationStatus(
+            hostId = null,
+            macDeviceId = null,
+            relayUrl = null,
+            relayStatus = null,
+            currentCwd = cwd,
+            workspaceActive = true,
+            hasTrustedPhone = true,
+        )
+    }
+}
