@@ -52,6 +52,7 @@ Androdex does **not** run Codex on the phone itself.
 - reconnect-safe rollout mirroring for desktop-started runs reopened on Android
 - Stop-button recovery that falls back to `thread/read` when a live turn has not published a usable `turnId`
 - queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
+- Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android
@@ -126,7 +127,7 @@ Use this after host-side changes to make sure Windows and macOS still behave the
 2. Run `androdex up`, choose a workspace, and confirm the host-local Codex session opens in that project.
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
-5. While a run is active on Android, confirm `Stop`, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
+5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
 6. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands

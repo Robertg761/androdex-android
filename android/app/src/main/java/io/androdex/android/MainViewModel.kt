@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
@@ -42,6 +43,8 @@ data class AndrodexUiState(
     val failedThreadIds: Set<String> = emptySet(),
     val composerText: String = "",
     val composerDraftsByThread: Map<String, String> = emptyMap(),
+    val composerPlanModeByThread: Set<String> = emptySet(),
+    val isComposerPlanMode: Boolean = false,
     val queuedDraftStateByThread: Map<String, ThreadQueuedDraftState> = emptyMap(),
     val queueFlushingThreadIds: Set<String> = emptySet(),
     val isSendingMessage: Boolean = false,
@@ -124,6 +127,16 @@ class MainViewModel(
         }
     }
 
+    fun updateComposerPlanMode(enabled: Boolean) {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            current.copy(
+                composerPlanModeByThread = current.composerPlanModeByThread.updatedPlanMode(threadId, enabled),
+                isComposerPlanMode = enabled,
+            )
+        }
+    }
+
     fun pauseSelectedThreadQueue() {
         val threadId = uiStateFlow.value.selectedThreadId ?: return
         updateQueuedDraftState(threadId) { current ->
@@ -165,9 +178,15 @@ class MainViewModel(
         val draft = queueState.drafts[draftIndex]
         val nextDrafts = queueState.drafts.toMutableList().apply { removeAt(draftIndex) }
         uiStateFlow.update { state ->
+            val nextPlanModes = state.composerPlanModeByThread.updatedPlanMode(
+                threadId = threadId,
+                enabled = draft.collaborationMode == CollaborationModeKind.PLAN,
+            )
             state.copy(
                 composerText = draft.text,
                 composerDraftsByThread = state.composerDraftsByThread + (threadId to draft.text),
+                composerPlanModeByThread = nextPlanModes,
+                isComposerPlanMode = threadId in nextPlanModes,
                 queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
                     threadId = threadId,
                     queueState = queueState.copy(drafts = nextDrafts).normalized(),
@@ -257,6 +276,11 @@ class MainViewModel(
         if (input.isEmpty() || current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy) {
             return
         }
+        val collaborationMode = if (current.isComposerPlanMode) {
+            CollaborationModeKind.PLAN
+        } else {
+            null
+        }
 
         val threadId = current.selectedThreadId
         if (threadId != null && current.isThreadRunning(threadId)) {
@@ -264,6 +288,7 @@ class MainViewModel(
                 id = UUID.randomUUID().toString(),
                 text = input,
                 createdAtEpochMs = System.currentTimeMillis(),
+                collaborationMode = collaborationMode,
             )
             uiStateFlow.update { state ->
                 val existingQueueState = state.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
@@ -290,7 +315,11 @@ class MainViewModel(
         }
         viewModelScope.launch {
             try {
-                service.sendMessage(input, preferredThreadId = threadId)
+                service.sendMessage(
+                    input = input,
+                    preferredThreadId = threadId,
+                    collaborationMode = collaborationMode,
+                )
             } catch (error: Throwable) {
                 uiStateFlow.update {
                     it.copy(
@@ -443,7 +472,11 @@ class MainViewModel(
 
         viewModelScope.launch {
             try {
-                service.sendMessage(draftToSend.text, preferredThreadId = threadId)
+                service.sendMessage(
+                    input = draftToSend.text,
+                    preferredThreadId = threadId,
+                    collaborationMode = draftToSend.collaborationMode,
+                )
             } catch (error: Throwable) {
                 val queueMessage = error.message ?: "Failed to send the queued follow-up."
                 uiStateFlow.update { current ->
@@ -510,6 +543,9 @@ private fun applyServiceState(
     val selectedThreadComposerText = serviceState.selectedThreadId
         ?.let { current.composerDraftsByThread[it] }
         .orEmpty()
+    val selectedThreadPlanMode = serviceState.selectedThreadId
+        ?.let { it in current.composerPlanModeByThread }
+        ?: false
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         defaultRelayUrl = serviceState.defaultRelayUrl,
@@ -526,6 +562,8 @@ private fun applyServiceState(
         readyThreadIds = serviceState.readyThreadIds,
         failedThreadIds = serviceState.failedThreadIds,
         composerText = selectedThreadComposerText,
+        composerPlanModeByThread = current.composerPlanModeByThread,
+        isComposerPlanMode = selectedThreadPlanMode,
         isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,
@@ -563,5 +601,16 @@ private fun Map<String, ThreadQueuedDraftState>.updatedQueueEntry(
         this - threadId
     } else {
         this + (threadId to queueState)
+    }
+}
+
+private fun Set<String>.updatedPlanMode(
+    threadId: String,
+    enabled: Boolean,
+): Set<String> {
+    return if (enabled) {
+        this + threadId
+    } else {
+        this - threadId
     }
 }

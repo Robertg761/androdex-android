@@ -118,6 +118,8 @@ internal data class ComposerUiState(
     val text: String,
     val inputEnabled: Boolean,
     val submitMode: ComposerSubmitMode,
+    val isPlanModeEnabled: Boolean,
+    val planModeEnabled: Boolean,
     val isSubmitting: Boolean,
     val submitEnabled: Boolean,
     val showStop: Boolean,
@@ -289,6 +291,7 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
+    val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
@@ -313,6 +316,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             text = composerText,
             inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND,
+            isPlanModeEnabled = isPlanModeEnabled,
+            planModeEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             isSubmitting = isSendingMessage,
             submitEnabled = composerText.isNotBlank() && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             showStop = isThreadRunning,

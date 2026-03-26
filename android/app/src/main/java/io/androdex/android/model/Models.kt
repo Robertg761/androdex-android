@@ -216,6 +216,12 @@ data class ModelOption(
         get() = id.ifBlank { model }
 }
 
+enum class CollaborationModeKind(
+    val wireValue: String,
+) {
+    PLAN("plan"),
+}
+
 enum class ConversationRole {
     USER,
     ASSISTANT,
@@ -258,6 +264,7 @@ data class ConversationMessage(
     val status: String? = null,
     val diffText: String? = null,
     val command: String? = null,
+    val planExplanation: String? = null,
     val planSteps: List<PlanStep>? = null,
 )
 
@@ -265,6 +272,7 @@ data class QueuedTurnDraft(
     val id: String,
     val text: String,
     val createdAtEpochMs: Long,
+    val collaborationMode: CollaborationModeKind? = null,
 )
 
 enum class QueuePauseState {
@@ -334,6 +342,29 @@ sealed interface ClientUpdate {
         val models: List<ModelOption>,
         val selectedModelId: String?,
         val selectedReasoningEffort: String?,
+    ) : ClientUpdate
+
+    data class PlanUpdated(
+        val threadId: String?,
+        val turnId: String?,
+        val explanation: String?,
+        val steps: List<PlanStep>,
+    ) : ClientUpdate
+
+    data class PlanDelta(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val delta: String,
+    ) : ClientUpdate
+
+    data class PlanCompleted(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val text: String,
+        val explanation: String?,
+        val steps: List<PlanStep>?,
     ) : ClientUpdate
 
     data class AssistantDelta(

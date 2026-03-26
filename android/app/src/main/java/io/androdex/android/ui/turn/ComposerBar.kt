@@ -1,6 +1,7 @@
 package io.androdex.android.ui.turn
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.FilledIconButton
@@ -31,6 +33,7 @@ import io.androdex.android.ui.state.ComposerSubmitMode
 internal fun ComposerBar(
     state: ComposerUiState,
     onTextChange: (String) -> Unit,
+    onPlanModeChanged: (Boolean) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -38,107 +41,134 @@ internal fun ComposerBar(
         color = MaterialTheme.colorScheme.surfaceContainer,
         tonalElevation = 2.dp,
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextField(
-                value = state.text,
-                onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        if (state.submitMode == ComposerSubmitMode.QUEUE) {
-                            "Queue a follow-up for when this run finishes"
-                        } else {
-                            "Ask Codex..."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                },
-                enabled = state.inputEnabled,
-                shape = RoundedCornerShape(24.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                ),
-                textStyle = MaterialTheme.typography.bodyLarge,
-                maxLines = 5,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                FilterChip(
+                    selected = state.isPlanModeEnabled,
+                    onClick = { onPlanModeChanged(!state.isPlanModeEnabled) },
+                    enabled = state.planModeEnabled,
+                    label = {
+                        Text(if (state.isPlanModeEnabled) "Plan mode on" else "Plan mode")
+                    },
+                )
+            }
 
-            if (state.showStop) {
-                OutlinedButton(
-                    onClick = onStop,
-                    enabled = state.stopEnabled,
-                    shape = RoundedCornerShape(24.dp),
-                ) {
-                    if (state.isStopping) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text("Stop")
-                    }
-                }
-
-                Button(
-                    onClick = onSend,
-                    enabled = state.submitEnabled,
-                    shape = RoundedCornerShape(24.dp),
-                ) {
-                    if (state.isSubmitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextField(
+                    value = state.text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = {
                         Text(
-                            if (state.submitMode == ComposerSubmitMode.QUEUE) {
-                                if (state.queuedCount > 0) "Queue (${state.queuedCount + 1})" else "Queue"
+                            if (state.isPlanModeEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
+                                "Queue a plan request for when this run finishes"
+                            } else if (state.isPlanModeEnabled) {
+                                "Ask Codex to make a plan before executing"
+                            } else if (state.submitMode == ComposerSubmitMode.QUEUE) {
+                                "Queue a follow-up for when this run finishes"
                             } else {
-                                "Send"
-                            }
+                                "Ask Codex..."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
                         )
-                    }
-                }
-            } else {
-                FilledIconButton(
-                    onClick = onSend,
-                    enabled = state.submitEnabled,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (state.submitEnabled) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerHighest
-                        },
-                        contentColor = if (state.submitEnabled) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.outline
-                        },
+                    },
+                    enabled = state.inputEnabled,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
                     ),
-                    modifier = Modifier.size(44.dp),
-                ) {
-                    if (state.isSubmitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            modifier = Modifier.size(20.dp),
-                        )
+                    textStyle = MaterialTheme.typography.bodyLarge,
+                    maxLines = 5,
+                )
+
+                if (state.showStop) {
+                    OutlinedButton(
+                        onClick = onStop,
+                        enabled = state.stopEnabled,
+                        shape = RoundedCornerShape(24.dp),
+                    ) {
+                        if (state.isStopping) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Text("Stop")
+                        }
+                    }
+
+                    Button(
+                        onClick = onSend,
+                        enabled = state.submitEnabled,
+                        shape = RoundedCornerShape(24.dp),
+                    ) {
+                        if (state.isSubmitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Text(
+                                if (state.submitMode == ComposerSubmitMode.QUEUE) {
+                                    if (state.isPlanModeEnabled) {
+                                        if (state.queuedCount > 0) "Queue Plan (${state.queuedCount + 1})" else "Queue Plan"
+                                    } else {
+                                        if (state.queuedCount > 0) "Queue (${state.queuedCount + 1})" else "Queue"
+                                    }
+                                } else {
+                                    if (state.isPlanModeEnabled) "Plan" else "Send"
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = state.submitEnabled,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (state.submitEnabled) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHighest
+                            },
+                            contentColor = if (state.submitEnabled) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            },
+                        ),
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        if (state.isSubmitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
             }

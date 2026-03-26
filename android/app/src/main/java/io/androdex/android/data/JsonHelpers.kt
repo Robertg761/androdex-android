@@ -252,17 +252,18 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                 }
 
                 "plan" -> {
-                    val planData = decodePlanStructured(itemObject)
+                    val planData = decodePlanContent(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.SYSTEM,
                         kind = ConversationKind.PLAN,
-                        text = planData.first,
+                        text = planData.text,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
-                        planSteps = planData.second,
+                        planExplanation = planData.explanation,
+                        planSteps = planData.steps,
                     )
                 }
             }
@@ -430,6 +431,12 @@ private data class FileChangeData(
     val displayText: String,
 )
 
+internal data class DecodedPlanContent(
+    val text: String,
+    val explanation: String?,
+    val steps: List<PlanStep>?,
+)
+
 private fun decodeFileChangeStructured(itemObject: JSONObject): FileChangeData {
     val status = itemObject.stringOrNull("status") ?: "completed"
     val path = itemObject.stringOrNull("path", "file", "file_path", "filePath")
@@ -454,21 +461,38 @@ private fun decodeFileChangeStructured(itemObject: JSONObject): FileChangeData {
     )
 }
 
-private fun decodePlanStructured(itemObject: JSONObject): Pair<String, List<PlanStep>?> {
+internal fun decodePlanContent(itemObject: JSONObject): DecodedPlanContent {
+    val explanation = itemObject.stringOrNull("explanation", "summary", "message", "text")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && it != "Planning..." }
     val steps = itemObject.arrayOrNull("steps", "items")
     if (steps != null && steps.length() > 0) {
-        val planSteps = mutableListOf<PlanStep>()
-        val parts = mutableListOf<String>()
-        for (index in 0 until steps.length()) {
-            val step = steps.optJSONObject(index) ?: continue
-            val text = step.stringOrNull("step", "title", "text") ?: continue
-            val status = step.stringOrNull("status")
-            planSteps += PlanStep(text = text, status = status)
-            parts += if (status.isNullOrBlank()) text else "[$status] $text"
-        }
-        if (parts.isNotEmpty()) {
-            return parts.joinToString("\n") to planSteps
+        val planSteps = decodePlanSteps(steps)
+        if (planSteps.isNotEmpty()) {
+            val fallbackText = planSteps.joinToString("\n") { step ->
+                if (step.status.isNullOrBlank()) step.text else "[${step.status}] ${step.text}"
+            }
+            return DecodedPlanContent(
+                text = explanation ?: fallbackText,
+                explanation = explanation,
+                steps = planSteps,
+            )
         }
     }
-    return (itemObject.stringOrNull("summary", "message", "text") ?: "Plan updated") to null
+    return DecodedPlanContent(
+        text = explanation ?: "Plan updated",
+        explanation = explanation,
+        steps = null,
+    )
+}
+
+internal fun decodePlanSteps(items: JSONArray): List<PlanStep> {
+    val planSteps = mutableListOf<PlanStep>()
+    for (index in 0 until items.length()) {
+        val step = items.optJSONObject(index) ?: continue
+        val text = step.stringOrNull("step", "title", "text") ?: continue
+        val status = step.stringOrNull("status")
+        planSteps += PlanStep(text = text, status = status)
+    }
+    return planSteps
 }

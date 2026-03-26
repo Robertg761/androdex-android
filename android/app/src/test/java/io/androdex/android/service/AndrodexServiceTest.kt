@@ -2,10 +2,12 @@ package io.androdex.android.service
 
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
@@ -85,6 +87,53 @@ class AndrodexServiceTest {
         val messages = service.state.value.timelineByThread["thread-1"].orEmpty()
         assertEquals(listOf("item-1", "item-2"), messages.map { it.itemId })
         assertEquals(listOf("First", "Second"), messages.map { it.text })
+    }
+
+    @Test
+    fun planUpdates_mergeStreamingAndStructuredStateIntoSingleRow() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.PlanUpdated(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                explanation = "Break the work into safe steps.",
+                steps = listOf(
+                    PlanStep("Inspect the send flow", "completed"),
+                    PlanStep("Wire collaboration payloads", "in_progress"),
+                ),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.PlanDelta(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "plan-1",
+                delta = "Planning...",
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.PlanCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "plan-1",
+                text = "Break the work into safe steps.",
+                explanation = "Break the work into safe steps.",
+                steps = listOf(
+                    PlanStep("Inspect the send flow", "completed"),
+                    PlanStep("Wire collaboration payloads", "completed"),
+                ),
+            )
+        )
+
+        val planMessages = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.PLAN }
+        assertEquals(1, planMessages.size)
+        val structuredPlan = planMessages.single()
+        assertEquals("Break the work into safe steps.", structuredPlan.planExplanation)
+        assertEquals(2, structuredPlan.planSteps?.size)
+        assertEquals("completed", structuredPlan.planSteps?.last()?.status)
     }
 
     @Test
@@ -324,6 +373,19 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun sendMessage_passesPlanModeToRepository() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.sendMessage("Make a plan", collaborationMode = CollaborationModeKind.PLAN)
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-created:Make a plan"), repository.startedTurns)
+        assertEquals(listOf(CollaborationModeKind.PLAN), repository.startedTurnModes)
+    }
+
+    @Test
     fun openThread_activatesDifferentWorkspaceBeforeLoadingThread() = runTest {
         val repository = FakeRepository().apply {
             recentState = WorkspaceRecentState(
@@ -416,7 +478,9 @@ private class FakeRepository : AndrodexRepositoryContract {
     )
     val readThreadRunSnapshotIds = mutableListOf<String>()
     val startedTurns = mutableListOf<String>()
+    val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val steeredTurns = mutableListOf<String>()
+    val steeredTurnModes = mutableListOf<CollaborationModeKind?>()
     val interruptedTurns = mutableListOf<String>()
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
@@ -429,12 +493,23 @@ private class FakeRepository : AndrodexRepositoryContract {
         return runSnapshot
     }
 
-    override suspend fun startTurn(threadId: String, userInput: String) {
+    override suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) {
         startedTurns += "$threadId:$userInput"
+        startedTurnModes += collaborationMode
     }
 
-    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
+    override suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) {
         steeredTurns += "$threadId:$expectedTurnId:$userInput"
+        steeredTurnModes += collaborationMode
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {

@@ -96,6 +96,7 @@ class AndrodexFeatureStateTest {
             selectedThreadId = "thread-9",
             selectedThreadTitle = "Conversation",
             composerText = "Please continue",
+            composerPlanModeByThread = setOf("thread-9"),
             protectedRunningFallbackThreadIds = setOf("thread-9"),
             queuedDraftStateByThread = mapOf(
                 "thread-9" to ThreadQueuedDraftState(
@@ -143,6 +144,8 @@ class AndrodexFeatureStateTest {
 
         assertEquals("thread-9", route.state.threadId)
         assertEquals(ComposerSubmitMode.QUEUE, route.state.composer.submitMode)
+        assertTrue(route.state.composer.isPlanModeEnabled)
+        assertTrue(route.state.composer.planModeEnabled)
         assertTrue(route.state.composer.submitEnabled)
         assertTrue(route.state.composer.showStop)
         assertEquals(1, route.state.composer.queuedCount)

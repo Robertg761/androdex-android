@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.ui.shared.AgentActivityBanner
@@ -83,6 +84,7 @@ internal fun ThreadTimelineScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onComposerChanged: (String) -> Unit,
+    onPlanModeChanged: (Boolean) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -209,6 +211,7 @@ internal fun ThreadTimelineScreen(
             ComposerBar(
                 state = state.composer,
                 onTextChange = onComposerChanged,
+                onPlanModeChanged = onPlanModeChanged,
                 onSend = onSend,
                 onStop = onStop,
             )
@@ -313,6 +316,20 @@ private fun QueuedDraftsCard(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
+                        if (draft.collaborationMode == CollaborationModeKind.PLAN) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                shape = RoundedCornerShape(999.dp),
+                            ) {
+                                Text(
+                                    text = "PLAN",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
                         Text(
                             text = draft.text,
                             style = MaterialTheme.typography.bodyMedium,
@@ -737,40 +754,89 @@ private fun CommandBubble(message: ConversationMessage) {
 
 @Composable
 private fun PlanBubble(message: ConversationMessage) {
+    val planSteps = message.planSteps.orEmpty()
+    val completedCount = planSteps.count { it.isCompleted() }
+    val activeCount = planSteps.count { it.isInProgress() }
+    val planStatus = when {
+        planSteps.isNotEmpty() && completedCount == planSteps.size -> "Completed"
+        activeCount > 0 -> "In Progress"
+        planSteps.isNotEmpty() -> "Pending"
+        else -> "Updated"
+    }
+    val summary = message.planExplanation
+        ?.takeIf { it.isNotBlank() }
+        ?: message.text.takeIf { it.isNotBlank() && it != "Planning..." }
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(999.dp),
                 ) {
                     Text(
                         text = "PLAN",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+
+                Text(
+                    text = planStatus,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                )
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                if (planSteps.isNotEmpty()) {
+                    Text(
+                        text = "$completedCount/${planSteps.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            if (planSteps.isNotEmpty()) {
+                LinearProgressIndicator(
+                    progress = { completedCount.toFloat() / planSteps.size.coerceAtLeast(1).toFloat() },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                )
+            }
 
-            if (message.planSteps != null) {
-                message.planSteps.forEachIndexed { index, step ->
+            summary?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+
+            if (planSteps.isNotEmpty()) {
+                planSteps.forEachIndexed { index, step ->
                     PlanStepRow(index = index + 1, step = step)
-                    if (index < message.planSteps.lastIndex) {
+                    if (index < planSteps.lastIndex) {
                         Spacer(modifier = Modifier.height(6.dp))
                     }
                 }
-            } else {
+            } else if (summary == null) {
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
@@ -786,16 +852,16 @@ private fun PlanStepRow(
     index: Int,
     step: PlanStep,
 ) {
-    val isComplete = step.status?.lowercase() in listOf("completed", "done", "complete")
-    val isActive = step.status?.lowercase() in listOf("in_progress", "active", "running")
+    val isComplete = step.isCompleted()
+    val isActive = step.isInProgress()
     val stepColor = when {
-        isComplete -> Color(0xFF34D399)
+        isComplete -> MaterialTheme.colorScheme.primary
         isActive -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val indicator = when {
-        isComplete -> "+"
-        isActive -> ">"
+        isComplete -> "✓"
+        isActive -> "•"
         else -> "$index"
     }
 
@@ -833,13 +899,37 @@ private fun PlanStepRow(
             )
             step.status?.takeIf { it.isNotBlank() && !isComplete }?.let {
                 Text(
-                    text = it.replaceFirstChar(Char::uppercase),
+                    text = it.normalizedPlanStatusLabel(),
                     style = MaterialTheme.typography.labelSmall,
                     color = stepColor,
                 )
             }
         }
     }
+}
+
+private fun PlanStep.isCompleted(): Boolean {
+    return status?.trim()?.lowercase() in setOf("completed", "done", "complete")
+}
+
+private fun PlanStep.isInProgress(): Boolean {
+    return status?.trim()?.lowercase() in setOf("in_progress", "active", "running")
+}
+
+private fun String.normalizedPlanStatusLabel(): String {
+    return trim()
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+            token.replaceFirstChar { char ->
+                if (char.isLowerCase()) {
+                    char.titlecase()
+                } else {
+                    char.toString()
+                }
+            }
+        }
 }
 
 @Composable

@@ -3,12 +3,14 @@ package io.androdex.android.service
 import io.androdex.android.AppEnvironment
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.TurnTerminalState
@@ -190,7 +192,11 @@ class AndrodexService(
         loadWorkspaceState()
     }
 
-    suspend fun sendMessage(input: String, preferredThreadId: String? = stateFlow.value.selectedThreadId) {
+    suspend fun sendMessage(
+        input: String,
+        preferredThreadId: String? = stateFlow.value.selectedThreadId,
+        collaborationMode: CollaborationModeKind? = null,
+    ) {
         val trimmedInput = input.trim()
         if (trimmedInput.isEmpty()) {
             return
@@ -215,7 +221,7 @@ class AndrodexService(
             isThreadConsideredRunning(threadId) -> {
                 when (val resolution = resolveActiveTurn(threadId)) {
                     is ActiveTurnResolution.Resolved -> {
-                        repository.steerTurn(threadId, resolution.turnId, trimmedInput)
+                        repository.steerTurn(threadId, resolution.turnId, trimmedInput, collaborationMode)
                         markThreadRunning(threadId, resolution.turnId)
                     }
 
@@ -226,14 +232,14 @@ class AndrodexService(
                     }
 
                     ActiveTurnResolution.NoActiveTurn -> {
-                        repository.startTurn(threadId, trimmedInput)
+                        repository.startTurn(threadId, trimmedInput, collaborationMode)
                         markThreadRunning(threadId = threadId, turnId = null)
                     }
                 }
             }
 
             else -> {
-                repository.startTurn(threadId, trimmedInput)
+                repository.startTurn(threadId, trimmedInput, collaborationMode)
                 markThreadRunning(threadId = threadId, turnId = null)
             }
         }
@@ -481,6 +487,71 @@ class AndrodexService(
                         availableModels = update.models,
                         selectedModelId = update.selectedModelId,
                         selectedReasoningEffort = update.selectedReasoningEffort,
+                    )
+                }
+            }
+
+            is ClientUpdate.PlanUpdated -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, itemId = null) ?: return
+                if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateThreadMessages(threadId) { messages ->
+                    upsertPlanMetadata(
+                        messages = messages,
+                        threadId = threadId,
+                        turnId = update.turnId,
+                        itemId = null,
+                        explanation = update.explanation,
+                        steps = update.steps,
+                        isStreaming = isTurnActive(threadId, update.turnId),
+                    )
+                }
+            }
+
+            is ClientUpdate.PlanDelta -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, update.itemId) ?: return
+                if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateThreadMessages(threadId) { messages ->
+                    applyStreamingItemDelta(
+                        messages = messages,
+                        threadId = threadId,
+                        role = ConversationRole.SYSTEM,
+                        kind = ConversationKind.PLAN,
+                        turnId = update.turnId,
+                        itemId = null,
+                        delta = update.delta,
+                        isTurnActive = isTurnActive(threadId, update.turnId),
+                    )
+                }
+            }
+
+            is ClientUpdate.PlanCompleted -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, update.itemId) ?: return
+                if (!update.turnId.isNullOrBlank()) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateThreadMessages(threadId) { messages ->
+                    val updatedMessages = applyStreamingItemCompletion(
+                        messages = messages,
+                        threadId = threadId,
+                        role = ConversationRole.SYSTEM,
+                        kind = ConversationKind.PLAN,
+                        turnId = update.turnId,
+                        itemId = null,
+                        text = update.text,
+                        allowCreateWhenInactive = true,
+                    )
+                    upsertPlanMetadata(
+                        messages = updatedMessages,
+                        threadId = threadId,
+                        turnId = update.turnId,
+                        itemId = null,
+                        explanation = update.explanation,
+                        steps = update.steps,
+                        isStreaming = false,
                     )
                 }
             }
@@ -1064,6 +1135,57 @@ private fun applyStreamingItemCompletion(
         return updated
     }
     return if (allowCreateWhenInactive) messages + incoming else messages
+}
+
+private fun upsertPlanMetadata(
+    messages: List<ConversationMessage>,
+    threadId: String,
+    turnId: String?,
+    itemId: String?,
+    explanation: String?,
+    steps: List<PlanStep>?,
+    isStreaming: Boolean,
+): List<ConversationMessage> {
+    if (explanation.isNullOrBlank() && steps.isNullOrEmpty()) {
+        return messages
+    }
+
+    val incoming = ConversationMessage(
+        id = itemId ?: UUID.randomUUID().toString(),
+        threadId = threadId,
+        role = ConversationRole.SYSTEM,
+        kind = ConversationKind.PLAN,
+        text = explanation?.takeIf { it.isNotBlank() } ?: "Planning...",
+        createdAtEpochMs = System.currentTimeMillis(),
+        turnId = turnId,
+        itemId = itemId,
+        isStreaming = isStreaming,
+        planExplanation = explanation?.takeIf { it.isNotBlank() },
+        planSteps = steps,
+    )
+    val existingIndex = messages.indexOfLast { message ->
+        message.role == ConversationRole.SYSTEM
+            && message.kind == ConversationKind.PLAN
+            && messagesRepresentSameItem(message, incoming)
+    }
+
+    if (existingIndex < 0) {
+        return messages + incoming
+    }
+
+    val updated = messages.toMutableList()
+    val existing = updated[existingIndex]
+    updated[existingIndex] = mergeMatchedMessage(
+        existing = existing,
+        incoming = incoming,
+        keepStreamingRows = true,
+    ).copy(
+        text = existing.text.ifBlank { incoming.text },
+        planExplanation = incoming.planExplanation ?: existing.planExplanation,
+        planSteps = incoming.planSteps ?: existing.planSteps,
+        isStreaming = isStreaming || existing.isStreaming,
+    )
+    return updated
 }
 
 private fun mergeThreadMessages(

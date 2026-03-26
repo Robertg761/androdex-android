@@ -21,10 +21,12 @@ import io.androdex.android.crypto.sha256
 import io.androdex.android.crypto.signEd25519
 import io.androdex.android.crypto.verifyEd25519
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
@@ -262,38 +264,62 @@ class AndrodexClient(
         return decodeThreadRunSnapshot(threadObject)
     }
 
-    suspend fun startTurn(threadId: String, userInput: String) {
+    suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind? = null,
+    ) {
         resumeThread(threadId)
-        val params = JSONObject()
-            .put("threadId", threadId)
-            .put(
-                "input",
-                JSONArray().put(
-                    JSONObject()
-                        .put("type", "text")
-                        .put("text", userInput.trim())
-                )
+        var effectiveCollaborationMode = collaborationMode
+        while (true) {
+            val params = buildTurnStartParams(
+                threadId = threadId,
+                userInput = userInput,
+                model = runtimeModelIdentifierForTurn(),
+                reasoningEffort = selectedReasoningEffortForSelectedModel(),
+                collaborationMode = effectiveCollaborationMode,
             )
-        runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
-        selectedReasoningEffortForSelectedModel()?.let { params.put("effort", it) }
-        sendRequest("turn/start", params)
+            try {
+                sendRequest("turn/start", params)
+                return
+            } catch (error: RpcException) {
+                if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
+                    effectiveCollaborationMode = null
+                    continue
+                }
+                throw error
+            }
+        }
     }
 
-    suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
+    suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind? = null,
+    ) {
         resumeThread(threadId)
-        val params = JSONObject()
-            .put("threadId", threadId)
-            .put("expectedTurnId", expectedTurnId)
-            .put(
-                "input",
-                JSONArray().put(
-                    JSONObject()
-                        .put("type", "text")
-                        .put("text", userInput.trim())
-                )
+        var effectiveCollaborationMode = collaborationMode
+        while (true) {
+            val params = buildTurnSteerParams(
+                threadId = threadId,
+                expectedTurnId = expectedTurnId,
+                userInput = userInput,
+                model = runtimeModelIdentifierForTurn(),
+                reasoningEffort = selectedReasoningEffortForSelectedModel(),
+                collaborationMode = effectiveCollaborationMode,
             )
-        selectedReasoningEffortForSelectedModel()?.let { params.put("effort", it) }
-        sendRequest("turn/steer", params)
+            try {
+                sendRequest("turn/steer", params)
+                return
+            } catch (error: RpcException) {
+                if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
+                    effectiveCollaborationMode = null
+                    continue
+                }
+                throw error
+            }
+        }
     }
 
     suspend fun interruptTurn(threadId: String, turnId: String) {
@@ -879,12 +905,39 @@ class AndrodexClient(
                 )
             }
 
+            "turn/plan/updated" -> {
+                val steps = extractPlanSteps(params)
+                if (steps.isEmpty()) {
+                    return
+                }
+                updatesFlow.emit(
+                    ClientUpdate.PlanUpdated(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                        explanation = extractPlanExplanation(params),
+                        steps = steps,
+                    )
+                )
+            }
+
             "item/agentMessage/delta",
             "codex/event/agent_message_content_delta",
             "codex/event/agent_message_delta" -> {
                 val delta = extractAssistantDeltaText(params) ?: return
                 updatesFlow.emit(
                     ClientUpdate.AssistantDelta(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                        itemId = extractItemId(params),
+                        delta = delta,
+                    )
+                )
+            }
+
+            "item/plan/delta" -> {
+                val delta = extractPlanDeltaText(params) ?: return
+                updatesFlow.emit(
+                    ClientUpdate.PlanDelta(
                         threadId = extractThreadId(params),
                         turnId = extractTurnId(params),
                         itemId = extractItemId(params),
@@ -913,6 +966,19 @@ class AndrodexClient(
                             turnId = extractTurnId(params),
                             itemId = extractItemId(params),
                             text = text,
+                        )
+                    )
+                    return
+                }
+                extractPlanCompletedContent(params)?.let { content ->
+                    updatesFlow.emit(
+                        ClientUpdate.PlanCompleted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            itemId = extractItemId(params),
+                            text = content.text,
+                            explanation = content.explanation,
+                            steps = content.steps,
                         )
                     )
                     return
@@ -1185,6 +1251,12 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
     }
 
+    private fun extractPlanDeltaText(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("delta")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
     private fun extractReasoningDeltaText(params: JSONObject?): String? {
         if (params == null) return null
         return params.stringOrNull("delta")
@@ -1216,6 +1288,31 @@ class AndrodexClient(
             return null
         }
         return decodeReasoningText(item)
+    }
+
+    private fun extractPlanCompletedContent(params: JSONObject?): DecodedPlanContent? {
+        if (params == null) return null
+        val item = params.objectOrNull("item")
+            ?: params.objectOrNull("msg", "event")?.optJSONObject("item")
+            ?: return null
+        if (normalizeItemType(item.optString("type")) != "plan") {
+            return null
+        }
+        return decodePlanContent(item)
+    }
+
+    private fun extractPlanExplanation(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("explanation")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("explanation")
+    }
+
+    private fun extractPlanSteps(params: JSONObject?): List<PlanStep> {
+        if (params == null) return emptyList()
+        val plan = params.optJSONArray("plan")
+            ?: params.objectOrNull("msg", "event")?.optJSONArray("plan")
+            ?: return emptyList()
+        return decodePlanSteps(plan)
     }
 
     private fun extractThreadStatus(params: JSONObject?): String? {
@@ -1448,6 +1545,168 @@ internal fun connectionUpdateForSocketClose(
             ConnectionStatus.DISCONNECTED,
             "Relay disconnected (code $code)."
         )
+    }
+}
+
+internal fun buildTurnInputPayloadSpec(userInput: String): List<Map<String, String>> {
+    return listOf(
+        mapOf(
+            "type" to "text",
+            "text" to userInput.trim(),
+        )
+    )
+}
+
+internal fun buildTurnInputPayload(userInput: String): JSONArray {
+    return buildTurnInputPayloadSpec(userInput).toJsonArray()
+}
+
+internal fun buildTurnStartParams(
+    threadId: String,
+    userInput: String,
+    model: String?,
+    reasoningEffort: String?,
+    collaborationMode: CollaborationModeKind?,
+): JSONObject {
+    return buildTurnStartPayloadSpec(
+        threadId = threadId,
+        userInput = userInput,
+        model = model,
+        reasoningEffort = reasoningEffort,
+        collaborationMode = collaborationMode,
+    ).toJsonObject()
+}
+
+internal fun buildTurnStartPayloadSpec(
+    threadId: String,
+    userInput: String,
+    model: String?,
+    reasoningEffort: String?,
+    collaborationMode: CollaborationModeKind?,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to threadId,
+        "input" to buildTurnInputPayloadSpec(userInput),
+    )
+    model?.let { params["model"] = it }
+    reasoningEffort?.let { params["effort"] = it }
+    buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.let { params["collaborationMode"] = it }
+    return params
+}
+
+internal fun buildTurnSteerParams(
+    threadId: String,
+    expectedTurnId: String,
+    userInput: String,
+    model: String?,
+    reasoningEffort: String?,
+    collaborationMode: CollaborationModeKind?,
+): JSONObject {
+    return buildTurnSteerPayloadSpec(
+        threadId = threadId,
+        expectedTurnId = expectedTurnId,
+        userInput = userInput,
+        model = model,
+        reasoningEffort = reasoningEffort,
+        collaborationMode = collaborationMode,
+    ).toJsonObject()
+}
+
+internal fun buildTurnSteerPayloadSpec(
+    threadId: String,
+    expectedTurnId: String,
+    userInput: String,
+    model: String?,
+    reasoningEffort: String?,
+    collaborationMode: CollaborationModeKind?,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to threadId,
+        "expectedTurnId" to expectedTurnId,
+        "input" to buildTurnInputPayloadSpec(userInput),
+    )
+    reasoningEffort?.let { params["effort"] = it }
+    buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.let { params["collaborationMode"] = it }
+    return params
+}
+
+internal fun buildCollaborationModePayload(
+    collaborationMode: CollaborationModeKind?,
+    model: String?,
+    reasoningEffort: String?,
+): JSONObject? {
+    return buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.toJsonObject()
+}
+
+internal fun buildCollaborationModePayloadSpec(
+    collaborationMode: CollaborationModeKind?,
+    model: String?,
+    reasoningEffort: String?,
+): Map<String, Any?>? {
+    if (collaborationMode == null) {
+        return null
+    }
+    val resolvedModel = model?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw IllegalStateException("Plan mode requires an available model before starting a plan turn.")
+    return linkedMapOf(
+        "mode" to collaborationMode.wireValue,
+        "settings" to linkedMapOf(
+            "model" to resolvedModel,
+            "reasoning_effort" to reasoningEffort,
+            "developer_instructions" to null,
+        )
+    )
+}
+
+internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
+        && !normalizedMessage.contains("experimentalapi")
+}
+
+private fun Map<String, Any?>.toJsonObject(): JSONObject {
+    val jsonObject = JSONObject()
+    entries.forEach { (key, value) ->
+        jsonObject.put(key, value.toJsonValue())
+    }
+    return jsonObject
+}
+
+private fun List<*>.toJsonArray(): JSONArray {
+    val jsonArray = JSONArray()
+    forEach { item ->
+        jsonArray.put(item.toJsonValue())
+    }
+    return jsonArray
+}
+
+private fun Any?.toJsonValue(): Any {
+    return when (this) {
+        null -> JSONObject.NULL
+        is Map<*, *> -> {
+            val normalizedMap = linkedMapOf<String, Any?>()
+            entries.forEach { (key, value) ->
+                if (key is String) {
+                    normalizedMap[key] = value
+                }
+            }
+            normalizedMap.toJsonObject()
+        }
+
+        is List<*> -> toJsonArray()
+        else -> this
     }
 }
 

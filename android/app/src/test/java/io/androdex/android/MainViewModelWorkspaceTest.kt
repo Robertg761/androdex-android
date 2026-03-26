@@ -2,6 +2,7 @@ package io.androdex.android
 
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
@@ -263,6 +264,40 @@ class MainViewModelWorkspaceTest {
     }
 
     @Test
+    fun planMode_queuesAndRestoresPerThreadMode() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        dispatcher.scheduler.runCurrent()
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerPlanMode(true)
+        viewModel.updateComposerText("Plan the cleanup")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        val queuedDraft = viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.single()
+        assertEquals(CollaborationModeKind.PLAN, queuedDraft?.collaborationMode)
+        assertTrue(viewModel.uiState.value.isComposerPlanMode)
+
+        viewModel.updateComposerPlanMode(false)
+        viewModel.restoreQueuedDraftToComposer(requireNotNull(queuedDraft).id)
+
+        assertEquals("Plan the cleanup", viewModel.uiState.value.composerText)
+        assertTrue(viewModel.uiState.value.isComposerPlanMode)
+    }
+
+    @Test
     fun failedQueueFlush_pausesAndPreservesOrderingUntilResume() = runTest(dispatcher) {
         val repository = FakeRepository().apply {
             startTurnFailures += IllegalStateException("Host unavailable")
@@ -343,6 +378,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
     val startedTurns = mutableListOf<String>()
+    val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val startTurnFailures = mutableListOf<Throwable>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
@@ -397,16 +433,26 @@ private class FakeRepository : AndrodexRepositoryContract {
         )
     }
 
-    override suspend fun startTurn(threadId: String, userInput: String) {
+    override suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) {
         val failure = startTurnFailures.firstOrNull()
         if (failure != null) {
             startTurnFailures.removeAt(0)
             throw failure
         }
         startedTurns += "$threadId:$userInput"
+        startedTurnModes += collaborationMode
     }
 
-    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) = Unit
+    override suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) = Unit
 
     override suspend fun interruptTurn(threadId: String, turnId: String) = Unit
 

@@ -2,6 +2,7 @@ package io.androdex.android.data
 
 import android.content.Context
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ThreadLoadResult
@@ -24,8 +25,17 @@ interface AndrodexRepositoryContract {
     suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary
     suspend fun loadThread(threadId: String): ThreadLoadResult
     suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot
-    suspend fun startTurn(threadId: String, userInput: String)
-    suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String)
+    suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind? = null,
+    )
+    suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind? = null,
+    )
     suspend fun interruptTurn(threadId: String, turnId: String)
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
@@ -72,12 +82,21 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         return client.readThreadRunSnapshot(threadId)
     }
 
-    override suspend fun startTurn(threadId: String, userInput: String) {
-        client.startTurn(threadId, userInput)
+    override suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) {
+        client.startTurn(threadId, userInput, collaborationMode)
     }
 
-    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
-        client.steerTurn(threadId, expectedTurnId, userInput)
+    override suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        collaborationMode: CollaborationModeKind?,
+    ) {
+        client.steerTurn(threadId, expectedTurnId, userInput, collaborationMode)
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {
