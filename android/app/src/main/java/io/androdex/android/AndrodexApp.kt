@@ -99,6 +99,10 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onComposerChanged = viewModel::updateComposerText,
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::interruptSelectedThread,
+                onPauseQueue = viewModel::pauseSelectedThreadQueue,
+                onResumeQueue = viewModel::resumeSelectedThreadQueue,
+                onRestoreQueuedDraft = viewModel::restoreQueuedDraftToComposer,
+                onRemoveQueuedDraft = viewModel::removeQueuedDraft,
             )
         }
     }

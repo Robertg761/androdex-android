@@ -51,7 +51,11 @@ internal fun ComposerBar(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        if (state.submitMode == ComposerSubmitMode.STEER) "Steer the active run" else "Ask Codex...",
+                        if (state.submitMode == ComposerSubmitMode.QUEUE) {
+                            "Queue a follow-up for when this run finishes"
+                        } else {
+                            "Ask Codex..."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 },
@@ -96,7 +100,13 @@ internal fun ComposerBar(
                             color = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
-                        Text("Steer")
+                        Text(
+                            if (state.submitMode == ComposerSubmitMode.QUEUE) {
+                                if (state.queuedCount > 0) "Queue (${state.queuedCount + 1})" else "Queue"
+                            } else {
+                                "Send"
+                            }
+                        )
                     }
                 }
             } else {

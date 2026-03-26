@@ -9,7 +9,10 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.QueuePauseState
+import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.service.AndrodexService
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class AndrodexUiState(
     val pairingInput: String = "",
@@ -37,6 +41,9 @@ data class AndrodexUiState(
     val readyThreadIds: Set<String> = emptySet(),
     val failedThreadIds: Set<String> = emptySet(),
     val composerText: String = "",
+    val composerDraftsByThread: Map<String, String> = emptyMap(),
+    val queuedDraftStateByThread: Map<String, ThreadQueuedDraftState> = emptyMap(),
+    val queueFlushingThreadIds: Set<String> = emptySet(),
     val isSendingMessage: Boolean = false,
     val isInterruptingSelectedThread: Boolean = false,
     val isBusy: Boolean = false,
@@ -75,6 +82,7 @@ class MainViewModel(
         viewModelScope.launch {
             service.state.collect { serviceState ->
                 uiStateFlow.update { current -> applyServiceState(current, serviceState) }
+                flushEligibleQueues()
                 if (lastConnectionStatus != ConnectionStatus.CONNECTED
                     && serviceState.connectionStatus == ConnectionStatus.CONNECTED
                 ) {
@@ -99,7 +107,82 @@ class MainViewModel(
     }
 
     fun updateComposerText(value: String) {
-        uiStateFlow.update { it.copy(composerText = value) }
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId
+            val nextDrafts = current.composerDraftsByThread.toMutableMap()
+            if (threadId != null) {
+                if (value.isEmpty()) {
+                    nextDrafts.remove(threadId)
+                } else {
+                    nextDrafts[threadId] = value
+                }
+            }
+            current.copy(
+                composerText = value,
+                composerDraftsByThread = nextDrafts,
+            )
+        }
+    }
+
+    fun pauseSelectedThreadQueue() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        updateQueuedDraftState(threadId) { current ->
+            if (current.drafts.isEmpty()) {
+                current
+            } else {
+                current.copy(
+                    pauseState = QueuePauseState.PAUSED,
+                    pauseMessage = null,
+                )
+            }
+        }
+    }
+
+    fun resumeSelectedThreadQueue() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        updateQueuedDraftState(threadId) { current ->
+            current.copy(
+                pauseState = QueuePauseState.ACTIVE,
+                pauseMessage = null,
+            )
+        }
+        flushQueueIfPossible(threadId)
+    }
+
+    fun restoreQueuedDraftToComposer(draftId: String) {
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy || current.composerText.isNotEmpty()) {
+            return
+        }
+
+        val queueState = current.queuedDraftStateByThread[threadId] ?: return
+        val draftIndex = queueState.drafts.indexOfFirst { it.id == draftId }
+        if (draftIndex < 0) {
+            return
+        }
+
+        val draft = queueState.drafts[draftIndex]
+        val nextDrafts = queueState.drafts.toMutableList().apply { removeAt(draftIndex) }
+        uiStateFlow.update { state ->
+            state.copy(
+                composerText = draft.text,
+                composerDraftsByThread = state.composerDraftsByThread + (threadId to draft.text),
+                queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
+                    threadId = threadId,
+                    queueState = queueState.copy(drafts = nextDrafts).normalized(),
+                ),
+            )
+        }
+    }
+
+    fun removeQueuedDraft(draftId: String) {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        updateQueuedDraftState(threadId) { current ->
+            current.copy(
+                drafts = current.drafts.filterNot { it.id == draftId },
+            ).normalized()
+        }
     }
 
     fun clearError() {
@@ -175,15 +258,51 @@ class MainViewModel(
             return
         }
 
-        uiStateFlow.update { it.copy(composerText = "", isSendingMessage = true) }
+        val threadId = current.selectedThreadId
+        if (threadId != null && current.isThreadRunning(threadId)) {
+            val queuedDraft = QueuedTurnDraft(
+                id = UUID.randomUUID().toString(),
+                text = input,
+                createdAtEpochMs = System.currentTimeMillis(),
+            )
+            uiStateFlow.update { state ->
+                val existingQueueState = state.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
+                state.copy(
+                    composerText = "",
+                    composerDraftsByThread = state.composerDraftsByThread - threadId,
+                    queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
+                        threadId = threadId,
+                        queueState = existingQueueState.copy(
+                            drafts = existingQueueState.drafts + queuedDraft,
+                        ).normalized(),
+                    ),
+                )
+            }
+            return
+        }
+
+        uiStateFlow.update {
+            it.copy(
+                composerText = "",
+                composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread - id } ?: it.composerDraftsByThread,
+                isSendingMessage = true,
+            )
+        }
         viewModelScope.launch {
             try {
-                service.sendMessage(input)
+                service.sendMessage(input, preferredThreadId = threadId)
             } catch (error: Throwable) {
-                uiStateFlow.update { it.copy(composerText = input) }
+                uiStateFlow.update {
+                    it.copy(
+                        composerText = input,
+                        composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread + (id to input) }
+                            ?: it.composerDraftsByThread,
+                    )
+                }
                 service.reportError(error.message ?: "Failed to send message.")
             } finally {
                 uiStateFlow.update { it.copy(isSendingMessage = false) }
+                flushEligibleQueues()
             }
         }
     }
@@ -274,6 +393,96 @@ class MainViewModel(
         }
     }
 
+    private fun flushEligibleQueues() {
+        val snapshot = uiStateFlow.value
+        if (snapshot.connectionStatus != ConnectionStatus.CONNECTED) {
+            return
+        }
+
+        snapshot.queuedDraftStateByThread.forEach { (threadId, queueState) ->
+            if (queueState.drafts.isNotEmpty()) {
+                flushQueueIfPossible(threadId)
+            }
+        }
+    }
+
+    private fun flushQueueIfPossible(threadId: String) {
+        var nextDraft: QueuedTurnDraft? = null
+        var reservedDraft = false
+
+        uiStateFlow.update { current ->
+            if (threadId in current.queueFlushingThreadIds) {
+                return@update current
+            }
+            val queueState = current.queuedDraftStateByThread[threadId] ?: return@update current
+            if (queueState.drafts.isEmpty()
+                || queueState.isPaused
+                || current.connectionStatus != ConnectionStatus.CONNECTED
+                || current.isThreadRunning(threadId)
+            ) {
+                return@update current
+            }
+
+            nextDraft = queueState.drafts.first()
+            reservedDraft = true
+
+            current.copy(
+                queueFlushingThreadIds = current.queueFlushingThreadIds + threadId,
+                queuedDraftStateByThread = current.queuedDraftStateByThread.updatedQueueEntry(
+                    threadId = threadId,
+                    queueState = queueState.copy(
+                        drafts = queueState.drafts.drop(1),
+                    ).normalized(),
+                ),
+            )
+        }
+        val draftToSend = nextDraft
+        if (!reservedDraft || draftToSend == null) {
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                service.sendMessage(draftToSend.text, preferredThreadId = threadId)
+            } catch (error: Throwable) {
+                val queueMessage = error.message ?: "Failed to send the queued follow-up."
+                uiStateFlow.update { current ->
+                    val queueState = current.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
+                    current.copy(
+                        queueFlushingThreadIds = current.queueFlushingThreadIds - threadId,
+                        queuedDraftStateByThread = current.queuedDraftStateByThread.updatedQueueEntry(
+                            threadId = threadId,
+                            queueState = queueState.copy(
+                                drafts = listOf(draftToSend) + queueState.drafts,
+                                pauseState = QueuePauseState.PAUSED,
+                                pauseMessage = queueMessage,
+                            ).normalized(),
+                        ),
+                    )
+                }
+                service.reportError("Queue paused: $queueMessage")
+                return@launch
+            }
+
+            uiStateFlow.update { it.copy(queueFlushingThreadIds = it.queueFlushingThreadIds - threadId) }
+        }
+    }
+
+    private fun updateQueuedDraftState(
+        threadId: String,
+        transform: (ThreadQueuedDraftState) -> ThreadQueuedDraftState,
+    ) {
+        uiStateFlow.update { current ->
+            val queueState = current.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
+            current.copy(
+                queuedDraftStateByThread = current.queuedDraftStateByThread.updatedQueueEntry(
+                    threadId = threadId,
+                    queueState = transform(queueState).normalized(),
+                ),
+            )
+        }
+    }
+
     private fun runBusyAction(label: String? = null, block: suspend () -> Unit) {
         viewModelScope.launch {
             uiStateFlow.update { it.copy(isBusy = true, busyLabel = label) }
@@ -298,6 +507,9 @@ private fun applyServiceState(
     current: AndrodexUiState,
     serviceState: AndrodexServiceState,
 ): AndrodexUiState {
+    val selectedThreadComposerText = serviceState.selectedThreadId
+        ?.let { current.composerDraftsByThread[it] }
+        .orEmpty()
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         defaultRelayUrl = serviceState.defaultRelayUrl,
@@ -313,6 +525,7 @@ private fun applyServiceState(
         protectedRunningFallbackThreadIds = serviceState.protectedRunningFallbackThreadIds,
         readyThreadIds = serviceState.readyThreadIds,
         failedThreadIds = serviceState.failedThreadIds,
+        composerText = selectedThreadComposerText,
         isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,
@@ -326,4 +539,29 @@ private fun applyServiceState(
         errorMessage = serviceState.errorMessage,
         pendingApproval = serviceState.pendingApproval,
     )
+}
+
+private fun AndrodexUiState.isThreadRunning(threadId: String): Boolean {
+    return threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
+}
+
+private fun ThreadQueuedDraftState.normalized(): ThreadQueuedDraftState {
+    return if (drafts.isEmpty()) {
+        ThreadQueuedDraftState()
+    } else {
+        copy(
+            pauseMessage = if (pauseState == QueuePauseState.PAUSED) pauseMessage else null,
+        )
+    }
+}
+
+private fun Map<String, ThreadQueuedDraftState>.updatedQueueEntry(
+    threadId: String,
+    queueState: ThreadQueuedDraftState,
+): Map<String, ThreadQueuedDraftState> {
+    return if (queueState.drafts.isEmpty()) {
+        this - threadId
+    } else {
+        this + (threadId to queueState)
+    }
 }

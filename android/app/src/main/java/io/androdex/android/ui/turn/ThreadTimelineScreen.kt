@@ -37,6 +37,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -67,6 +68,7 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.PlanStep
+import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.state.ThreadTimelineUiState
@@ -83,6 +85,10 @@ internal fun ThreadTimelineScreen(
     onComposerChanged: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onPauseQueue: () -> Unit,
+    onResumeQueue: () -> Unit,
+    onRestoreQueuedDraft: (String) -> Unit,
+    onRemoveQueuedDraft: (String) -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val listState = remember { LazyListState() }
@@ -186,12 +192,159 @@ internal fun ThreadTimelineScreen(
                 }
             }
 
+            AnimatedVisibility(visible = state.queuedDrafts.isNotEmpty()) {
+                QueuedDraftsCard(
+                    drafts = state.queuedDrafts,
+                    queuePauseMessage = state.queuePauseMessage,
+                    canRestoreDrafts = state.canRestoreQueuedDrafts,
+                    canPauseQueue = state.canPauseQueue,
+                    canResumeQueue = state.canResumeQueue,
+                    onPauseQueue = onPauseQueue,
+                    onResumeQueue = onResumeQueue,
+                    onRestoreDraft = onRestoreQueuedDraft,
+                    onRemoveDraft = onRemoveQueuedDraft,
+                )
+            }
+
             ComposerBar(
                 state = state.composer,
                 onTextChange = onComposerChanged,
                 onSend = onSend,
                 onStop = onStop,
             )
+        }
+    }
+}
+
+@Composable
+private fun QueuedDraftsCard(
+    drafts: List<QueuedTurnDraft>,
+    queuePauseMessage: String?,
+    canRestoreDrafts: Boolean,
+    canPauseQueue: Boolean,
+    canResumeQueue: Boolean,
+    onPauseQueue: () -> Unit,
+    onResumeQueue: () -> Unit,
+    onRestoreDraft: (String) -> Unit,
+    onRemoveDraft: (String) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Queued follow-ups",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "${drafts.size} waiting",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                when {
+                    canResumeQueue -> {
+                        TextButton(onClick = onResumeQueue) {
+                            Text("Resume")
+                        }
+                    }
+
+                    canPauseQueue -> {
+                        TextButton(onClick = onPauseQueue) {
+                            Text("Pause")
+                        }
+                    }
+                }
+            }
+
+            queuePauseMessage?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+            }
+
+            drafts.forEachIndexed { index, draft ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        shape = CircleShape,
+                        modifier = Modifier.size(22.dp),
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            Text(
+                                text = "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = draft.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { onRestoreDraft(draft.id) },
+                        enabled = canRestoreDrafts,
+                    ) {
+                        Text("Restore")
+                    }
+
+                    TextButton(
+                        onClick = { onRemoveDraft(draft.id) },
+                    ) {
+                        Text("Remove")
+                    }
+                }
+
+                if (index < drafts.lastIndex) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    )
+                }
+            }
         }
     }
 }

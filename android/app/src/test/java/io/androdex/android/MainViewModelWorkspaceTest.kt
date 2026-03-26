@@ -5,6 +5,7 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
@@ -148,6 +149,187 @@ class MainViewModelWorkspaceTest {
 
         assertEquals(0, repository.reconnectSavedCalls)
     }
+
+    @Test
+    fun queuedFollowUps_flushInOrderWhenThreadBecomesIdle() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("First queued")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Second queued")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals(
+            listOf("First queued", "Second queued"),
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.map { it.text },
+        )
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                terminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1:First queued"), repository.startedTurns)
+        assertEquals(
+            listOf("Second queued"),
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.map { it.text },
+        )
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = null,
+                terminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf("thread-1:First queued", "thread-1:Second queued"),
+            repository.startedTurns,
+        )
+        assertTrue(viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts.isNullOrEmpty())
+    }
+
+    @Test
+    fun pausedQueue_staysQueuedUntilResumed() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Wait for the next pass")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+        viewModel.pauseSelectedThreadQueue()
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                terminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals(
+            QueuePauseState.PAUSED,
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.pauseState,
+        )
+
+        viewModel.resumeSelectedThreadQueue()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1:Wait for the next pass"), repository.startedTurns)
+    }
+
+    @Test
+    fun failedQueueFlush_pausesAndPreservesOrderingUntilResume() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            startTurnFailures += IllegalStateException("Host unavailable")
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("First queued")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+        viewModel.updateComposerText("Second queued")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                terminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals(
+            listOf("First queued", "Second queued"),
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.map { it.text },
+        )
+        assertEquals(
+            QueuePauseState.PAUSED,
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.pauseState,
+        )
+
+        viewModel.resumeSelectedThreadQueue()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1:First queued"), repository.startedTurns)
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = null,
+                terminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf("thread-1:First queued", "thread-1:Second queued"),
+            repository.startedTurns,
+        )
+        assertTrue(viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts.isNullOrEmpty())
+    }
 }
 
 private class FakeRepository : AndrodexRepositoryContract {
@@ -160,6 +342,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
+    val startedTurns = mutableListOf<String>()
+    val startTurnFailures = mutableListOf<Throwable>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -213,7 +397,14 @@ private class FakeRepository : AndrodexRepositoryContract {
         )
     }
 
-    override suspend fun startTurn(threadId: String, userInput: String) = Unit
+    override suspend fun startTurn(threadId: String, userInput: String) {
+        val failure = startTurnFailures.firstOrNull()
+        if (failure != null) {
+            startTurnFailures.removeAt(0)
+            throw failure
+        }
+        startedTurns += "$threadId:$userInput"
+    }
 
     override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) = Unit
 

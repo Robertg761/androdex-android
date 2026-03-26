@@ -190,14 +190,15 @@ class AndrodexService(
         loadWorkspaceState()
     }
 
-    suspend fun sendMessage(input: String) {
+    suspend fun sendMessage(input: String, preferredThreadId: String? = stateFlow.value.selectedThreadId) {
         val trimmedInput = input.trim()
         if (trimmedInput.isEmpty()) {
             return
         }
 
         val preferredWorkspace = stateFlow.value.activeWorkspacePath
-        val threadId = stateFlow.value.selectedThreadId ?: repository.startThread(preferredWorkspace).id.also { newThreadId ->
+        val threadId = preferredThreadId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: repository.startThread(preferredWorkspace).id.also { newThreadId ->
             refreshThreadsInternal()
             loadWorkspaceState()
             stateFlow.update { current ->

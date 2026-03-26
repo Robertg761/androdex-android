@@ -261,6 +261,26 @@ data class ConversationMessage(
     val planSteps: List<PlanStep>? = null,
 )
 
+data class QueuedTurnDraft(
+    val id: String,
+    val text: String,
+    val createdAtEpochMs: Long,
+)
+
+enum class QueuePauseState {
+    ACTIVE,
+    PAUSED,
+}
+
+data class ThreadQueuedDraftState(
+    val drafts: List<QueuedTurnDraft> = emptyList(),
+    val pauseState: QueuePauseState = QueuePauseState.ACTIVE,
+    val pauseMessage: String? = null,
+) {
+    val isPaused: Boolean
+        get() = pauseState == QueuePauseState.PAUSED
+}
+
 data class ThreadLoadResult(
     val thread: ThreadSummary?,
     val messages: List<ConversationMessage>,

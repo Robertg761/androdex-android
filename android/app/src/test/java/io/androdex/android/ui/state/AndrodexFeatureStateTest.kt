@@ -6,8 +6,11 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.QueuePauseState
+import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ReasoningEffortOption
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import org.junit.Assert.assertEquals
@@ -94,6 +97,19 @@ class AndrodexFeatureStateTest {
             selectedThreadTitle = "Conversation",
             composerText = "Please continue",
             protectedRunningFallbackThreadIds = setOf("thread-9"),
+            queuedDraftStateByThread = mapOf(
+                "thread-9" to ThreadQueuedDraftState(
+                    drafts = listOf(
+                        QueuedTurnDraft(
+                            id = "queued-1",
+                            text = "Run the tests after this finishes",
+                            createdAtEpochMs = 2L,
+                        )
+                    ),
+                    pauseState = QueuePauseState.PAUSED,
+                    pauseMessage = "Queue paused after a send failure.",
+                )
+            ),
             messages = listOf(
                 ConversationMessage(
                     id = "msg-1",
@@ -126,10 +142,16 @@ class AndrodexFeatureStateTest {
         val route = appState.destination as AndrodexDestinationUiState.Thread
 
         assertEquals("thread-9", route.state.threadId)
-        assertEquals(ComposerSubmitMode.STEER, route.state.composer.submitMode)
+        assertEquals(ComposerSubmitMode.QUEUE, route.state.composer.submitMode)
         assertTrue(route.state.composer.submitEnabled)
         assertTrue(route.state.composer.showStop)
+        assertEquals(1, route.state.composer.queuedCount)
+        assertTrue(route.state.composer.isQueuePaused)
         assertEquals("Please continue", route.state.composer.text)
+        assertEquals(1, route.state.queuedDrafts.size)
+        assertEquals("Queue paused after a send failure.", route.state.queuePauseMessage)
+        assertFalse(route.state.canRestoreQueuedDrafts)
+        assertTrue(route.state.canResumeQueue)
         assertTrue(appState.settings.isVisible)
         assertTrue(appState.settings.modelOptions.any { it.value == "gpt-5.4" && it.selected })
         assertTrue(appState.settings.reasoningOptions.any { it.value == "high" && it.selected })

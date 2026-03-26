@@ -5,6 +5,7 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.QueuedTurnDraft
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -105,6 +106,11 @@ internal data class ThreadTimelineUiState(
     val messages: List<ConversationMessage>,
     val runState: ThreadRunBadgeUiState?,
     val busy: BusyUiState,
+    val queuedDrafts: List<QueuedTurnDraft>,
+    val queuePauseMessage: String?,
+    val canRestoreQueuedDrafts: Boolean,
+    val canPauseQueue: Boolean,
+    val canResumeQueue: Boolean,
     val composer: ComposerUiState,
 )
 
@@ -117,11 +123,13 @@ internal data class ComposerUiState(
     val showStop: Boolean,
     val isStopping: Boolean,
     val stopEnabled: Boolean,
+    val queuedCount: Int,
+    val isQueuePaused: Boolean,
 )
 
 internal enum class ComposerSubmitMode {
     SEND,
-    STEER,
+    QUEUE,
 }
 
 internal enum class ThreadRunBadgeUiState {
@@ -281,21 +289,37 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
+    val queueState = queuedDraftStateByThread[threadId]
+    val queuedDrafts = queueState?.drafts.orEmpty()
+    val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
         messages = messages,
         runState = threadRunBadge(threadId),
         busy = toBusyUiState(),
+        queuedDrafts = queuedDrafts,
+        queuePauseMessage = queueState?.pauseMessage,
+        canRestoreQueuedDrafts = queuedDrafts.isNotEmpty()
+            && queueControlsEnabled
+            && composerText.isBlank(),
+        canPauseQueue = queuedDrafts.isNotEmpty()
+            && queueControlsEnabled
+            && queueState?.isPaused != true,
+        canResumeQueue = queuedDrafts.isNotEmpty()
+            && queueControlsEnabled
+            && queueState?.isPaused == true,
         composer = ComposerUiState(
             text = composerText,
             inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
-            submitMode = if (isThreadRunning) ComposerSubmitMode.STEER else ComposerSubmitMode.SEND,
+            submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND,
             isSubmitting = isSendingMessage,
             submitEnabled = composerText.isNotBlank() && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             showStop = isThreadRunning,
             isStopping = isInterruptingSelectedThread,
             stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            queuedCount = queuedDrafts.size,
+            isQueuePaused = queueState?.isPaused == true,
         ),
     )
 }
