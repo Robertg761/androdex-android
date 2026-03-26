@@ -120,6 +120,8 @@ internal data class ComposerUiState(
     val submitMode: ComposerSubmitMode,
     val isPlanModeEnabled: Boolean,
     val planModeEnabled: Boolean,
+    val isSubagentsEnabled: Boolean,
+    val subagentsEnabled: Boolean,
     val isSubmitting: Boolean,
     val submitEnabled: Boolean,
     val showStop: Boolean,
@@ -292,6 +294,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
+    val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
@@ -318,8 +321,13 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND,
             isPlanModeEnabled = isPlanModeEnabled,
             planModeEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            isSubagentsEnabled = isSubagentsEnabled,
+            subagentsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             isSubmitting = isSendingMessage,
-            submitEnabled = composerText.isNotBlank() && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            submitEnabled = (composerText.isNotBlank() || isSubagentsEnabled)
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
             showStop = isThreadRunning,
             isStopping = isInterruptingSelectedThread,
             stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,

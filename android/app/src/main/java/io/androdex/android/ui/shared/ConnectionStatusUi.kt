@@ -165,6 +165,7 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
         lastSystemMessage?.kind == ConversationKind.COMMAND -> {
             "Ran: ${lastSystemMessage.command?.take(40) ?: "command"}"
         }
+        lastSystemMessage?.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
         lastSystemMessage?.kind == ConversationKind.THINKING -> "Thinking..."
         lastSystemMessage?.kind == ConversationKind.PLAN -> "Planning..."
         else -> null

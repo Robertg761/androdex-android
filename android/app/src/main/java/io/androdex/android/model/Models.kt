@@ -149,6 +149,11 @@ data class ThreadSummary(
     val cwd: String?,
     val createdAtEpochMs: Long?,
     val updatedAtEpochMs: Long?,
+    val parentThreadId: String? = null,
+    val agentId: String? = null,
+    val agentNickname: String? = null,
+    val agentRole: String? = null,
+    val model: String? = null,
 ) {
     val projectName: String
         get() = cwd
@@ -158,6 +163,18 @@ data class ThreadSummary(
             ?.substringAfterLast('\\')
             ?.takeIf { it.isNotBlank() }
             ?: "No Project"
+
+    val preferredSubagentLabel: String?
+        get() {
+            val nickname = sanitizedSubagentIdentity(agentNickname)
+            val role = sanitizedSubagentIdentity(agentRole)
+            return when {
+                nickname != null && role != null -> "$nickname [$role]"
+                nickname != null -> nickname
+                role != null -> role.replaceFirstChar(Char::uppercaseChar)
+                else -> null
+            }
+        }
 }
 
 data class WorkspacePathSummary(
@@ -233,7 +250,120 @@ enum class ConversationKind {
     THINKING,
     FILE_CHANGE,
     COMMAND,
+    SUBAGENT_ACTION,
     PLAN,
+}
+
+data class SubagentRef(
+    val threadId: String,
+    val agentId: String? = null,
+    val nickname: String? = null,
+    val role: String? = null,
+    val model: String? = null,
+    val prompt: String? = null,
+)
+
+data class SubagentState(
+    val threadId: String,
+    val status: String,
+    val message: String? = null,
+)
+
+data class SubagentThreadPresentation(
+    val threadId: String,
+    val agentId: String? = null,
+    val nickname: String? = null,
+    val role: String? = null,
+    val model: String? = null,
+    val modelIsRequestedHint: Boolean = false,
+    val prompt: String? = null,
+    val fallbackStatus: String? = null,
+    val fallbackMessage: String? = null,
+) {
+    val displayLabel: String
+        get() {
+            val trimmedNickname = sanitizedSubagentIdentity(nickname)
+            val trimmedRole = sanitizedSubagentIdentity(role)
+            return when {
+                trimmedNickname != null && trimmedRole != null -> "$trimmedNickname [$trimmedRole]"
+                trimmedNickname != null -> trimmedNickname
+                trimmedRole != null -> trimmedRole.replaceFirstChar(Char::uppercaseChar)
+                threadId.length > 14 -> "Agent ${threadId.takeLast(8)}"
+                threadId.isBlank() -> "Agent"
+                else -> threadId
+            }
+        }
+}
+
+data class SubagentAction(
+    val tool: String,
+    val status: String,
+    val prompt: String? = null,
+    val model: String? = null,
+    val receiverThreadIds: List<String> = emptyList(),
+    val receiverAgents: List<SubagentRef> = emptyList(),
+    val agentStates: Map<String, SubagentState> = emptyMap(),
+) {
+    val agentRows: List<SubagentThreadPresentation>
+        get() {
+            val orderedThreadIds = buildList {
+                receiverThreadIds.forEach { threadId ->
+                    if (threadId !in this) {
+                        add(threadId)
+                    }
+                }
+                receiverAgents.forEach { agent ->
+                    if (agent.threadId !in this) {
+                        add(agent.threadId)
+                    }
+                }
+                agentStates.keys.sorted().forEach { threadId ->
+                    if (threadId !in this) {
+                        add(threadId)
+                    }
+                }
+            }
+
+            return orderedThreadIds.map { threadId ->
+                val matchingAgent = receiverAgents.firstOrNull { it.threadId == threadId }
+                val matchingState = agentStates[threadId]
+                SubagentThreadPresentation(
+                    threadId = threadId,
+                    agentId = matchingAgent?.agentId,
+                    nickname = matchingAgent?.nickname,
+                    role = matchingAgent?.role,
+                    model = matchingAgent?.model ?: model,
+                    modelIsRequestedHint = matchingAgent?.model == null && model != null,
+                    prompt = matchingAgent?.prompt,
+                    fallbackStatus = matchingState?.status,
+                    fallbackMessage = matchingState?.message,
+                )
+            }
+        }
+
+    val normalizedTool: String
+        get() = tool.trim().lowercase()
+            .replace("_", "")
+            .replace("-", "")
+
+    val normalizedStatus: String
+        get() = status.trim().lowercase()
+            .replace("_", "")
+            .replace("-", "")
+
+    val summaryText: String
+        get() {
+            val count = maxOf(1, agentRows.size, receiverThreadIds.size, receiverAgents.size)
+            val noun = if (count == 1) "agent" else "agents"
+            return when (normalizedTool) {
+                "spawnagent" -> "Spawning $count $noun"
+                "wait", "waitagent" -> "Waiting on $count $noun"
+                "closeagent" -> "Closing $count $noun"
+                "resumeagent" -> "Resuming $count $noun"
+                "sendinput" -> if (count == 1) "Updating agent" else "Updating agents"
+                else -> if (count == 1) "Agent activity" else "Agent activity ($count)"
+            }
+        }
 }
 
 enum class TurnTerminalState {
@@ -266,6 +396,7 @@ data class ConversationMessage(
     val command: String? = null,
     val planExplanation: String? = null,
     val planSteps: List<PlanStep>? = null,
+    val subagentAction: SubagentAction? = null,
 )
 
 data class QueuedTurnDraft(
@@ -273,6 +404,7 @@ data class QueuedTurnDraft(
     val text: String,
     val createdAtEpochMs: Long,
     val collaborationMode: CollaborationModeKind? = null,
+    val subagentsSelectionEnabled: Boolean = false,
 )
 
 enum class QueuePauseState {
@@ -367,6 +499,14 @@ sealed interface ClientUpdate {
         val steps: List<PlanStep>?,
     ) : ClientUpdate
 
+    data class SubagentActionUpdate(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val action: SubagentAction,
+        val isStreaming: Boolean,
+    ) : ClientUpdate
+
     data class AssistantDelta(
         val threadId: String?,
         val turnId: String?,
@@ -426,4 +566,14 @@ fun JSONArray.toStringList(): List<String> {
         values += optString(index)
     }
     return values
+}
+
+private fun sanitizedSubagentIdentity(value: String?): String? {
+    val trimmed = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val lowered = trimmed.lowercase()
+    return if (lowered == "collabagenttoolcall" || lowered == "collabtoolcall") {
+        null
+    } else {
+        trimmed
+    }
 }

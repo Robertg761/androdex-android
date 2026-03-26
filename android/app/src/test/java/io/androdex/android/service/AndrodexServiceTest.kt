@@ -8,6 +8,8 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.PlanStep
+import io.androdex.android.model.SubagentAction
+import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
@@ -383,6 +385,75 @@ class AndrodexServiceTest {
 
         assertEquals(listOf("thread-created:Make a plan"), repository.startedTurns)
         assertEquals(listOf(CollaborationModeKind.PLAN), repository.startedTurnModes)
+    }
+
+    @Test
+    fun subagentUpdates_mergeAndAdoptThreadIdentityMetadata() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                action = SubagentAction(
+                    tool = "spawnAgent",
+                    status = "in_progress",
+                    prompt = "Inspect Android tests",
+                    model = "gpt-5.4-mini",
+                    receiverThreadIds = listOf("thread-child"),
+                    agentStates = mapOf(
+                        "thread-child" to SubagentState(
+                            threadId = "thread-child",
+                            status = "in_progress",
+                            message = "Inspecting tests",
+                        )
+                    ),
+                ),
+                isStreaming = true,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-child",
+                        title = "Scout",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        parentThreadId = "thread-1",
+                        agentNickname = "Scout",
+                        agentRole = "explorer",
+                    )
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                action = SubagentAction(
+                    tool = "spawnAgent",
+                    status = "completed",
+                    prompt = "Inspect Android tests",
+                    model = "gpt-5.4-mini",
+                    receiverThreadIds = listOf("thread-child"),
+                ),
+                isStreaming = false,
+            )
+        )
+
+        val messages = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.SUBAGENT_ACTION }
+        assertEquals(1, messages.size)
+        val action = messages.single().subagentAction
+        assertEquals("Scout", action?.agentRows?.single()?.nickname)
+        assertEquals("explorer", action?.agentRows?.single()?.role)
+        assertEquals("completed", action?.status)
     }
 
     @Test

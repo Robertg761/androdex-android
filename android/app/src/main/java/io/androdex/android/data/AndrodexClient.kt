@@ -846,6 +846,9 @@ class AndrodexClient(
     }
 
     private suspend fun handleNotification(method: String, params: JSONObject?) {
+        if (emitSubagentActionUpdateIfPresent(method, params)) {
+            return
+        }
         when (method) {
             "thread/started", "thread/name/updated", "thread/status/changed" -> {
                 if (method == "thread/started") {
@@ -994,6 +997,27 @@ class AndrodexClient(
                 )
             }
         }
+    }
+
+    private suspend fun emitSubagentActionUpdateIfPresent(method: String, params: JSONObject?): Boolean {
+        val action = extractSubagentAction(params) ?: return false
+        val normalizedMethod = normalizeItemType(method)
+        val isStreaming = !(
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || method == "codex/event/agent_message"
+        )
+        updatesFlow.emit(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = extractThreadId(params),
+                turnId = extractTurnId(params),
+                itemId = extractItemId(params),
+                action = action,
+                isStreaming = isStreaming,
+            )
+        )
+        return true
     }
 
     private suspend fun sendRequest(method: String, params: JSONObject?): JSONObject {
@@ -1261,6 +1285,22 @@ class AndrodexClient(
         if (params == null) return null
         return params.stringOrNull("delta")
             ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
+    private fun extractSubagentAction(params: JSONObject?): io.androdex.android.model.SubagentAction? {
+        if (params == null) return null
+        val candidateItems = listOfNotNull(
+            params.objectOrNull("item"),
+            params.objectOrNull("msg", "event")?.optJSONObject("item"),
+            params.objectOrNull("event"),
+            params,
+        )
+        candidateItems.forEach { candidate ->
+            if (isSubagentActionItemType(candidate.optString("type"))) {
+                return decodeSubagentActionItem(candidate)
+            }
+        }
+        return null
     }
 
     private fun extractAssistantCompletedText(params: JSONObject?): String? {

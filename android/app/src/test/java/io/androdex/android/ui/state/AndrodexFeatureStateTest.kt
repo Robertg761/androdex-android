@@ -159,4 +159,20 @@ class AndrodexFeatureStateTest {
         assertTrue(appState.settings.modelOptions.any { it.value == "gpt-5.4" && it.selected })
         assertTrue(appState.settings.reasoningOptions.any { it.value == "high" && it.selected })
     }
+
+    @Test
+    fun threadRoute_allowsSendForSubagentsOnlyComposerState() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            composerSubagentsByThread = setOf("thread-9"),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertTrue(route.state.composer.isSubagentsEnabled)
+        assertTrue(route.state.composer.submitEnabled)
+    }
 }

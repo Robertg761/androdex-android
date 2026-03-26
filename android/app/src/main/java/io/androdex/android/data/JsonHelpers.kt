@@ -6,6 +6,9 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
+import io.androdex.android.model.SubagentAction
+import io.androdex.android.model.SubagentRef
+import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -104,17 +107,19 @@ private fun parseIsoTimestamp(value: String): Long? {
 }
 
 fun decodeThreadSummary(json: JSONObject): ThreadSummary? {
-    val id = json.stringOrNull("id") ?: return null
-    val title = json.stringOrNull("name", "title", "preview") ?: "Conversation"
-    val preview = json.stringOrNull("preview")
-    val cwd = json.stringOrNull("cwd", "current_working_directory", "working_directory")
+    return decodeThreadSummarySpec(json.toRawMap())
+}
+
+internal fun decodeThreadSummarySpec(values: Map<String, Any?>): ThreadSummary? {
+    val id = values.stringOrNull("id") ?: return null
+    val title = values.stringOrNull("name", "title", "preview") ?: "Conversation"
+    val preview = values.stringOrNull("preview")
+    val cwd = values.stringOrNull("cwd", "current_working_directory", "working_directory")
     val createdAt = parseTimestamp(
-        json.opt("createdAt").takeUnless { it == null }
-            ?: json.opt("created_at").takeUnless { it == null }
+        values["createdAt"] ?: values["created_at"]
     )
     val updatedAt = parseTimestamp(
-        json.opt("updatedAt").takeUnless { it == null }
-            ?: json.opt("updated_at").takeUnless { it == null }
+        values["updatedAt"] ?: values["updated_at"]
     )
     return ThreadSummary(
         id = id,
@@ -123,6 +128,11 @@ fun decodeThreadSummary(json: JSONObject): ThreadSummary? {
         cwd = cwd,
         createdAtEpochMs = createdAt,
         updatedAtEpochMs = updatedAt,
+        parentThreadId = values.stringOrNull("parentThreadId", "parent_thread_id"),
+        agentId = values.stringOrNull("agentId", "agent_id"),
+        agentNickname = values.stringOrNull("agentNickname", "agent_nickname"),
+        agentRole = values.stringOrNull("agentRole", "agent_role", "agentType", "agent_type"),
+        model = values.stringOrNull("model", "modelName", "model_name", "modelProvider", "model_provider"),
     )
 }
 
@@ -264,6 +274,24 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                         itemId = itemId,
                         planExplanation = planData.explanation,
                         planSteps = planData.steps,
+                    )
+                }
+
+                else -> {
+                    if (!isSubagentActionItemType(itemType)) {
+                        continue
+                    }
+                    val action = decodeSubagentActionItem(itemObject) ?: continue
+                    messages += ConversationMessage(
+                        id = itemId ?: UUID.randomUUID().toString(),
+                        threadId = threadId,
+                        role = ConversationRole.SYSTEM,
+                        kind = ConversationKind.SUBAGENT_ACTION,
+                        text = action.summaryText,
+                        createdAtEpochMs = createdAt,
+                        turnId = turnId,
+                        itemId = itemId,
+                        subagentAction = action,
                     )
                 }
             }
@@ -495,4 +523,361 @@ internal fun decodePlanSteps(items: JSONArray): List<PlanStep> {
         planSteps += PlanStep(text = text, status = status)
     }
     return planSteps
+}
+
+internal fun isSubagentActionItemType(rawType: String?): Boolean {
+    val normalized = normalizeItemType(rawType)
+    return normalized == "collabagenttoolcall"
+        || normalized == "collabtoolcall"
+        || normalized.startsWith("collabagentspawn")
+        || normalized.startsWith("collabwaiting")
+        || normalized.startsWith("collabclose")
+        || normalized.startsWith("collabresume")
+        || normalized.startsWith("collabagentinteraction")
+}
+
+internal fun decodeSubagentActionItem(itemObject: JSONObject): SubagentAction? {
+    return decodeSubagentActionSpec(itemObject.toRawMap())
+}
+
+internal fun decodeSubagentActionSpec(values: Map<String, Any?>): SubagentAction? {
+    val receiverThreadIds = decodeSubagentReceiverThreadIds(values)
+    val receiverAgents = decodeSubagentReceiverAgents(values, receiverThreadIds)
+    val agentStates = decodeSubagentAgentStates(values)
+    val tool = values.stringOrNull("tool", "name")
+        ?: inferSubagentToolFromType(values)
+        ?: "spawnAgent"
+    val status = values.stringOrNull("status") ?: "in_progress"
+    val prompt = normalizedIdentifier(
+        values.stringOrNull("prompt", "task", "message", "instructions", "instruction")
+    )
+    val model = normalizedIdentifier(
+        values.stringOrNull(
+            "model",
+            "modelName",
+            "model_name",
+            "requestedModel",
+            "requested_model",
+            "modelProvider",
+            "model_provider",
+            "modelProviderId",
+            "model_provider_id",
+        )
+    )
+
+    if (receiverThreadIds.isEmpty() && receiverAgents.isEmpty() && agentStates.isEmpty() && prompt == null && model == null) {
+        return null
+    }
+
+    return SubagentAction(
+        tool = tool,
+        status = status,
+        prompt = prompt,
+        model = model,
+        receiverThreadIds = receiverThreadIds,
+        receiverAgents = receiverAgents,
+        agentStates = agentStates,
+    )
+}
+
+private fun decodeSubagentReceiverThreadIds(itemObject: Map<String, Any?>): List<String> {
+    val plural = itemObject.listOrNull("receiverThreadIds", "receiver_thread_ids", "threadIds", "thread_ids")
+    if (plural != null) {
+        val values = mutableListOf<String>()
+        plural.forEach { rawThreadId ->
+            val threadId = normalizedIdentifier(rawThreadId?.toString())
+            if (threadId != null && threadId !in values) {
+                values += threadId
+            }
+        }
+        if (values.isNotEmpty()) {
+            return values
+        }
+    }
+
+    return listOfNotNull(
+        normalizedIdentifier(
+            itemObject.stringOrNull(
+                "receiverThreadId",
+                "receiver_thread_id",
+                "threadId",
+                "thread_id",
+                "newThreadId",
+                "new_thread_id",
+            )
+        )
+    )
+}
+
+private fun decodeSubagentReceiverAgents(
+    itemObject: Map<String, Any?>,
+    fallbackThreadIds: List<String>,
+): List<SubagentRef> {
+    val values = itemObject.listOrNull("receiverAgents", "receiver_agents", "agents")
+    if (values.isNullOrEmpty()) {
+        return buildSyntheticAgentRefs(itemObject, fallbackThreadIds)
+    }
+
+    val agents = mutableListOf<SubagentRef>()
+    values.forEachIndexed { index, rawValue ->
+        @Suppress("UNCHECKED_CAST")
+        val value = rawValue as? Map<String, Any?> ?: return@forEachIndexed
+        val threadId = normalizedIdentifier(
+            value.stringOrNull(
+                "threadId",
+                "thread_id",
+                "receiverThreadId",
+                "receiver_thread_id",
+                "newThreadId",
+                "new_thread_id",
+            ) ?: fallbackThreadIds.getOrNull(index)
+        ) ?: return@forEachIndexed
+
+        agents += SubagentRef(
+            threadId = threadId,
+            agentId = normalizedIdentifier(
+                value.stringOrNull(
+                    "agentId",
+                    "agent_id",
+                    "receiverAgentId",
+                    "receiver_agent_id",
+                    "newAgentId",
+                    "new_agent_id",
+                    "id",
+                )
+            ),
+            nickname = normalizedIdentifier(
+                value.stringOrNull(
+                    "agentNickname",
+                    "agent_nickname",
+                    "receiverAgentNickname",
+                    "receiver_agent_nickname",
+                    "newAgentNickname",
+                    "new_agent_nickname",
+                    "nickname",
+                    "name",
+                )
+            ),
+            role = normalizedIdentifier(
+                value.stringOrNull(
+                    "agentRole",
+                    "agent_role",
+                    "receiverAgentRole",
+                    "receiver_agent_role",
+                    "newAgentRole",
+                    "new_agent_role",
+                    "agentType",
+                    "agent_type",
+                )
+            ),
+            model = normalizedIdentifier(
+                value.stringOrNull(
+                    "modelProvider",
+                    "model_provider",
+                    "modelProviderId",
+                    "model_provider_id",
+                    "modelName",
+                    "model_name",
+                    "model",
+                )
+            ),
+            prompt = normalizedIdentifier(
+                value.stringOrNull("prompt", "instructions", "instruction", "task", "message")
+            ),
+        )
+    }
+    return agents
+}
+
+private fun decodeSubagentAgentStates(itemObject: Map<String, Any?>): Map<String, SubagentState> {
+    val objectCandidate = itemObject.mapOrNull(
+        "statuses",
+        "agentsStates",
+        "agents_states",
+        "agentStates",
+        "agent_states",
+    )
+    if (objectCandidate != null) {
+        val states = mutableMapOf<String, SubagentState>()
+        objectCandidate.forEach { (rawThreadId, rawStateObject) ->
+            @Suppress("UNCHECKED_CAST")
+            val stateObject = rawStateObject as? Map<String, Any?> ?: return@forEach
+            val threadId = normalizedIdentifier(rawThreadId)
+                ?: normalizedIdentifier(stateObject.stringOrNull("threadId", "thread_id"))
+                ?: return@forEach
+            states[threadId] = SubagentState(
+                threadId = threadId,
+                status = stateObject.stringOrNull("status") ?: "unknown",
+                message = stateObject.stringOrNull("message", "text", "delta", "summary"),
+            )
+        }
+        return states
+    }
+
+    val arrayCandidate = itemObject.listOrNull("agentStatuses", "agent_statuses")
+        ?: itemObject.listOrNull("statuses", "agentStates", "agent_states")
+    if (arrayCandidate != null) {
+        val states = mutableMapOf<String, SubagentState>()
+        arrayCandidate.forEach { rawEntry ->
+            @Suppress("UNCHECKED_CAST")
+            val entry = rawEntry as? Map<String, Any?> ?: return@forEach
+            val threadId = normalizedIdentifier(
+                entry.stringOrNull("threadId", "thread_id", "receiverThreadId", "receiver_thread_id")
+            ) ?: return@forEach
+            states[threadId] = SubagentState(
+                threadId = threadId,
+                status = entry.stringOrNull("status") ?: "unknown",
+                message = entry.stringOrNull("message", "text", "delta", "summary"),
+            )
+        }
+        return states
+    }
+
+    return emptyMap()
+}
+
+private fun buildSyntheticAgentRefs(
+    itemObject: Map<String, Any?>,
+    fallbackThreadIds: List<String>,
+): List<SubagentRef> {
+    val threadId = fallbackThreadIds.firstOrNull()
+        ?: normalizedIdentifier(
+            itemObject.stringOrNull(
+                "receiverThreadId",
+                "receiver_thread_id",
+                "threadId",
+                "thread_id",
+                "newThreadId",
+                "new_thread_id",
+            )
+        )
+        ?: return emptyList()
+
+    return listOf(
+        SubagentRef(
+            threadId = threadId,
+            agentId = normalizedIdentifier(
+                itemObject.stringOrNull("newAgentId", "new_agent_id", "agentId", "agent_id")
+            ),
+            nickname = normalizedIdentifier(
+                itemObject.stringOrNull(
+                    "newAgentNickname",
+                    "new_agent_nickname",
+                    "agentNickname",
+                    "agent_nickname",
+                    "receiverAgentNickname",
+                    "receiver_agent_nickname",
+                )
+            ),
+            role = normalizedIdentifier(
+                itemObject.stringOrNull(
+                    "receiverAgentRole",
+                    "receiver_agent_role",
+                    "newAgentRole",
+                    "new_agent_role",
+                    "agentRole",
+                    "agent_role",
+                    "agentType",
+                    "agent_type",
+                )
+            ),
+            model = normalizedIdentifier(
+                itemObject.stringOrNull(
+                    "modelProvider",
+                    "model_provider",
+                    "modelProviderId",
+                    "model_provider_id",
+                    "modelName",
+                    "model_name",
+                    "model",
+                )
+            ),
+            prompt = normalizedIdentifier(
+                itemObject.stringOrNull("prompt", "instructions", "instruction", "task", "message")
+            ),
+        )
+    )
+}
+
+private fun inferSubagentToolFromType(itemObject: Map<String, Any?>): String? {
+    val normalized = itemObject.stringOrNull("type")
+        ?.lowercase(Locale.US)
+        ?.replace("_", "")
+        ?.replace("-", "")
+        ?: return null
+    return when {
+        normalized.contains("spawn") -> "spawnAgent"
+        normalized.contains("waiting") || normalized.contains("wait") -> "wait"
+        normalized.contains("close") -> "closeAgent"
+        normalized.contains("resume") -> "resumeAgent"
+        normalized.contains("sendinput") || normalized.contains("interaction") -> "sendInput"
+        else -> null
+    }
+}
+
+private fun normalizedIdentifier(value: String?): String? {
+    return value?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+private fun Map<String, Any?>.stringOrNull(vararg keys: String): String? {
+    keys.forEach { key ->
+        val value = this[key] ?: return@forEach
+        val normalized = when (value) {
+            is String -> value.trim()
+            is Number, is Boolean -> value.toString().trim()
+            else -> null
+        }
+        if (!normalized.isNullOrEmpty()) {
+            return normalized
+        }
+    }
+    return null
+}
+
+private fun Map<String, Any?>.mapOrNull(vararg keys: String): Map<String, Any?>? {
+    keys.forEach { key ->
+        val value = this[key]
+        if (value is Map<*, *>) {
+            @Suppress("UNCHECKED_CAST")
+            return value as Map<String, Any?>
+        }
+    }
+    return null
+}
+
+private fun Map<String, Any?>.listOrNull(vararg keys: String): List<Any?>? {
+    keys.forEach { key ->
+        val value = this[key]
+        if (value is List<*>) {
+            return value
+        }
+    }
+    return null
+}
+
+private fun JSONObject.toRawMap(): Map<String, Any?> {
+    val result = linkedMapOf<String, Any?>()
+    val keys = keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        result[key] = opt(key).toRawValue()
+    }
+    return result
+}
+
+private fun JSONArray.toRawList(): List<Any?> {
+    val result = mutableListOf<Any?>()
+    for (index in 0 until length()) {
+        result += opt(index).toRawValue()
+    }
+    return result
+}
+
+private fun Any?.toRawValue(): Any? {
+    return when (this) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> toRawMap()
+        is JSONArray -> toRawList()
+        else -> this
+    }
 }

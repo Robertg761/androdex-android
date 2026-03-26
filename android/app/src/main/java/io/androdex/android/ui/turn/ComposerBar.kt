@@ -34,6 +34,7 @@ internal fun ComposerBar(
     state: ComposerUiState,
     onTextChange: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
+    onSubagentsModeChanged: (Boolean) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -59,6 +60,14 @@ internal fun ComposerBar(
                         Text(if (state.isPlanModeEnabled) "Plan mode on" else "Plan mode")
                     },
                 )
+                FilterChip(
+                    selected = state.isSubagentsEnabled,
+                    onClick = { onSubagentsModeChanged(!state.isSubagentsEnabled) },
+                    enabled = state.subagentsEnabled,
+                    label = {
+                        Text(if (state.isSubagentsEnabled) "Subagents on" else "Subagents")
+                    },
+                )
             }
 
             Row(
@@ -72,7 +81,15 @@ internal fun ComposerBar(
                     modifier = Modifier.weight(1f),
                     placeholder = {
                         Text(
-                            if (state.isPlanModeEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
+                            if (state.isPlanModeEnabled && state.isSubagentsEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
+                                "Queue a delegated plan request for when this run finishes"
+                            } else if (state.isPlanModeEnabled && state.isSubagentsEnabled) {
+                                "Ask Codex to plan and delegate the work"
+                            } else if (state.isSubagentsEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
+                                "Queue a delegated follow-up for when this run finishes"
+                            } else if (state.isSubagentsEnabled) {
+                                "Ask Codex to delegate distinct work in parallel"
+                            } else if (state.isPlanModeEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
                                 "Queue a plan request for when this run finishes"
                             } else if (state.isPlanModeEnabled) {
                                 "Ask Codex to make a plan before executing"
@@ -127,13 +144,22 @@ internal fun ComposerBar(
                         } else {
                             Text(
                                 if (state.submitMode == ComposerSubmitMode.QUEUE) {
-                                    if (state.isPlanModeEnabled) {
+                                    if (state.isPlanModeEnabled && state.isSubagentsEnabled) {
+                                        if (state.queuedCount > 0) "Queue Delegate (${state.queuedCount + 1})" else "Queue Delegate"
+                                    } else if (state.isPlanModeEnabled) {
                                         if (state.queuedCount > 0) "Queue Plan (${state.queuedCount + 1})" else "Queue Plan"
+                                    } else if (state.isSubagentsEnabled) {
+                                        if (state.queuedCount > 0) "Queue Delegate (${state.queuedCount + 1})" else "Queue Delegate"
                                     } else {
                                         if (state.queuedCount > 0) "Queue (${state.queuedCount + 1})" else "Queue"
                                     }
                                 } else {
-                                    if (state.isPlanModeEnabled) "Plan" else "Send"
+                                    when {
+                                        state.isPlanModeEnabled && state.isSubagentsEnabled -> "Delegate"
+                                        state.isPlanModeEnabled -> "Plan"
+                                        state.isSubagentsEnabled -> "Delegate"
+                                        else -> "Send"
+                                    }
                                 }
                             )
                         }

@@ -11,6 +11,9 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
+import io.androdex.android.model.SubagentAction
+import io.androdex.android.model.SubagentRef
+import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.TurnTerminalState
@@ -28,6 +31,16 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val savedReconnectRetryDelayMs = 5_000L
+
+private data class SubagentIdentityEntry(
+    val threadId: String?,
+    val agentId: String?,
+    val nickname: String?,
+    val role: String?,
+) {
+    val hasMetadata: Boolean
+        get() = !nickname.isNullOrBlank() || !role.isNullOrBlank() || !agentId.isNullOrBlank()
+}
 
 data class AndrodexServiceState(
     val hasSavedPairing: Boolean = false,
@@ -70,6 +83,8 @@ class AndrodexService(
     private var savedReconnectInFlight = false
     private var savedReconnectRetryJob: Job? = null
     private var suppressSavedReconnect = false
+    private val subagentIdentityByThreadId = mutableMapOf<String, SubagentIdentityEntry>()
+    private val subagentIdentityByAgentId = mutableMapOf<String, SubagentIdentityEntry>()
 
     private val stateFlow = MutableStateFlow(
         AndrodexServiceState(
@@ -458,6 +473,7 @@ class AndrodexService(
             }
 
             is ClientUpdate.ThreadsLoaded -> {
+                updateSubagentIdentitiesFromThreads(update.threads)
                 stateFlow.update { current ->
                     current.copy(
                         threads = update.threads,
@@ -465,10 +481,13 @@ class AndrodexService(
                             ?: current.selectedThreadTitle,
                     )
                 }
+                refreshSubagentMessages()
             }
 
             is ClientUpdate.ThreadLoaded -> {
                 val threadId = update.thread?.id ?: stateFlow.value.selectedThreadId ?: return
+                updateSubagentIdentitiesFromThreads(listOfNotNull(update.thread))
+                updateSubagentIdentitiesFromMessages(update.messages)
                 stateFlow.update { current ->
                     current.copy(
                         selectedThreadTitle = if (current.selectedThreadId == threadId) {
@@ -479,6 +498,7 @@ class AndrodexService(
                         timelineByThread = current.timelineByThread + (threadId to update.messages),
                     )
                 }
+                refreshSubagentMessages()
             }
 
             is ClientUpdate.RuntimeConfigLoaded -> {
@@ -552,6 +572,24 @@ class AndrodexService(
                         explanation = update.explanation,
                         steps = update.steps,
                         isStreaming = false,
+                    )
+                }
+            }
+
+            is ClientUpdate.SubagentActionUpdate -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, update.itemId) ?: return
+                if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateSubagentIdentities(update.action)
+                updateThreadMessages(threadId) { messages ->
+                    upsertSubagentActionMessage(
+                        messages = messages,
+                        threadId = threadId,
+                        turnId = update.turnId,
+                        itemId = update.itemId,
+                        action = resolveSubagentAction(update.action),
+                        isStreaming = update.isStreaming,
                     )
                 }
             }
@@ -1046,6 +1084,180 @@ class AndrodexService(
         savedReconnectRetryJob?.cancel()
         savedReconnectRetryJob = null
     }
+
+    private fun updateSubagentIdentitiesFromThreads(threads: List<ThreadSummary>) {
+        var didChange = false
+        threads.forEach { thread ->
+            if (upsertSubagentIdentity(
+                    threadId = thread.id,
+                    agentId = thread.agentId,
+                    nickname = thread.agentNickname,
+                    role = thread.agentRole,
+                )
+            ) {
+                didChange = true
+            }
+        }
+        if (didChange) {
+            refreshSubagentMessages()
+        }
+    }
+
+    private fun updateSubagentIdentitiesFromMessages(messages: List<ConversationMessage>) {
+        var didChange = false
+        messages.mapNotNull { it.subagentAction }.forEach { action ->
+            if (updateSubagentIdentities(action)) {
+                didChange = true
+            }
+        }
+        if (didChange) {
+            refreshSubagentMessages()
+        }
+    }
+
+    private fun updateSubagentIdentities(action: SubagentAction): Boolean {
+        var didChange = false
+        action.agentRows.forEach { row ->
+            if (upsertSubagentIdentity(
+                    threadId = row.threadId,
+                    agentId = row.agentId,
+                    nickname = row.nickname,
+                    role = row.role,
+                )
+            ) {
+                didChange = true
+            }
+        }
+        return didChange
+    }
+
+    private fun upsertSubagentIdentity(
+        threadId: String?,
+        agentId: String?,
+        nickname: String?,
+        role: String?,
+    ): Boolean {
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedAgentId = agentId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedNickname = nickname?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedRole = role?.trim()?.takeIf { it.isNotEmpty() }
+        if (normalizedThreadId == null && normalizedAgentId == null) {
+            return false
+        }
+
+        val entry = SubagentIdentityEntry(
+            threadId = normalizedThreadId,
+            agentId = normalizedAgentId,
+            nickname = normalizedNickname,
+            role = normalizedRole,
+        )
+        if (!entry.hasMetadata) {
+            return false
+        }
+
+        var didChange = false
+        normalizedThreadId?.let { key ->
+            val merged = mergeSubagentIdentity(subagentIdentityByThreadId[key], entry)
+            if (merged != subagentIdentityByThreadId[key]) {
+                subagentIdentityByThreadId[key] = merged
+                didChange = true
+            }
+        }
+        normalizedAgentId?.let { key ->
+            val merged = mergeSubagentIdentity(subagentIdentityByAgentId[key], entry)
+            if (merged != subagentIdentityByAgentId[key]) {
+                subagentIdentityByAgentId[key] = merged
+                didChange = true
+            }
+        }
+        return didChange
+    }
+
+    private fun mergeSubagentIdentity(
+        existing: SubagentIdentityEntry?,
+        incoming: SubagentIdentityEntry,
+    ): SubagentIdentityEntry {
+        return SubagentIdentityEntry(
+            threadId = existing?.threadId ?: incoming.threadId,
+            agentId = existing?.agentId ?: incoming.agentId,
+            nickname = existing?.nickname ?: incoming.nickname,
+            role = existing?.role ?: incoming.role,
+        )
+    }
+
+    private fun resolvedSubagentIdentity(threadId: String?, agentId: String?): SubagentIdentityEntry? {
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedAgentId = agentId?.trim()?.takeIf { it.isNotEmpty() }
+        val threadEntry = normalizedThreadId?.let(subagentIdentityByThreadId::get)
+        val agentEntry = normalizedAgentId?.let(subagentIdentityByAgentId::get)
+        val merged = SubagentIdentityEntry(
+            threadId = threadEntry?.threadId ?: agentEntry?.threadId ?: normalizedThreadId,
+            agentId = threadEntry?.agentId ?: agentEntry?.agentId ?: normalizedAgentId,
+            nickname = threadEntry?.nickname ?: agentEntry?.nickname,
+            role = threadEntry?.role ?: agentEntry?.role,
+        )
+        return merged.takeIf { it.hasMetadata }
+    }
+
+    private fun resolveSubagentAction(action: SubagentAction): SubagentAction {
+        val orderedThreadIds = buildList {
+            action.receiverThreadIds.forEach { threadId ->
+                if (threadId !in this) {
+                    add(threadId)
+                }
+            }
+            action.receiverAgents.forEach { agent ->
+                if (agent.threadId !in this) {
+                    add(agent.threadId)
+                }
+            }
+            action.agentStates.keys.forEach { threadId ->
+                if (threadId !in this) {
+                    add(threadId)
+                }
+            }
+        }
+
+        val resolvedAgents = orderedThreadIds.mapNotNull { threadId ->
+            val existingAgent = action.receiverAgents.firstOrNull { it.threadId == threadId }
+            val identity = resolvedSubagentIdentity(threadId = threadId, agentId = existingAgent?.agentId)
+            val resolved = SubagentRef(
+                threadId = threadId,
+                agentId = existingAgent?.agentId ?: identity?.agentId,
+                nickname = existingAgent?.nickname ?: identity?.nickname,
+                role = existingAgent?.role ?: identity?.role,
+                model = existingAgent?.model,
+                prompt = existingAgent?.prompt,
+            )
+            resolved.takeIf {
+                it.agentId != null || it.nickname != null || it.role != null || it.model != null || it.prompt != null
+            } ?: existingAgent
+        }
+
+        return action.copy(
+            receiverThreadIds = orderedThreadIds,
+            receiverAgents = resolvedAgents.distinctBy { it.threadId },
+        )
+    }
+
+    private fun refreshSubagentMessages() {
+        stateFlow.update { current ->
+            val nextTimeline = current.timelineByThread.mapValues { (_, messages) ->
+                messages.map { message ->
+                    if (message.kind != ConversationKind.SUBAGENT_ACTION || message.subagentAction == null) {
+                        message
+                    } else {
+                        val resolvedAction = resolveSubagentAction(message.subagentAction)
+                        message.copy(
+                            text = resolvedAction.summaryText,
+                            subagentAction = resolvedAction,
+                        )
+                    }
+                }
+            }
+            current.copy(timelineByThread = nextTimeline)
+        }
+    }
 }
 
 private sealed interface ActiveTurnResolution {
@@ -1188,6 +1400,49 @@ private fun upsertPlanMetadata(
     return updated
 }
 
+private fun upsertSubagentActionMessage(
+    messages: List<ConversationMessage>,
+    threadId: String,
+    turnId: String?,
+    itemId: String?,
+    action: SubagentAction,
+    isStreaming: Boolean,
+): List<ConversationMessage> {
+    val incoming = ConversationMessage(
+        id = itemId ?: UUID.randomUUID().toString(),
+        threadId = threadId,
+        role = ConversationRole.SYSTEM,
+        kind = ConversationKind.SUBAGENT_ACTION,
+        text = action.summaryText,
+        createdAtEpochMs = System.currentTimeMillis(),
+        turnId = turnId,
+        itemId = itemId,
+        isStreaming = isStreaming,
+        subagentAction = action,
+    )
+    val existingIndex = messages.indexOfLast { message ->
+        message.role == ConversationRole.SYSTEM
+            && message.kind == ConversationKind.SUBAGENT_ACTION
+            && subagentMessagesRepresentSameItem(message, incoming)
+    }
+    if (existingIndex < 0) {
+        return messages + incoming
+    }
+
+    val updated = messages.toMutableList()
+    val existing = updated[existingIndex]
+    updated[existingIndex] = mergeMatchedMessage(
+        existing = existing,
+        incoming = incoming,
+        keepStreamingRows = true,
+    ).copy(
+        text = action.summaryText,
+        subagentAction = mergeSubagentActions(existing.subagentAction, action),
+        isStreaming = isStreaming || existing.isStreaming,
+    )
+    return updated
+}
+
 private fun mergeThreadMessages(
     existing: List<ConversationMessage>,
     incoming: List<ConversationMessage>,
@@ -1236,6 +1491,9 @@ private fun mergeMatchedMessage(
         text = mergedText,
         createdAtEpochMs = minOf(existing.createdAtEpochMs, incoming.createdAtEpochMs),
         isStreaming = incoming.isStreaming || shouldKeepStreaming,
+        planExplanation = incoming.planExplanation ?: existing.planExplanation,
+        planSteps = incoming.planSteps ?: existing.planSteps,
+        subagentAction = incoming.subagentAction ?: existing.subagentAction,
     )
 }
 
@@ -1268,4 +1526,83 @@ private fun messagesRepresentSameItem(
     }
 
     return false
+}
+
+private fun subagentMessagesRepresentSameItem(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    if (messagesRepresentSameItem(existing, incoming)) {
+        return true
+    }
+
+    val existingAction = existing.subagentAction ?: return false
+    val incomingAction = incoming.subagentAction ?: return false
+    val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    if (existing.threadId != incoming.threadId
+        || existingTurnId != incomingTurnId
+        || existingAction.normalizedTool != incomingAction.normalizedTool
+    ) {
+        return false
+    }
+
+    val existingPrompt = existingAction.prompt?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    val incomingPrompt = incomingAction.prompt?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    if (existingPrompt != null && incomingPrompt != null) {
+        return existingPrompt == incomingPrompt
+    }
+
+    val existingModel = existingAction.model?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    val incomingModel = incomingAction.model?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    if (existingPrompt == null && existingModel != null && incomingModel != null) {
+        return existingModel == incomingModel
+    }
+
+    return existing.text == incoming.text
+}
+
+private fun mergeSubagentActions(existing: SubagentAction?, incoming: SubagentAction): SubagentAction {
+    if (existing == null) {
+        return incoming
+    }
+
+    val mergedThreadIds = buildList {
+        existing.receiverThreadIds.forEach { if (it !in this) add(it) }
+        incoming.receiverThreadIds.forEach { if (it !in this) add(it) }
+        existing.receiverAgents.forEach { if (it.threadId !in this) add(it.threadId) }
+        incoming.receiverAgents.forEach { if (it.threadId !in this) add(it.threadId) }
+        existing.agentStates.keys.forEach { if (it !in this) add(it) }
+        incoming.agentStates.keys.forEach { if (it !in this) add(it) }
+    }
+
+    val mergedAgents = mergedThreadIds.mapNotNull { threadId ->
+        val current = existing.receiverAgents.firstOrNull { it.threadId == threadId }
+        val next = incoming.receiverAgents.firstOrNull { it.threadId == threadId }
+        next ?: current
+    }
+
+    val mergedStates = existing.agentStates.toMutableMap()
+    incoming.agentStates.forEach { (threadId, nextState) ->
+        val currentState = mergedStates[threadId]
+        mergedStates[threadId] = if (currentState == null) {
+            nextState
+        } else {
+            SubagentState(
+                threadId = threadId,
+                status = nextState.status.ifBlank { currentState.status },
+                message = nextState.message ?: currentState.message,
+            )
+        }
+    }
+
+    return incoming.copy(
+        tool = incoming.tool.ifBlank { existing.tool },
+        status = incoming.status.ifBlank { existing.status },
+        prompt = incoming.prompt ?: existing.prompt,
+        model = incoming.model ?: existing.model,
+        receiverThreadIds = mergedThreadIds,
+        receiverAgents = mergedAgents,
+        agentStates = mergedStates,
+    )
 }

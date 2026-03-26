@@ -64,12 +64,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.androdex.android.applyingSubagentsSelection
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.state.ThreadTimelineUiState
@@ -85,6 +87,7 @@ internal fun ThreadTimelineScreen(
     onRefresh: () -> Unit,
     onComposerChanged: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
+    onSubagentsModeChanged: (Boolean) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -212,6 +215,7 @@ internal fun ThreadTimelineScreen(
                 state = state.composer,
                 onTextChange = onComposerChanged,
                 onPlanModeChanged = onPlanModeChanged,
+                onSubagentsModeChanged = onSubagentsModeChanged,
                 onSend = onSend,
                 onStop = onStop,
             )
@@ -316,22 +320,38 @@ private fun QueuedDraftsCard(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        if (draft.collaborationMode == CollaborationModeKind.PLAN) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                                shape = RoundedCornerShape(999.dp),
-                            ) {
-                                Text(
-                                    text = "PLAN",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (draft.collaborationMode == CollaborationModeKind.PLAN) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    shape = RoundedCornerShape(999.dp),
+                                ) {
+                                    Text(
+                                        text = "PLAN",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            if (draft.subagentsSelectionEnabled) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(999.dp),
+                                ) {
+                                    Text(
+                                        text = "SUBAGENTS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
                             }
                         }
                         Text(
-                            text = draft.text,
+                            text = applyingSubagentsSelection(draft.text, draft.subagentsSelectionEnabled),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 2,
@@ -375,6 +395,7 @@ private fun MessageBubble(message: ConversationMessage) {
         when (message.kind) {
             ConversationKind.FILE_CHANGE -> FileChangeBubble(message)
             ConversationKind.COMMAND -> CommandBubble(message)
+            ConversationKind.SUBAGENT_ACTION -> SubagentActionBubble(message)
             ConversationKind.PLAN -> PlanBubble(message)
             ConversationKind.THINKING -> ThinkingBubble(message)
             else -> SystemCapsule(message)
@@ -905,6 +926,121 @@ private fun PlanStepRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SubagentActionBubble(message: ConversationMessage) {
+    val action = message.subagentAction
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (message.isStreaming) {
+                StreamingIndicator()
+            }
+
+            Text(
+                text = action?.summaryText ?: message.text,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            action?.let { subagentAction ->
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CapsuleLabel(text = subagentAction.tool, emphasized = true)
+                    CapsuleLabel(text = subagentAction.status)
+                    subagentAction.model?.let { CapsuleLabel(text = it) }
+                }
+
+                subagentAction.prompt?.let { prompt ->
+                    Text(
+                        text = prompt,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+                    )
+                }
+
+                subagentAction.agentRows.forEach { row ->
+                    SubagentAgentRow(row)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubagentAgentRow(row: SubagentThreadPresentation) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = row.displayLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                row.fallbackStatus?.let { CapsuleLabel(text = it) }
+            }
+
+            val detailParts = listOfNotNull(
+                row.model?.let { model ->
+                    if (row.modelIsRequestedHint) "$model requested" else model
+                },
+                row.fallbackMessage,
+            )
+            if (detailParts.isNotEmpty()) {
+                Text(
+                    text = detailParts.joinToString(" • "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CapsuleLabel(text: String, emphasized: Boolean = false) {
+    Surface(
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.secondary
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (emphasized) {
+                MaterialTheme.colorScheme.onSecondary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
     }
 }
 

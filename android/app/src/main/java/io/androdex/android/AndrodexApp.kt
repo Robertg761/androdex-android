@@ -98,6 +98,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onRefresh = { viewModel.openThread(destination.state.threadId) },
                 onComposerChanged = viewModel::updateComposerText,
                 onPlanModeChanged = viewModel::updateComposerPlanMode,
+                onSubagentsModeChanged = viewModel::updateComposerSubagentsEnabled,
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::interruptSelectedThread,
                 onPauseQueue = viewModel::pauseSelectedThreadQueue,

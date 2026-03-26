@@ -44,7 +44,9 @@ data class AndrodexUiState(
     val composerText: String = "",
     val composerDraftsByThread: Map<String, String> = emptyMap(),
     val composerPlanModeByThread: Set<String> = emptySet(),
+    val composerSubagentsByThread: Set<String> = emptySet(),
     val isComposerPlanMode: Boolean = false,
+    val isComposerSubagentsEnabled: Boolean = false,
     val queuedDraftStateByThread: Map<String, ThreadQueuedDraftState> = emptyMap(),
     val queueFlushingThreadIds: Set<String> = emptySet(),
     val isSendingMessage: Boolean = false,
@@ -112,17 +114,34 @@ class MainViewModel(
     fun updateComposerText(value: String) {
         uiStateFlow.update { current ->
             val threadId = current.selectedThreadId
+            val token = trailingSlashCommandToken(value)
+            val shouldArmSubagents = token?.query.equals("subagents", ignoreCase = true)
+            val normalizedValue = if (shouldArmSubagents) {
+                removingTrailingSlashCommandToken(value).orEmpty()
+            } else {
+                value
+            }
             val nextDrafts = current.composerDraftsByThread.toMutableMap()
             if (threadId != null) {
-                if (value.isEmpty()) {
+                if (normalizedValue.isEmpty()) {
                     nextDrafts.remove(threadId)
                 } else {
-                    nextDrafts[threadId] = value
+                    nextDrafts[threadId] = normalizedValue
                 }
             }
             current.copy(
-                composerText = value,
+                composerText = normalizedValue,
                 composerDraftsByThread = nextDrafts,
+                composerSubagentsByThread = if (threadId != null && shouldArmSubagents) {
+                    current.composerSubagentsByThread + threadId
+                } else {
+                    current.composerSubagentsByThread
+                },
+                isComposerSubagentsEnabled = if (threadId != null) {
+                    shouldArmSubagents || threadId in current.composerSubagentsByThread
+                } else {
+                    current.isComposerSubagentsEnabled
+                },
             )
         }
     }
@@ -133,6 +152,16 @@ class MainViewModel(
             current.copy(
                 composerPlanModeByThread = current.composerPlanModeByThread.updatedPlanMode(threadId, enabled),
                 isComposerPlanMode = enabled,
+            )
+        }
+    }
+
+    fun updateComposerSubagentsEnabled(enabled: Boolean) {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            current.copy(
+                composerSubagentsByThread = current.composerSubagentsByThread.updatedPlanMode(threadId, enabled),
+                isComposerSubagentsEnabled = enabled,
             )
         }
     }
@@ -182,11 +211,17 @@ class MainViewModel(
                 threadId = threadId,
                 enabled = draft.collaborationMode == CollaborationModeKind.PLAN,
             )
+            val nextSubagents = state.composerSubagentsByThread.updatedPlanMode(
+                threadId = threadId,
+                enabled = draft.subagentsSelectionEnabled,
+            )
             state.copy(
                 composerText = draft.text,
                 composerDraftsByThread = state.composerDraftsByThread + (threadId to draft.text),
                 composerPlanModeByThread = nextPlanModes,
+                composerSubagentsByThread = nextSubagents,
                 isComposerPlanMode = threadId in nextPlanModes,
+                isComposerSubagentsEnabled = threadId in nextSubagents,
                 queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
                     threadId = threadId,
                     queueState = queueState.copy(drafts = nextDrafts).normalized(),
@@ -272,8 +307,10 @@ class MainViewModel(
 
     fun sendMessage() {
         val current = uiStateFlow.value
-        val input = current.composerText.trim()
-        if (input.isEmpty() || current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy) {
+        val rawInput = current.composerText
+        val subagentsEnabled = current.isComposerSubagentsEnabled
+        val payload = applyingSubagentsSelection(rawInput, subagentsEnabled)
+        if (payload.isEmpty() || current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy) {
             return
         }
         val collaborationMode = if (current.isComposerPlanMode) {
@@ -286,15 +323,18 @@ class MainViewModel(
         if (threadId != null && current.isThreadRunning(threadId)) {
             val queuedDraft = QueuedTurnDraft(
                 id = UUID.randomUUID().toString(),
-                text = input,
+                text = rawInput.trim(),
                 createdAtEpochMs = System.currentTimeMillis(),
                 collaborationMode = collaborationMode,
+                subagentsSelectionEnabled = subagentsEnabled,
             )
             uiStateFlow.update { state ->
                 val existingQueueState = state.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
                 state.copy(
                     composerText = "",
                     composerDraftsByThread = state.composerDraftsByThread - threadId,
+                    composerSubagentsByThread = state.composerSubagentsByThread - threadId,
+                    isComposerSubagentsEnabled = false,
                     queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
                         threadId = threadId,
                         queueState = existingQueueState.copy(
@@ -310,22 +350,31 @@ class MainViewModel(
             it.copy(
                 composerText = "",
                 composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread - id } ?: it.composerDraftsByThread,
+                composerSubagentsByThread = threadId?.let { id -> it.composerSubagentsByThread - id }
+                    ?: it.composerSubagentsByThread,
+                isComposerSubagentsEnabled = false,
                 isSendingMessage = true,
             )
         }
         viewModelScope.launch {
             try {
                 service.sendMessage(
-                    input = input,
+                    input = payload,
                     preferredThreadId = threadId,
                     collaborationMode = collaborationMode,
                 )
             } catch (error: Throwable) {
                 uiStateFlow.update {
+                    val nextSubagents = threadId?.let { id ->
+                        if (subagentsEnabled) it.composerSubagentsByThread + id else it.composerSubagentsByThread - id
+                    } ?: it.composerSubagentsByThread
                     it.copy(
-                        composerText = input,
-                        composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread + (id to input) }
+                        composerText = rawInput.trim(),
+                        composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread + (id to rawInput.trim()) }
                             ?: it.composerDraftsByThread,
+                        composerSubagentsByThread = nextSubagents,
+                        isComposerSubagentsEnabled = threadId?.let { id -> id in nextSubagents }
+                            ?: it.isComposerSubagentsEnabled,
                     )
                 }
                 service.reportError(error.message ?: "Failed to send message.")
@@ -473,7 +522,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 service.sendMessage(
-                    input = draftToSend.text,
+                    input = applyingSubagentsSelection(draftToSend.text, draftToSend.subagentsSelectionEnabled),
                     preferredThreadId = threadId,
                     collaborationMode = draftToSend.collaborationMode,
                 )
@@ -546,6 +595,9 @@ private fun applyServiceState(
     val selectedThreadPlanMode = serviceState.selectedThreadId
         ?.let { it in current.composerPlanModeByThread }
         ?: false
+    val selectedThreadSubagents = serviceState.selectedThreadId
+        ?.let { it in current.composerSubagentsByThread }
+        ?: false
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         defaultRelayUrl = serviceState.defaultRelayUrl,
@@ -563,7 +615,9 @@ private fun applyServiceState(
         failedThreadIds = serviceState.failedThreadIds,
         composerText = selectedThreadComposerText,
         composerPlanModeByThread = current.composerPlanModeByThread,
+        composerSubagentsByThread = current.composerSubagentsByThread,
         isComposerPlanMode = selectedThreadPlanMode,
+        isComposerSubagentsEnabled = selectedThreadSubagents,
         isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,
