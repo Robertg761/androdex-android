@@ -144,6 +144,7 @@ function shouldStartContextUsageWatcher(context) {
   }
 
   return context.method === "turn/start"
+    || context.method === "turn/steer"
     || context.method === "turn/started"
     || isActiveThreadStatus(context.method, context.params, envelopeEventObject(context.params));
 }

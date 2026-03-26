@@ -25,6 +25,7 @@ interface AndrodexRepositoryContract {
     suspend fun loadThread(threadId: String): ThreadLoadResult
     suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot
     suspend fun startTurn(threadId: String, userInput: String)
+    suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String)
     suspend fun interruptTurn(threadId: String, turnId: String)
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
@@ -73,6 +74,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun startTurn(threadId: String, userInput: String) {
         client.startTurn(threadId, userInput)
+    }
+
+    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
+        client.steerTurn(threadId, expectedTurnId, userInput)
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {

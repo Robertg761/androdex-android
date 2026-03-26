@@ -279,6 +279,23 @@ class AndrodexClient(
         sendRequest("turn/start", params)
     }
 
+    suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
+        resumeThread(threadId)
+        val params = JSONObject()
+            .put("threadId", threadId)
+            .put("expectedTurnId", expectedTurnId)
+            .put(
+                "input",
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "text")
+                        .put("text", userInput.trim())
+                )
+            )
+        selectedReasoningEffortForSelectedModel()?.let { params.put("effort", it) }
+        sendRequest("turn/steer", params)
+    }
+
     suspend fun interruptTurn(threadId: String, turnId: String) {
         sendRequest(
             "turn/interrupt",

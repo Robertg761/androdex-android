@@ -215,6 +215,8 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun startTurn(threadId: String, userInput: String) = Unit
 
+    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) = Unit
+
     override suspend fun interruptTurn(threadId: String, turnId: String) = Unit
 
     override suspend fun loadRuntimeConfig() = Unit

@@ -206,6 +206,20 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun interruptThread_usesKnownActiveTurnIdWithoutThreadRead() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-live"))
+        service.interruptThread("thread-1")
+        advanceUntilIdle()
+
+        assertTrue(repository.readThreadRunSnapshotIds.isEmpty())
+        assertEquals(listOf("thread-1:turn-live"), repository.interruptedTurns)
+    }
+
+    @Test
     fun interruptThread_keepsProtectedFallbackWhenThreadReadHasRunningTurnWithoutId() = runTest {
         val repository = FakeRepository().apply {
             runSnapshot = ThreadRunSnapshot(
@@ -227,6 +241,86 @@ class AndrodexServiceTest {
         assertTrue(service.state.value.protectedRunningFallbackThreadIds.contains("thread-1"))
         assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
         assertTrue(repository.interruptedTurns.isEmpty())
+    }
+
+    @Test
+    fun sendMessage_steersActiveRunWhenTurnIdIsKnown() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-live",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-live",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-live"))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.sendMessage("Keep going")
+        advanceUntilIdle()
+
+        assertTrue(repository.readThreadRunSnapshotIds.isEmpty())
+        assertEquals(listOf("thread-1:turn-live:Keep going"), repository.steeredTurns)
+        assertTrue(repository.startedTurns.isEmpty())
+    }
+
+    @Test
+    fun sendMessage_usesThreadReadFallbackToSteerWhenTurnIdIsMissing() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = true,
+                    latestTurnId = "turn-live",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = "turn-live",
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-live",
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", null))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.sendMessage("Keep going")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.readThreadRunSnapshotIds)
+        assertEquals(listOf("thread-1:turn-live:Keep going"), repository.steeredTurns)
+        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals("turn-live", service.state.value.activeTurnIdByThread["thread-1"])
     }
 
     @Test
@@ -279,6 +373,10 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
+    suspend fun emit(update: ClientUpdate) {
+        updatesFlow.emit(update)
+    }
+
     override fun hasSavedPairing(): Boolean = hasSavedPairing
 
     override fun currentFingerprint(): String? = null
@@ -317,6 +415,8 @@ private class FakeRepository : AndrodexRepositoryContract {
         shouldAssumeRunningFromLatestTurn = false,
     )
     val readThreadRunSnapshotIds = mutableListOf<String>()
+    val startedTurns = mutableListOf<String>()
+    val steeredTurns = mutableListOf<String>()
     val interruptedTurns = mutableListOf<String>()
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
@@ -329,7 +429,13 @@ private class FakeRepository : AndrodexRepositoryContract {
         return runSnapshot
     }
 
-    override suspend fun startTurn(threadId: String, userInput: String) = Unit
+    override suspend fun startTurn(threadId: String, userInput: String) {
+        startedTurns += "$threadId:$userInput"
+    }
+
+    override suspend fun steerTurn(threadId: String, expectedTurnId: String, userInput: String) {
+        steeredTurns += "$threadId:$expectedTurnId:$userInput"
+    }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {
         interruptedTurns += "$threadId:$turnId"

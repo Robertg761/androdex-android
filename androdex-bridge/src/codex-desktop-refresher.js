@@ -124,7 +124,7 @@ class CodexDesktopRefresher {
       return;
     }
 
-    if (method === "turn/start") {
+    if (method === "turn/start" || method === "turn/steer") {
       const target = resolveInboundTarget(method, parsed);
       if (!target) {
         return;

@@ -110,11 +110,19 @@ internal data class ThreadTimelineUiState(
 
 internal data class ComposerUiState(
     val text: String,
-    val isBusy: Boolean,
-    val canSend: Boolean,
+    val inputEnabled: Boolean,
+    val submitMode: ComposerSubmitMode,
+    val isSubmitting: Boolean,
+    val submitEnabled: Boolean,
     val showStop: Boolean,
+    val isStopping: Boolean,
     val stopEnabled: Boolean,
 )
+
+internal enum class ComposerSubmitMode {
+    SEND,
+    STEER,
+}
 
 internal enum class ThreadRunBadgeUiState {
     RUNNING,
@@ -281,10 +289,13 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         busy = toBusyUiState(),
         composer = ComposerUiState(
             text = composerText,
-            isBusy = isBusy,
-            canSend = composerText.isNotBlank() && !isBusy && !isThreadRunning,
+            inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            submitMode = if (isThreadRunning) ComposerSubmitMode.STEER else ComposerSubmitMode.SEND,
+            isSubmitting = isSendingMessage,
+            submitEnabled = composerText.isNotBlank() && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             showStop = isThreadRunning,
-            stopEnabled = !isBusy,
+            isStopping = isInterruptingSelectedThread,
+            stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
         ),
     )
 }

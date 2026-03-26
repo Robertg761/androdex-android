@@ -8,10 +8,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.state.ComposerUiState
+import io.androdex.android.ui.state.ComposerSubmitMode
 
 @Composable
 internal fun ComposerBar(
@@ -49,10 +51,11 @@ internal fun ComposerBar(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        "Ask Codex...",
+                        if (state.submitMode == ComposerSubmitMode.STEER) "Steer the active run" else "Ask Codex...",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 },
+                enabled = state.inputEnabled,
                 shape = RoundedCornerShape(24.dp),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -71,19 +74,42 @@ internal fun ComposerBar(
                     enabled = state.stopEnabled,
                     shape = RoundedCornerShape(24.dp),
                 ) {
-                    Text("Stop")
+                    if (state.isStopping) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Stop")
+                    }
+                }
+
+                Button(
+                    onClick = onSend,
+                    enabled = state.submitEnabled,
+                    shape = RoundedCornerShape(24.dp),
+                ) {
+                    if (state.isSubmitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Text("Steer")
+                    }
                 }
             } else {
-                IconButton(
+                FilledIconButton(
                     onClick = onSend,
-                    enabled = state.canSend,
+                    enabled = state.submitEnabled,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (state.canSend) {
+                        containerColor = if (state.submitEnabled) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.surfaceContainerHighest
                         },
-                        contentColor = if (state.canSend) {
+                        contentColor = if (state.submitEnabled) {
                             MaterialTheme.colorScheme.onPrimary
                         } else {
                             MaterialTheme.colorScheme.outline
@@ -91,11 +117,11 @@ internal fun ComposerBar(
                     ),
                     modifier = Modifier.size(44.dp),
                 ) {
-                    if (state.isBusy) {
+                    if (state.isSubmitting) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.outline,
+                            color = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
                         Icon(

@@ -37,6 +37,8 @@ data class AndrodexUiState(
     val readyThreadIds: Set<String> = emptySet(),
     val failedThreadIds: Set<String> = emptySet(),
     val composerText: String = "",
+    val isSendingMessage: Boolean = false,
+    val isInterruptingSelectedThread: Boolean = false,
     val isBusy: Boolean = false,
     val busyLabel: String? = null,
     val isLoadingRuntimeConfig: Boolean = false,
@@ -167,24 +169,39 @@ class MainViewModel(
     }
 
     fun sendMessage() {
-        val input = uiStateFlow.value.composerText.trim()
-        if (input.isEmpty()) {
+        val current = uiStateFlow.value
+        val input = current.composerText.trim()
+        if (input.isEmpty() || current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy) {
             return
         }
 
-        uiStateFlow.update { it.copy(composerText = "") }
-        runBusyAction("Sending message...") {
-            service.sendMessage(input)
+        uiStateFlow.update { it.copy(composerText = "", isSendingMessage = true) }
+        viewModelScope.launch {
+            try {
+                service.sendMessage(input)
+            } catch (error: Throwable) {
+                uiStateFlow.update { it.copy(composerText = input) }
+                service.reportError(error.message ?: "Failed to send message.")
+            } finally {
+                uiStateFlow.update { it.copy(isSendingMessage = false) }
+            }
         }
     }
 
     fun interruptSelectedThread() {
-        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isInterruptingSelectedThread || current.isSendingMessage || current.isBusy) {
+            return
+        }
+        uiStateFlow.update { it.copy(isInterruptingSelectedThread = true) }
         viewModelScope.launch {
             try {
                 service.interruptThread(threadId)
             } catch (error: Throwable) {
                 service.reportError(error.message ?: "Failed to stop the active run.")
+            } finally {
+                uiStateFlow.update { it.copy(isInterruptingSelectedThread = false) }
             }
         }
     }

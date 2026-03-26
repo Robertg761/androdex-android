@@ -209,6 +209,33 @@ class AndrodexService(
             }
         }
 
+        clearThreadOutcome(threadId)
+        when {
+            isThreadConsideredRunning(threadId) -> {
+                when (val resolution = resolveActiveTurn(threadId)) {
+                    is ActiveTurnResolution.Resolved -> {
+                        repository.steerTurn(threadId, resolution.turnId, trimmedInput)
+                        markThreadRunning(threadId, resolution.turnId)
+                    }
+
+                    ActiveTurnResolution.WaitingForTurnId -> {
+                        throw IllegalStateException(
+                            "The active run has not published a steerable turn ID yet. Please try again in a moment."
+                        )
+                    }
+
+                    ActiveTurnResolution.NoActiveTurn -> {
+                        repository.startTurn(threadId, trimmedInput)
+                        markThreadRunning(threadId = threadId, turnId = null)
+                    }
+                }
+            }
+
+            else -> {
+                repository.startTurn(threadId, trimmedInput)
+                markThreadRunning(threadId = threadId, turnId = null)
+            }
+        }
         appendMessage(
             threadId = threadId,
             message = ConversationMessage(
@@ -220,40 +247,23 @@ class AndrodexService(
                 createdAtEpochMs = System.currentTimeMillis(),
             )
         )
-        clearThreadOutcome(threadId)
-        markThreadRunning(threadId = threadId, turnId = null)
-        repository.startTurn(threadId, trimmedInput)
     }
 
     suspend fun interruptThread(threadId: String) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
-        val activeTurnId = stateFlow.value.activeTurnIdByThread[normalizedThreadId]
-        if (activeTurnId != null) {
-            repository.interruptTurn(normalizedThreadId, activeTurnId)
-            return
-        }
-
-        val snapshot = repository.readThreadRunSnapshot(normalizedThreadId)
-        when {
-            snapshot.interruptibleTurnId != null -> {
-                markThreadRunning(normalizedThreadId, snapshot.interruptibleTurnId)
-                repository.interruptTurn(normalizedThreadId, snapshot.interruptibleTurnId)
+        when (val resolution = resolveActiveTurn(normalizedThreadId)) {
+            is ActiveTurnResolution.Resolved -> {
+                markThreadRunning(normalizedThreadId, resolution.turnId)
+                repository.interruptTurn(normalizedThreadId, resolution.turnId)
             }
 
-            snapshot.shouldAssumeRunningFromLatestTurn && snapshot.latestTurnId != null -> {
-                markThreadRunning(normalizedThreadId, snapshot.latestTurnId)
-                repository.interruptTurn(normalizedThreadId, snapshot.latestTurnId)
-            }
-
-            snapshot.hasInterruptibleTurnWithoutId -> {
-                syncThreadRunStateFromSnapshot(normalizedThreadId, snapshot)
+            ActiveTurnResolution.WaitingForTurnId -> {
                 throw IllegalStateException(
                     "The active run has not published an interruptible turn ID yet. Please try again in a moment."
                 )
             }
 
-            else -> {
-                clearThreadRunningState(normalizedThreadId)
+            ActiveTurnResolution.NoActiveTurn -> {
                 throw IllegalStateException("No active run is available to stop.")
             }
         }
@@ -775,6 +785,38 @@ class AndrodexService(
         }
     }
 
+    private suspend fun resolveActiveTurn(threadId: String): ActiveTurnResolution {
+        val activeTurnId = stateFlow.value.activeTurnIdByThread[threadId]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        if (activeTurnId != null) {
+            return ActiveTurnResolution.Resolved(activeTurnId)
+        }
+
+        val snapshot = repository.readThreadRunSnapshot(threadId)
+        return when {
+            snapshot.interruptibleTurnId != null -> {
+                markThreadRunning(threadId, snapshot.interruptibleTurnId)
+                ActiveTurnResolution.Resolved(snapshot.interruptibleTurnId)
+            }
+
+            snapshot.shouldAssumeRunningFromLatestTurn && snapshot.latestTurnId != null -> {
+                markThreadRunning(threadId, snapshot.latestTurnId)
+                ActiveTurnResolution.Resolved(snapshot.latestTurnId)
+            }
+
+            snapshot.hasInterruptibleTurnWithoutId -> {
+                syncThreadRunStateFromSnapshot(threadId, snapshot)
+                ActiveTurnResolution.WaitingForTurnId
+            }
+
+            else -> {
+                syncThreadRunStateFromSnapshot(threadId, snapshot)
+                ActiveTurnResolution.NoActiveTurn
+            }
+        }
+    }
+
     private fun syncThreadRunStateFromSnapshot(threadId: String, snapshot: ThreadRunSnapshot) {
         stateFlow.update { current ->
             val nextActiveTurns = current.activeTurnIdByThread.toMutableMap()
@@ -932,6 +974,12 @@ class AndrodexService(
         savedReconnectRetryJob?.cancel()
         savedReconnectRetryJob = null
     }
+}
+
+private sealed interface ActiveTurnResolution {
+    data class Resolved(val turnId: String) : ActiveTurnResolution
+    data object WaitingForTurnId : ActiveTurnResolution
+    data object NoActiveTurn : ActiveTurnResolution
 }
 
 private fun applyStreamingItemDelta(

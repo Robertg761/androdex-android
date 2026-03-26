@@ -51,6 +51,7 @@ Androdex does **not** run Codex on the phone itself.
 - item-scoped timeline reconciliation with per-thread running, ready, and failed state on Android
 - reconnect-safe rollout mirroring for desktop-started runs reopened on Android
 - Stop-button recovery that falls back to `thread/read` when a live turn has not published a usable `turnId`
+- active-run steering from the Android composer without forcing a fresh turn restart
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android
@@ -125,7 +126,8 @@ Use this after host-side changes to make sure Windows and macOS still behave the
 2. Run `androdex up`, choose a workspace, and confirm the host-local Codex session opens in that project.
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
-5. Restart the daemon or reconnect the phone and confirm the saved pairing and active workspace recover cleanly.
+5. While a run is active on Android, confirm both `Stop` and steering work and that steering continues the same run instead of starting a fresh one.
+6. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands
 

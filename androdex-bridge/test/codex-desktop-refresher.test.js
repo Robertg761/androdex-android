@@ -212,6 +212,35 @@ test("rollout growth refreshes are throttled during long runs", async () => {
   assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
 });
 
+test("turn/steer refreshes the active thread and keeps the watcher armed", async () => {
+  const refreshCalls = [];
+  const watchedThreads = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: ({ threadId }) => {
+      watchedThreads.push(threadId);
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/steer",
+    params: {
+      threadId: "thread-steer",
+      expectedTurnId: "turn-live",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-steer"]);
+  assert.deepEqual(watchedThreads, ["thread-steer"]);
+});
+
 test("turn/completed bypasses duplicate-target dedupe and still stops the watcher", async () => {
   const refreshCalls = [];
   let stopCount = 0;

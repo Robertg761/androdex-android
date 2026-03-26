@@ -126,7 +126,8 @@ class AndrodexFeatureStateTest {
         val route = appState.destination as AndrodexDestinationUiState.Thread
 
         assertEquals("thread-9", route.state.threadId)
-        assertFalse(route.state.composer.canSend)
+        assertEquals(ComposerSubmitMode.STEER, route.state.composer.submitMode)
+        assertTrue(route.state.composer.submitEnabled)
         assertTrue(route.state.composer.showStop)
         assertEquals("Please continue", route.state.composer.text)
         assertTrue(appState.settings.isVisible)
