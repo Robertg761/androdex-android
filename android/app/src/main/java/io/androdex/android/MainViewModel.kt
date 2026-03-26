@@ -12,6 +12,8 @@ import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitOperationException
+import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
@@ -85,6 +87,14 @@ data class AndrodexUiState(
     val isWorkspaceBrowserLoading: Boolean = false,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
+    val gitStateByThread: Map<String, ThreadGitState> = emptyMap(),
+    val runningGitActionByThread: Map<String, GitActionKind> = emptyMap(),
+    val gitCommitDialog: GitCommitDialogState? = null,
+    val gitBranchDialog: GitBranchDialogState? = null,
+    val gitWorktreeDialog: GitWorktreeDialogState? = null,
+    val gitAlert: GitAlertState? = null,
+    val pendingGitBranchOperation: GitBranchUserOperation? = null,
+    val pendingGitRemoveWorktree: GitPendingRemoveWorktree? = null,
 )
 
 class MainViewModel(
@@ -377,6 +387,434 @@ class MainViewModel(
         }
     }
 
+    fun refreshSelectedThreadGitState() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        runGitAction(threadId, GitActionKind.REFRESH) {
+            loadGitSnapshot(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                loadDiff = false,
+                suppressErrors = false,
+            )
+        }
+    }
+
+    fun refreshSelectedThreadGitDiff() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        runGitAction(threadId, GitActionKind.DIFF) {
+            loadGitSnapshot(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                loadDiff = true,
+                suppressErrors = false,
+            )
+        }
+    }
+
+    fun openGitCommitDialog() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        uiStateFlow.update {
+            it.copy(
+                gitCommitDialog = GitCommitDialogState("Changes from Androdex"),
+                gitAlert = null,
+            )
+        }
+    }
+
+    fun updateGitCommitMessage(value: String) {
+        uiStateFlow.update { current ->
+            current.copy(
+                gitCommitDialog = current.gitCommitDialog?.copy(message = value),
+            )
+        }
+    }
+
+    fun dismissGitCommitDialog() {
+        uiStateFlow.update { it.copy(gitCommitDialog = null) }
+    }
+
+    fun submitGitCommit() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val message = snapshot.gitCommitDialog?.message?.trim().orEmpty()
+            .ifEmpty { "Changes from Androdex" }
+        runGitAction(threadId, GitActionKind.COMMIT) {
+            try {
+                repository.gitCommit(workingDirectory, message)
+                uiStateFlow.update { it.copy(gitCommitDialog = null) }
+            } catch (error: GitOperationException) {
+                if (error.code == "nothing_to_commit") {
+                    uiStateFlow.update {
+                        it.copy(
+                            gitCommitDialog = null,
+                            gitAlert = dismissOnlyGitAlert(
+                                title = "Nothing to commit",
+                                message = error.message,
+                            ),
+                        )
+                    }
+                    return@runGitAction
+                }
+                throw error
+            }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        }
+    }
+
+    fun pushGitChanges() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        runGitAction(threadId, GitActionKind.PUSH) {
+            val result = repository.gitPush(workingDirectory)
+            updateThreadGitState(threadId) { current ->
+                current.copy(status = result.status ?: current.status)
+            }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+        }
+    }
+
+    fun requestGitPull() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val status = snapshot.gitStateByThread[threadId]?.status
+        if (status?.state == "diverged" || status?.state == "dirty_and_behind") {
+            val (title, message) = if (status.state == "diverged") {
+                "Branch diverged from remote" to
+                    "Local and remote history both moved. Pull with rebase to reconcile them?"
+            } else {
+                "Local changes need attention" to
+                    "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to resolve conflicts."
+            }
+            uiStateFlow.update {
+                it.copy(
+                    gitAlert = GitAlertState(
+                        title = title,
+                        message = message,
+                        buttons = listOf(
+                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                            GitAlertButton("Pull & Rebase", GitAlertAction.PULL_REBASE),
+                        ),
+                    ),
+                    pendingGitBranchOperation = null,
+                    pendingGitRemoveWorktree = null,
+                )
+            }
+            return
+        }
+        performGitPull(threadId, workingDirectory)
+    }
+
+    fun openGitBranchDialog() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        uiStateFlow.update {
+            it.copy(
+                gitBranchDialog = GitBranchDialogState(),
+                gitAlert = null,
+            )
+        }
+        viewModelScope.launch {
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+        }
+    }
+
+    fun updateGitBranchName(value: String) {
+        uiStateFlow.update { current ->
+            current.copy(
+                gitBranchDialog = current.gitBranchDialog?.copy(newBranchName = value),
+            )
+        }
+    }
+
+    fun dismissGitBranchDialog() {
+        uiStateFlow.update { it.copy(gitBranchDialog = null) }
+    }
+
+    fun requestCreateGitBranch() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val branchName = snapshot.gitBranchDialog?.newBranchName?.trim().orEmpty()
+        if (branchName.isEmpty()) {
+            return
+        }
+        val operation = GitBranchUserOperation.Create(branchName)
+        val alert = gitBranchAlert(snapshot, operation)
+        if (alert != null) {
+            uiStateFlow.update {
+                it.copy(
+                    gitAlert = alert,
+                    pendingGitBranchOperation = operation,
+                    pendingGitRemoveWorktree = null,
+                )
+            }
+            return
+        }
+        performGitCreateBranch(threadId, workingDirectory, branchName)
+    }
+
+    fun requestSwitchGitBranch(branch: String) {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val trimmedBranch = branch.trim()
+        if (trimmedBranch.isEmpty()) {
+            return
+        }
+        val branchTargets = snapshot.gitStateByThread[threadId]?.branchTargets
+        if (trimmedBranch in branchTargets?.branchesCheckedOutElsewhere.orEmpty()) {
+            uiStateFlow.update {
+                it.copy(
+                    gitAlert = dismissOnlyGitAlert(
+                        title = "Branch switch failed",
+                        message = "Cannot switch branches: this branch is already open in another worktree.",
+                    ),
+                    pendingGitBranchOperation = null,
+                    pendingGitRemoveWorktree = null,
+                )
+            }
+            return
+        }
+        val operation = GitBranchUserOperation.SwitchTo(trimmedBranch)
+        val alert = gitBranchAlert(snapshot, operation)
+        if (alert != null) {
+            uiStateFlow.update {
+                it.copy(
+                    gitAlert = alert,
+                    pendingGitBranchOperation = operation,
+                    pendingGitRemoveWorktree = null,
+                )
+            }
+            return
+        }
+        performGitSwitchBranch(threadId, workingDirectory, trimmedBranch)
+    }
+
+    fun openGitWorktreeDialog() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val branchTargets = snapshot.gitStateByThread[threadId]?.branchTargets
+        uiStateFlow.update {
+            it.copy(
+                gitWorktreeDialog = GitWorktreeDialogState(
+                    baseBranch = branchTargets?.defaultBranch
+                        ?: branchTargets?.currentBranch
+                        ?: "",
+                ),
+                gitAlert = null,
+            )
+        }
+        viewModelScope.launch {
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+        }
+    }
+
+    fun updateGitWorktreeBranchName(value: String) {
+        uiStateFlow.update { current ->
+            current.copy(
+                gitWorktreeDialog = current.gitWorktreeDialog?.copy(branchName = value),
+            )
+        }
+    }
+
+    fun updateGitWorktreeBaseBranch(value: String) {
+        uiStateFlow.update { current ->
+            current.copy(
+                gitWorktreeDialog = current.gitWorktreeDialog?.copy(baseBranch = value),
+            )
+        }
+    }
+
+    fun updateGitWorktreeTransferMode(value: GitWorktreeChangeTransferMode) {
+        uiStateFlow.update { current ->
+            current.copy(
+                gitWorktreeDialog = current.gitWorktreeDialog?.copy(changeTransfer = value),
+            )
+        }
+    }
+
+    fun dismissGitWorktreeDialog() {
+        uiStateFlow.update { it.copy(gitWorktreeDialog = null) }
+    }
+
+    fun requestCreateGitWorktree() {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val dialog = snapshot.gitWorktreeDialog ?: return
+        val branchName = dialog.branchName.trim()
+        val baseBranch = dialog.baseBranch.trim()
+        if (branchName.isEmpty() || baseBranch.isEmpty()) {
+            return
+        }
+        val operation = GitBranchUserOperation.CreateWorktree(
+            branchName = branchName,
+            baseBranch = baseBranch,
+            changeTransfer = dialog.changeTransfer,
+        )
+        val alert = gitBranchAlert(snapshot, operation)
+        if (alert != null) {
+            uiStateFlow.update {
+                it.copy(
+                    gitAlert = alert,
+                    pendingGitBranchOperation = operation,
+                    pendingGitRemoveWorktree = null,
+                )
+            }
+            return
+        }
+        performGitCreateWorktree(
+            threadId = threadId,
+            workingDirectory = workingDirectory,
+            branchName = branchName,
+            baseBranch = baseBranch,
+            changeTransfer = dialog.changeTransfer,
+        )
+    }
+
+    fun requestRemoveGitWorktree(branch: String, worktreePath: String) {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val trimmedBranch = branch.trim()
+        val trimmedPath = worktreePath.trim()
+        if (trimmedBranch.isEmpty() || trimmedPath.isEmpty()) {
+            return
+        }
+        uiStateFlow.update {
+            it.copy(
+                gitAlert = GitAlertState(
+                    title = "Remove managed worktree?",
+                    message = "This removes the managed worktree for '$trimmedBranch' at $trimmedPath.",
+                    buttons = listOf(
+                        GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                        GitAlertButton(
+                            label = "Remove Worktree",
+                            action = GitAlertAction.REMOVE_WORKTREE,
+                            isDestructive = true,
+                        ),
+                    ),
+                ),
+                pendingGitRemoveWorktree = GitPendingRemoveWorktree(
+                    branch = trimmedBranch,
+                    worktreePath = trimmedPath,
+                ),
+                pendingGitBranchOperation = null,
+            )
+        }
+    }
+
+    fun dismissGitAlert() {
+        uiStateFlow.update {
+            it.copy(
+                gitAlert = null,
+                pendingGitBranchOperation = null,
+                pendingGitRemoveWorktree = null,
+            )
+        }
+    }
+
+    fun handleGitAlertAction(action: GitAlertAction) {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
+        val pendingBranchOperation = snapshot.pendingGitBranchOperation
+        val pendingRemoveWorktree = snapshot.pendingGitRemoveWorktree
+        uiStateFlow.update {
+            it.copy(
+                gitAlert = null,
+                pendingGitBranchOperation = null,
+                pendingGitRemoveWorktree = null,
+            )
+        }
+        when (action) {
+            GitAlertAction.DISMISS -> Unit
+            GitAlertAction.PULL_REBASE -> performGitPull(threadId, workingDirectory)
+            GitAlertAction.CONTINUE_BRANCH_OPERATION -> continueGitBranchOperation(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                operation = pendingBranchOperation,
+            )
+            GitAlertAction.COMMIT_AND_CONTINUE_BRANCH_OPERATION -> {
+                val operation = pendingBranchOperation ?: return
+                viewModelScope.launch {
+                    uiStateFlow.update {
+                        it.copy(runningGitActionByThread = it.runningGitActionByThread + (threadId to GitActionKind.COMMIT))
+                    }
+                    try {
+                        repository.gitCommit(workingDirectory, "WIP before switching branches")
+                        loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+                    } catch (error: Throwable) {
+                        reportGitFailure(error, "Commit failed.")
+                        return@launch
+                    } finally {
+                        uiStateFlow.update {
+                            it.copy(runningGitActionByThread = it.runningGitActionByThread - threadId)
+                        }
+                    }
+                    continueGitBranchOperation(threadId, workingDirectory, operation)
+                }
+            }
+            GitAlertAction.REMOVE_WORKTREE -> {
+                val request = pendingRemoveWorktree ?: return
+                runGitAction(threadId, GitActionKind.REMOVE_WORKTREE) {
+                    repository.gitRemoveWorktree(
+                        workingDirectory = request.worktreePath,
+                        branch = request.branch,
+                    )
+                    loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+                }
+            }
+        }
+    }
+
     fun clearError() {
         service.clearError()
     }
@@ -429,13 +867,41 @@ class MainViewModel(
 
     fun openThread(threadId: String) {
         clearComposerAutocomplete()
+        uiStateFlow.update {
+            it.copy(
+                gitCommitDialog = null,
+                gitBranchDialog = null,
+                gitWorktreeDialog = null,
+                gitAlert = null,
+                pendingGitBranchOperation = null,
+                pendingGitRemoveWorktree = null,
+            )
+        }
         runBusyAction("Loading messages...") {
             service.openThread(threadId)
+            gitWorkingDirectoryForThread(threadId, uiStateFlow.value)?.let { workingDirectory ->
+                loadGitSnapshot(
+                    threadId = threadId,
+                    workingDirectory = workingDirectory,
+                    loadDiff = false,
+                    suppressErrors = true,
+                )
+            }
         }
     }
 
     fun closeThread() {
         clearComposerAutocomplete()
+        uiStateFlow.update {
+            it.copy(
+                gitCommitDialog = null,
+                gitBranchDialog = null,
+                gitWorktreeDialog = null,
+                gitAlert = null,
+                pendingGitBranchOperation = null,
+                pendingGitRemoveWorktree = null,
+            )
+        }
         service.closeThread()
     }
 
@@ -443,6 +909,17 @@ class MainViewModel(
         clearComposerAutocomplete()
         runBusyAction("Creating thread...") {
             service.createThread()
+            val createdThreadId = service.state.value.selectedThreadId
+            if (createdThreadId != null) {
+                gitWorkingDirectoryForThread(createdThreadId, uiStateFlow.value)?.let { workingDirectory ->
+                    loadGitSnapshot(
+                        threadId = createdThreadId,
+                        workingDirectory = workingDirectory,
+                        loadDiff = false,
+                        suppressErrors = true,
+                    )
+                }
+            }
         }
     }
 
@@ -635,6 +1112,384 @@ class MainViewModel(
             service.activateWorkspace(path)
             uiStateFlow.update { it.copy(isProjectPickerOpen = false) }
         }
+    }
+
+    internal fun canRunGitAction(
+        isConnected: Boolean,
+        isThreadRunning: Boolean,
+        hasGitWorkingDirectory: Boolean,
+    ): Boolean {
+        return isConnected && hasGitWorkingDirectory && !isThreadRunning
+    }
+
+    private fun canStartGitAction(
+        threadId: String,
+        workingDirectory: String,
+        state: AndrodexUiState = uiStateFlow.value,
+    ): Boolean {
+        return canRunGitAction(
+            isConnected = state.connectionStatus == ConnectionStatus.CONNECTED,
+            isThreadRunning = state.isThreadRunning(threadId),
+            hasGitWorkingDirectory = workingDirectory.isNotBlank(),
+        ) && threadId !in state.runningGitActionByThread
+            && !state.isBusy
+            && !state.isSendingMessage
+            && !state.isInterruptingSelectedThread
+    }
+
+    private suspend fun loadGitSnapshot(
+        threadId: String,
+        workingDirectory: String,
+        loadDiff: Boolean,
+        suppressErrors: Boolean,
+    ) {
+        updateThreadGitState(threadId) { current ->
+            current.copy(
+                isRefreshing = true,
+                isLoadingBranchTargets = true,
+            )
+        }
+        try {
+            val branchTargets = repository.gitBranchesWithStatus(workingDirectory)
+            updateThreadGitState(threadId) { current ->
+                current.copy(
+                    status = branchTargets.status ?: current.status,
+                    branchTargets = branchTargets,
+                    isRefreshing = loadDiff,
+                    isLoadingBranchTargets = false,
+                )
+            }
+        } catch (error: Throwable) {
+            updateThreadGitState(threadId) { current ->
+                current.copy(
+                    isRefreshing = false,
+                    isLoadingBranchTargets = false,
+                )
+            }
+            if (!suppressErrors) {
+                reportGitFailure(error, "Failed to load Git status.")
+            }
+            return
+        }
+
+        if (!loadDiff) {
+            updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
+            return
+        }
+
+        try {
+            val diff = repository.gitDiff(workingDirectory)
+            updateThreadGitState(threadId) { current ->
+                current.copy(
+                    diffPatch = diff.patch.trim().ifEmpty { null },
+                    isRefreshing = false,
+                )
+            }
+        } catch (error: Throwable) {
+            updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
+            if (!suppressErrors) {
+                reportGitFailure(error, "Failed to load the Git diff.")
+            }
+        }
+    }
+
+    private fun performGitPull(threadId: String, workingDirectory: String) {
+        runGitAction(threadId, GitActionKind.PULL) {
+            val result = repository.gitPull(workingDirectory)
+            updateThreadGitState(threadId) { current ->
+                current.copy(status = result.status ?: current.status)
+            }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+        }
+    }
+
+    private fun performGitCreateBranch(
+        threadId: String,
+        workingDirectory: String,
+        branchName: String,
+    ) {
+        runGitAction(threadId, GitActionKind.CREATE_BRANCH) {
+            repository.gitCreateBranch(workingDirectory, branchName)
+            uiStateFlow.update { it.copy(gitBranchDialog = null) }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        }
+    }
+
+    private fun performGitSwitchBranch(
+        threadId: String,
+        workingDirectory: String,
+        branch: String,
+    ) {
+        runGitAction(threadId, GitActionKind.SWITCH_BRANCH) {
+            repository.gitCheckout(workingDirectory, branch)
+            uiStateFlow.update { it.copy(gitBranchDialog = null) }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        }
+    }
+
+    private fun performGitCreateWorktree(
+        threadId: String,
+        workingDirectory: String,
+        branchName: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ) {
+        runGitAction(threadId, GitActionKind.CREATE_WORKTREE) {
+            repository.gitCreateWorktree(
+                workingDirectory = workingDirectory,
+                name = branchName,
+                baseBranch = baseBranch,
+                changeTransfer = changeTransfer,
+            )
+            uiStateFlow.update { it.copy(gitWorktreeDialog = null) }
+            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        }
+    }
+
+    private fun continueGitBranchOperation(
+        threadId: String,
+        workingDirectory: String,
+        operation: GitBranchUserOperation?,
+    ) {
+        when (operation) {
+            is GitBranchUserOperation.Create -> performGitCreateBranch(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                branchName = operation.branchName,
+            )
+            is GitBranchUserOperation.SwitchTo -> performGitSwitchBranch(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                branch = operation.branchName,
+            )
+            is GitBranchUserOperation.CreateWorktree -> performGitCreateWorktree(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                branchName = operation.branchName,
+                baseBranch = operation.baseBranch,
+                changeTransfer = operation.changeTransfer,
+            )
+            null -> Unit
+        }
+    }
+
+    private fun gitBranchAlert(
+        state: AndrodexUiState,
+        operation: GitBranchUserOperation,
+    ): GitAlertState? {
+        val threadId = state.selectedThreadId ?: return null
+        val status = state.gitStateByThread[threadId]?.status ?: return null
+        val branchTargets = state.gitStateByThread[threadId]?.branchTargets
+        val currentBranch = (status.currentBranch ?: branchTargets?.currentBranch).orEmpty().trim()
+        val defaultBranch = branchTargets?.defaultBranch.orEmpty().trim()
+        val onDefaultBranch = currentBranch.isNotEmpty() && currentBranch == defaultBranch
+
+        return when (operation) {
+            is GitBranchUserOperation.Create -> {
+                if (status.isDirty) {
+                    GitAlertState(
+                        title = "Bring local changes to '${operation.branchName}'?",
+                        message = newBranchDirtyAlertMessage(
+                            branchName = operation.branchName,
+                            currentBranch = currentBranch,
+                            defaultBranch = defaultBranch,
+                            localOnlyCommitCount = status.localOnlyCommitCount,
+                            files = status.files.map { it.path },
+                        ),
+                        buttons = listOf(
+                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                            GitAlertButton("Carry to New Branch", GitAlertAction.CONTINUE_BRANCH_OPERATION),
+                            GitAlertButton("Commit, Create & Switch", GitAlertAction.COMMIT_AND_CONTINUE_BRANCH_OPERATION),
+                        ),
+                    )
+                } else if (onDefaultBranch && status.localOnlyCommitCount > 0) {
+                    val commitLabel = if (status.localOnlyCommitCount == 1) {
+                        "1 local commit"
+                    } else {
+                        "${status.localOnlyCommitCount} local commits"
+                    }
+                    GitAlertState(
+                        title = "Local commits stay on $defaultBranch",
+                        message = "$defaultBranch already has $commitLabel that are not on the remote. Creating '${operation.branchName}' starts the new branch from the current HEAD, but those commits stay in $defaultBranch's history.",
+                        buttons = listOf(
+                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                            GitAlertButton("Create Anyway", GitAlertAction.CONTINUE_BRANCH_OPERATION),
+                        ),
+                    )
+                } else {
+                    null
+                }
+            }
+            is GitBranchUserOperation.SwitchTo -> {
+                if (!status.isDirty) {
+                    null
+                } else {
+                    GitAlertState(
+                        title = "Commit changes before switching branch?",
+                        message = dirtyBranchAlertMessage(
+                            intro = "These local changes can block checkout or be hard to reason about after the switch. Commit them on ${currentBranch.ifEmpty { "the current branch" }} first, then switch to '${operation.branchName}'.",
+                            files = status.files.map { it.path },
+                        ),
+                        buttons = listOf(
+                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                            GitAlertButton("Commit & Switch", GitAlertAction.COMMIT_AND_CONTINUE_BRANCH_OPERATION),
+                        ),
+                    )
+                }
+            }
+            is GitBranchUserOperation.CreateWorktree -> {
+                if (status.isDirty && currentBranch != operation.baseBranch) {
+                    val transferVerb = if (operation.changeTransfer == GitWorktreeChangeTransferMode.COPY) {
+                        "copy"
+                    } else {
+                        "move"
+                    }
+                    dismissOnlyGitAlert(
+                        title = "${transferVerb.replaceFirstChar(Char::titlecase)} local changes from the current branch",
+                        message = "Creating '${operation.branchName}' can $transferVerb tracked local changes only from $currentBranch. Switch the base branch to '$currentBranch' or clean up local changes before creating the worktree.",
+                    )
+                } else if (onDefaultBranch && currentBranch == operation.baseBranch && status.localOnlyCommitCount > 0) {
+                    val commitLabel = if (status.localOnlyCommitCount == 1) {
+                        "1 local commit"
+                    } else {
+                        "${status.localOnlyCommitCount} local commits"
+                    }
+                    val dirtySuffix = if (status.isDirty) {
+                        if (operation.changeTransfer == GitWorktreeChangeTransferMode.MOVE) {
+                            " Tracked local changes will move into the new worktree; ignored files stay here."
+                        } else {
+                            " Tracked local changes will also be copied into the new worktree; ignored files stay here."
+                        }
+                    } else {
+                        ""
+                    }
+                    GitAlertState(
+                        title = "Local commits stay on $defaultBranch",
+                        message = "$defaultBranch already has $commitLabel that are not on the remote. Creating the new worktree branch '${operation.branchName}' from ${operation.baseBranch} starts from the current HEAD, but those commits stay in $defaultBranch's history too.$dirtySuffix",
+                        buttons = listOf(
+                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                            GitAlertButton("Create Anyway", GitAlertAction.CONTINUE_BRANCH_OPERATION),
+                        ),
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun dirtyBranchAlertMessage(
+        intro: String,
+        files: List<String>,
+    ): String {
+        if (files.isEmpty()) {
+            return intro
+        }
+        val previewFiles = files.take(3)
+        val overflowCount = files.size - previewFiles.size
+        return buildString {
+            append(intro)
+            append("\n\nFiles with local changes:\n")
+            previewFiles.forEach { path ->
+                append("• ")
+                append(path)
+                append('\n')
+            }
+            if (overflowCount > 0) {
+                append("• +")
+                append(overflowCount)
+                append(" more files")
+            } else {
+                deleteCharAt(lastIndex)
+            }
+        }
+    }
+
+    private fun newBranchDirtyAlertMessage(
+        branchName: String,
+        currentBranch: String,
+        defaultBranch: String,
+        localOnlyCommitCount: Int,
+        files: List<String>,
+    ): String {
+        val sourceBranch = currentBranch.ifEmpty { "the current branch" }
+        val intro = if (defaultBranch.isNotEmpty()
+            && sourceBranch == defaultBranch
+            && localOnlyCommitCount > 0
+        ) {
+            val commitLabel = if (localOnlyCommitCount == 1) {
+                "1 local commit"
+            } else {
+                "$localOnlyCommitCount local commits"
+            }
+            "$defaultBranch already has $commitLabel that are not on the remote. Those commits stay in $defaultBranch's history. You're creating '$branchName' from $sourceBranch. Carry your tracked changes onto the new branch, or commit first and then create and switch."
+        } else {
+            "You're creating '$branchName' from $sourceBranch. Carry your tracked changes onto the new branch, or commit first and then create and switch."
+        }
+        return dirtyBranchAlertMessage(intro = intro, files = files)
+    }
+
+    private fun dismissOnlyGitAlert(
+        title: String,
+        message: String,
+    ): GitAlertState {
+        return GitAlertState(
+            title = title,
+            message = message,
+            buttons = listOf(
+                GitAlertButton("OK", GitAlertAction.DISMISS),
+            ),
+        )
+    }
+
+    private fun runGitAction(
+        threadId: String,
+        action: GitActionKind,
+        block: suspend () -> Unit,
+    ) {
+        viewModelScope.launch {
+            uiStateFlow.update {
+                it.copy(runningGitActionByThread = it.runningGitActionByThread + (threadId to action))
+            }
+            try {
+                block()
+            } catch (error: Throwable) {
+                reportGitFailure(error, "Git action failed.")
+            } finally {
+                uiStateFlow.update {
+                    it.copy(runningGitActionByThread = it.runningGitActionByThread - threadId)
+                }
+            }
+        }
+    }
+
+    private fun reportGitFailure(
+        error: Throwable,
+        fallbackMessage: String,
+    ) {
+        service.reportError(error.message ?: fallbackMessage)
+    }
+
+    private fun updateThreadGitState(
+        threadId: String,
+        transform: (ThreadGitState) -> ThreadGitState,
+    ) {
+        uiStateFlow.update { current ->
+            val existing = current.gitStateByThread[threadId] ?: ThreadGitState()
+            current.copy(
+                gitStateByThread = current.gitStateByThread + (threadId to transform(existing)),
+            )
+        }
+    }
+
+    private fun gitWorkingDirectoryForThread(
+        threadId: String,
+        state: AndrodexUiState,
+    ): String? {
+        return state.threads.firstOrNull { it.id == threadId }?.cwd
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: state.activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     private fun flushEligibleQueues() {

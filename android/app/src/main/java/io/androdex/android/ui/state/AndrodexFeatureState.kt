@@ -2,12 +2,19 @@ package io.androdex.android.ui.state
 
 import io.androdex.android.AndrodexUiState
 import io.androdex.android.ComposerSlashCommand
+import io.androdex.android.GitActionKind
+import io.androdex.android.GitAlertState
+import io.androdex.android.GitBranchDialogState
+import io.androdex.android.GitCommitDialogState
+import io.androdex.android.GitWorktreeDialogState
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
@@ -111,12 +118,28 @@ internal data class ThreadTimelineUiState(
     val messages: List<ConversationMessage>,
     val runState: ThreadRunBadgeUiState?,
     val busy: BusyUiState,
+    val git: ThreadGitUiState,
     val queuedDrafts: List<QueuedTurnDraft>,
     val queuePauseMessage: String?,
     val canRestoreQueuedDrafts: Boolean,
     val canPauseQueue: Boolean,
     val canResumeQueue: Boolean,
     val composer: ComposerUiState,
+)
+
+internal data class ThreadGitUiState(
+    val hasWorkingDirectory: Boolean,
+    val availabilityMessage: String?,
+    val status: GitRepoSyncResult?,
+    val branchTargets: GitBranchesWithStatusResult?,
+    val diffPatch: String?,
+    val isRefreshing: Boolean,
+    val runningAction: GitActionKind?,
+    val canRunActions: Boolean,
+    val commitDialog: GitCommitDialogState?,
+    val branchDialog: GitBranchDialogState?,
+    val worktreeDialog: GitWorktreeDialogState?,
+    val alert: GitAlertState?,
 )
 
 internal data class ComposerUiState(
@@ -316,12 +339,44 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
+    val workingDirectory = threads.firstOrNull { it.id == threadId }?.cwd
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    val gitState = gitStateByThread[threadId]
+    val runningGitAction = runningGitActionByThread[threadId]
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
         messages = messages,
         runState = threadRunBadge(threadId),
         busy = toBusyUiState(),
+        git = ThreadGitUiState(
+            hasWorkingDirectory = workingDirectory != null,
+            availabilityMessage = when {
+                workingDirectory == null -> "Bind this thread to a local checkout to use Git actions."
+                connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to use Git actions."
+                isThreadRunning -> "Git actions pause while this thread is running."
+                runningGitAction != null -> "Git action in progress."
+                else -> null
+            },
+            status = gitState?.status,
+            branchTargets = gitState?.branchTargets,
+            diffPatch = gitState?.diffPatch,
+            isRefreshing = gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true,
+            runningAction = runningGitAction,
+            canRunActions = workingDirectory != null
+                && connectionStatus == ConnectionStatus.CONNECTED
+                && !isThreadRunning
+                && runningGitAction == null
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
+            commitDialog = gitCommitDialog,
+            branchDialog = gitBranchDialog,
+            worktreeDialog = gitWorktreeDialog,
+            alert = gitAlert,
+        ),
         queuedDrafts = queuedDrafts,
         queuePauseMessage = queueState?.pauseMessage,
         canRestoreQueuedDrafts = queuedDrafts.isNotEmpty()

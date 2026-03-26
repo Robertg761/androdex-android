@@ -5,6 +5,17 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitCheckoutResult
+import io.androdex.android.model.GitCommitResult
+import io.androdex.android.model.GitCreateBranchResult
+import io.androdex.android.model.GitCreateWorktreeResult
+import io.androdex.android.model.GitPullResult
+import io.androdex.android.model.GitPushResult
+import io.androdex.android.model.GitRemoveWorktreeResult
+import io.androdex.android.model.GitRepoDiffResult
+import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
@@ -55,6 +66,24 @@ interface AndrodexRepositoryContract {
     suspend fun listRecentWorkspaces(): WorkspaceRecentState
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult
     suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus
+    suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult
+    suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult
+    suspend fun gitCommit(workingDirectory: String, message: String): GitCommitResult
+    suspend fun gitPush(workingDirectory: String): GitPushResult
+    suspend fun gitPull(workingDirectory: String): GitPullResult
+    suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult
+    suspend fun gitCheckout(workingDirectory: String, branch: String): GitCheckoutResult
+    suspend fun gitCreateBranch(workingDirectory: String, name: String): GitCreateBranchResult
+    suspend fun gitCreateWorktree(
+        workingDirectory: String,
+        name: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ): GitCreateWorktreeResult
+    suspend fun gitRemoveWorktree(
+        workingDirectory: String,
+        branch: String,
+    ): GitRemoveWorktreeResult
 }
 
 class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
@@ -149,4 +178,44 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult = client.listWorkspaceDirectory(path)
 
     override suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus = client.activateWorkspace(cwd)
+
+    override suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult = client.gitStatus(workingDirectory)
+
+    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult = client.gitDiff(workingDirectory)
+
+    override suspend fun gitCommit(workingDirectory: String, message: String): GitCommitResult {
+        return client.gitCommit(workingDirectory, message)
+    }
+
+    override suspend fun gitPush(workingDirectory: String): GitPushResult = client.gitPush(workingDirectory)
+
+    override suspend fun gitPull(workingDirectory: String): GitPullResult = client.gitPull(workingDirectory)
+
+    override suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
+        return client.gitBranchesWithStatus(workingDirectory)
+    }
+
+    override suspend fun gitCheckout(workingDirectory: String, branch: String): GitCheckoutResult {
+        return client.gitCheckout(workingDirectory, branch)
+    }
+
+    override suspend fun gitCreateBranch(workingDirectory: String, name: String): GitCreateBranchResult {
+        return client.gitCreateBranch(workingDirectory, name)
+    }
+
+    override suspend fun gitCreateWorktree(
+        workingDirectory: String,
+        name: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ): GitCreateWorktreeResult {
+        return client.gitCreateWorktree(workingDirectory, name, baseBranch, changeTransfer)
+    }
+
+    override suspend fun gitRemoveWorktree(
+        workingDirectory: String,
+        branch: String,
+    ): GitRemoveWorktreeResult {
+        return client.gitRemoveWorktree(workingDirectory, branch)
+    }
 }

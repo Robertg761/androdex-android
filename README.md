@@ -54,6 +54,7 @@ Androdex does **not** run Codex on the phone itself.
 - queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
 - Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
 - Android composer `@file`, `$skill`, and `/subagents` affordances with autocomplete chips and structured skill turn payloads
+- Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android

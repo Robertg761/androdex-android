@@ -8,6 +8,17 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitCheckoutResult
+import io.androdex.android.model.GitCommitResult
+import io.androdex.android.model.GitCreateBranchResult
+import io.androdex.android.model.GitCreateWorktreeResult
+import io.androdex.android.model.GitPullResult
+import io.androdex.android.model.GitPushResult
+import io.androdex.android.model.GitRemoveWorktreeResult
+import io.androdex.android.model.GitRepoDiffResult
+import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentAction
@@ -633,5 +644,76 @@ private class FakeRepository : AndrodexRepositoryContract {
             workspaceActive = true,
             hasTrustedPhone = true,
         )
+    }
+
+    override suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult {
+        return GitRepoSyncResult(
+            repoRoot = workingDirectory,
+            currentBranch = "main",
+            trackingBranch = "origin/main",
+            isDirty = false,
+            aheadCount = 0,
+            behindCount = 0,
+            localOnlyCommitCount = 0,
+            state = "up_to_date",
+            canPush = false,
+            isPublishedToRemote = true,
+            files = emptyList(),
+            repoDiffTotals = null,
+        )
+    }
+
+    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult = GitRepoDiffResult("")
+
+    override suspend fun gitCommit(workingDirectory: String, message: String): GitCommitResult {
+        return GitCommitResult("abc1234", "main", message)
+    }
+
+    override suspend fun gitPush(workingDirectory: String): GitPushResult {
+        return GitPushResult("main", "origin", gitStatus(workingDirectory))
+    }
+
+    override suspend fun gitPull(workingDirectory: String): GitPullResult {
+        return GitPullResult(success = true, status = gitStatus(workingDirectory))
+    }
+
+    override suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
+        return GitBranchesWithStatusResult(
+            branches = listOf("main"),
+            branchesCheckedOutElsewhere = emptySet(),
+            worktreePathByBranch = emptyMap(),
+            localCheckoutPath = workingDirectory,
+            currentBranch = "main",
+            defaultBranch = "main",
+            status = gitStatus(workingDirectory),
+        )
+    }
+
+    override suspend fun gitCheckout(workingDirectory: String, branch: String): GitCheckoutResult {
+        return GitCheckoutResult(branch, "origin/$branch", gitStatus(workingDirectory))
+    }
+
+    override suspend fun gitCreateBranch(workingDirectory: String, name: String): GitCreateBranchResult {
+        return GitCreateBranchResult("remodex/$name", gitStatus(workingDirectory))
+    }
+
+    override suspend fun gitCreateWorktree(
+        workingDirectory: String,
+        name: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ): GitCreateWorktreeResult {
+        return GitCreateWorktreeResult(
+            branch = "remodex/$name",
+            worktreePath = "$workingDirectory\\worktree",
+            alreadyExisted = false,
+        )
+    }
+
+    override suspend fun gitRemoveWorktree(
+        workingDirectory: String,
+        branch: String,
+    ): GitRemoveWorktreeResult {
+        return GitRemoveWorktreeResult(success = true)
     }
 }

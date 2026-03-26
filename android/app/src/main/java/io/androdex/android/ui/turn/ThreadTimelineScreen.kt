@@ -33,10 +33,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -66,17 +70,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.androdex.android.applyingSubagentsSelection
 import io.androdex.android.ComposerSlashCommand
+import io.androdex.android.GitActionKind
+import io.androdex.android.GitAlertAction
+import io.androdex.android.GitAlertButton
+import io.androdex.android.GitAlertState
+import io.androdex.android.GitBranchDialogState
+import io.androdex.android.GitCommitDialogState
+import io.androdex.android.GitWorktreeDialogState
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.state.ThreadGitUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import java.text.DateFormat
 import java.util.Date
@@ -102,6 +117,28 @@ internal fun ThreadTimelineScreen(
     onResumeQueue: () -> Unit,
     onRestoreQueuedDraft: (String) -> Unit,
     onRemoveQueuedDraft: (String) -> Unit,
+    onRefreshGit: () -> Unit,
+    onLoadGitDiff: () -> Unit,
+    onOpenGitCommit: () -> Unit,
+    onUpdateGitCommitMessage: (String) -> Unit,
+    onDismissGitCommit: () -> Unit,
+    onSubmitGitCommit: () -> Unit,
+    onPushGit: () -> Unit,
+    onRequestGitPull: () -> Unit,
+    onOpenGitBranchDialog: () -> Unit,
+    onUpdateGitBranchName: (String) -> Unit,
+    onDismissGitBranchDialog: () -> Unit,
+    onRequestCreateGitBranch: () -> Unit,
+    onRequestSwitchGitBranch: (String) -> Unit,
+    onOpenGitWorktreeDialog: () -> Unit,
+    onUpdateGitWorktreeBranchName: (String) -> Unit,
+    onUpdateGitWorktreeBaseBranch: (String) -> Unit,
+    onUpdateGitWorktreeTransferMode: (GitWorktreeChangeTransferMode) -> Unit,
+    onDismissGitWorktreeDialog: () -> Unit,
+    onRequestCreateGitWorktree: () -> Unit,
+    onRequestRemoveGitWorktree: (String, String) -> Unit,
+    onDismissGitAlert: () -> Unit,
+    onHandleGitAlertAction: (GitAlertAction) -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val listState = remember { LazyListState() }
@@ -155,6 +192,35 @@ internal fun ThreadTimelineScreen(
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { paddingValues ->
+        GitAlertDialog(
+            state = state.git.alert,
+            onDismiss = onDismissGitAlert,
+            onAction = onHandleGitAlertAction,
+        )
+        GitCommitDialog(
+            state = state.git.commitDialog,
+            onDismiss = onDismissGitCommit,
+            onMessageChange = onUpdateGitCommitMessage,
+            onSubmit = onSubmitGitCommit,
+        )
+        GitBranchDialog(
+            state = state.git.branchDialog,
+            branchTargets = state.git.branchTargets,
+            onDismiss = onDismissGitBranchDialog,
+            onNameChange = onUpdateGitBranchName,
+            onCreate = onRequestCreateGitBranch,
+            onSwitch = onRequestSwitchGitBranch,
+        )
+        GitWorktreeDialog(
+            state = state.git.worktreeDialog,
+            branchTargets = state.git.branchTargets,
+            onDismiss = onDismissGitWorktreeDialog,
+            onBranchNameChange = onUpdateGitWorktreeBranchName,
+            onBaseBranchChange = onUpdateGitWorktreeBaseBranch,
+            onTransferModeChange = onUpdateGitWorktreeTransferMode,
+            onCreate = onRequestCreateGitWorktree,
+            onRemoveWorktree = onRequestRemoveGitWorktree,
+        )
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -163,6 +229,16 @@ internal fun ThreadTimelineScreen(
         ) {
             BusyIndicator(state = state.busy)
             AgentActivityBanner(messages = state.messages)
+            GitStatusCard(
+                state = state.git,
+                onRefreshGit = onRefreshGit,
+                onLoadGitDiff = onLoadGitDiff,
+                onOpenGitCommit = onOpenGitCommit,
+                onPushGit = onPushGit,
+                onRequestGitPull = onRequestGitPull,
+                onOpenGitBranchDialog = onOpenGitBranchDialog,
+                onOpenGitWorktreeDialog = onOpenGitWorktreeDialog,
+            )
 
             Box(
                 modifier = Modifier
@@ -397,6 +473,489 @@ private fun QueuedDraftsCard(
             }
         }
     }
+}
+
+@Composable
+private fun GitStatusCard(
+    state: ThreadGitUiState,
+    onRefreshGit: () -> Unit,
+    onLoadGitDiff: () -> Unit,
+    onOpenGitCommit: () -> Unit,
+    onPushGit: () -> Unit,
+    onRequestGitPull: () -> Unit,
+    onOpenGitBranchDialog: () -> Unit,
+    onOpenGitWorktreeDialog: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = state.status?.currentBranch?.let { "Git • $it" } ?: "Git workflows",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = state.status?.repoRoot?.trim()?.substringAfterLast('\\')?.substringAfterLast('/')
+                            ?: state.availabilityMessage
+                            ?: "Host-local repository controls",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (state.isRefreshing || state.runningAction != null) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+
+            state.status?.let { status ->
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GitBadge(label = status.state.replace('_', ' '), emphasized = true)
+                    GitBadge(label = if (status.isDirty) "Dirty" else "Clean")
+                    if (status.aheadCount > 0) {
+                        GitBadge(label = "Ahead ${status.aheadCount}")
+                    }
+                    if (status.behindCount > 0) {
+                        GitBadge(label = "Behind ${status.behindCount}")
+                    }
+                    if (status.localOnlyCommitCount > 0) {
+                        GitBadge(label = "Local ${status.localOnlyCommitCount}")
+                    }
+                    status.trackingBranch?.takeIf { it.isNotBlank() }?.let { GitBadge(label = it) }
+                }
+
+                status.repoDiffTotals?.let { diffTotals ->
+                    Text(
+                        text = buildString {
+                            append("+")
+                            append(diffTotals.additions)
+                            append(" / -")
+                            append(diffTotals.deletions)
+                            if (diffTotals.binaryFiles > 0) {
+                                append(" / ")
+                                append(diffTotals.binaryFiles)
+                                append(" binary")
+                            }
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+
+                if (status.files.isNotEmpty()) {
+                    status.files.take(5).forEach { file ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            GitFileStatusPill(file.status)
+                            Text(
+                                text = file.path,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+
+            state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
+                DiffView(diffText = patch)
+            }
+
+            state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(onClick = onRefreshGit, enabled = state.canRunActions) {
+                    Text("Status")
+                }
+                OutlinedButton(onClick = onLoadGitDiff, enabled = state.canRunActions) {
+                    Text(if (state.diffPatch.isNullOrBlank()) "Load Diff" else "Refresh Diff")
+                }
+                OutlinedButton(
+                    onClick = onOpenGitCommit,
+                    enabled = state.canRunActions && state.status?.isDirty == true,
+                ) {
+                    Text("Commit")
+                }
+                OutlinedButton(
+                    onClick = onPushGit,
+                    enabled = state.canRunActions && (state.status?.canPush == true),
+                ) {
+                    Text("Push")
+                }
+                OutlinedButton(
+                    onClick = onRequestGitPull,
+                    enabled = state.canRunActions && state.status != null,
+                ) {
+                    Text("Pull")
+                }
+                OutlinedButton(onClick = onOpenGitBranchDialog, enabled = state.canRunActions) {
+                    Text("Branches")
+                }
+                OutlinedButton(onClick = onOpenGitWorktreeDialog, enabled = state.canRunActions) {
+                    Text("Worktrees")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitBadge(
+    label: String,
+    emphasized: Boolean = false,
+) {
+    Surface(
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            text = label.replaceFirstChar { char ->
+                if (char.isLowerCase()) {
+                    char.titlecase()
+                } else {
+                    char.toString()
+                }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (emphasized) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun GitFileStatusPill(status: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(
+            text = status.ifBlank { "?" },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+        )
+    }
+}
+
+@Composable
+private fun GitCommitDialog(
+    state: GitCommitDialogState?,
+    onDismiss: () -> Unit,
+    onMessageChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    if (state == null) {
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Commit changes") },
+        text = {
+            OutlinedTextField(
+                value = state.message,
+                onValueChange = onMessageChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Commit message") },
+                minLines = 2,
+            )
+        },
+        confirmButton = {
+            Button(onClick = onSubmit) {
+                Text("Commit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun GitBranchDialog(
+    state: GitBranchDialogState?,
+    branchTargets: GitBranchesWithStatusResult?,
+    onDismiss: () -> Unit,
+    onNameChange: (String) -> Unit,
+    onCreate: () -> Unit,
+    onSwitch: (String) -> Unit,
+) {
+    if (state == null) {
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Branches") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = state.newBranchName,
+                    onValueChange = onNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("New branch name") },
+                    placeholder = { Text("topic/refactor") },
+                )
+                branchTargets?.defaultBranch?.takeIf { it.isNotBlank() }?.let { defaultBranch ->
+                    Text(
+                        text = "Default branch: $defaultBranch",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                branchTargets?.branches.orEmpty().take(8).forEach { branch ->
+                    val path = branchTargets?.worktreePathByBranch?.get(branch)
+                    val checkedOutElsewhere = branch in branchTargets?.branchesCheckedOutElsewhere.orEmpty()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = branch,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = when {
+                                    branch == branchTargets?.currentBranch -> "Current checkout"
+                                    checkedOutElsewhere && !path.isNullOrBlank() -> path
+                                    checkedOutElsewhere -> "Open in another worktree"
+                                    else -> "Switch checkout"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { onSwitch(branch) },
+                            enabled = branch != branchTargets?.currentBranch,
+                        ) {
+                            Text("Switch")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onCreate,
+                enabled = state.newBranchName.trim().isNotEmpty(),
+            ) {
+                Text("Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun GitWorktreeDialog(
+    state: GitWorktreeDialogState?,
+    branchTargets: GitBranchesWithStatusResult?,
+    onDismiss: () -> Unit,
+    onBranchNameChange: (String) -> Unit,
+    onBaseBranchChange: (String) -> Unit,
+    onTransferModeChange: (GitWorktreeChangeTransferMode) -> Unit,
+    onCreate: () -> Unit,
+    onRemoveWorktree: (String, String) -> Unit,
+) {
+    if (state == null) {
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Managed worktrees") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = state.branchName,
+                    onValueChange = onBranchNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("New worktree branch") },
+                    placeholder = { Text("topic/mobile-git") },
+                )
+                Text(
+                    text = "Base branch",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    branchTargets?.branches.orEmpty().take(8).forEach { branch ->
+                        val emphasized = branch == state.baseBranch
+                        OutlinedButton(onClick = { onBaseBranchChange(branch) }) {
+                            Text(if (emphasized) "• $branch" else branch)
+                        }
+                    }
+                }
+                Text(
+                    text = "Change transfer",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.MOVE) }) {
+                        Text(if (state.changeTransfer == GitWorktreeChangeTransferMode.MOVE) "• Move" else "Move")
+                    }
+                    OutlinedButton(onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.COPY) }) {
+                        Text(if (state.changeTransfer == GitWorktreeChangeTransferMode.COPY) "• Copy" else "Copy")
+                    }
+                }
+                val elsewhereBranches = branchTargets?.branchesCheckedOutElsewhere.orEmpty()
+                if (elsewhereBranches.isNotEmpty()) {
+                    Text(
+                        text = "Existing managed worktrees",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    elsewhereBranches.forEach { branch ->
+                        val path = branchTargets?.worktreePathByBranch?.get(branch).orEmpty()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = branch,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = path.ifBlank { "Open in another worktree" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (path.isNotBlank()) {
+                                TextButton(onClick = { onRemoveWorktree(branch, path) }) {
+                                    Text("Remove")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onCreate,
+                enabled = state.branchName.trim().isNotEmpty() && state.baseBranch.trim().isNotEmpty(),
+            ) {
+                Text("Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun GitAlertDialog(
+    state: GitAlertState?,
+    onDismiss: () -> Unit,
+    onAction: (GitAlertAction) -> Unit,
+) {
+    if (state == null) {
+        return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(state.title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                state.buttons.forEach { button ->
+                    val actionColor = if (button.isDestructive) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                    OutlinedButton(
+                        onClick = { onAction(button.action) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = button.label,
+                            color = actionColor,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {},
+    )
 }
 
 @Composable

@@ -25,6 +25,18 @@ import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitCheckoutResult
+import io.androdex.android.model.GitCommitResult
+import io.androdex.android.model.GitCreateBranchResult
+import io.androdex.android.model.GitCreateWorktreeResult
+import io.androdex.android.model.GitOperationException
+import io.androdex.android.model.GitPullResult
+import io.androdex.android.model.GitPushResult
+import io.androdex.android.model.GitRemoveWorktreeResult
+import io.androdex.android.model.GitRepoDiffResult
+import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
@@ -254,6 +266,121 @@ class AndrodexClient(
             JSONObject().put("cwd", cwd.trim())
         )
         return decodeWorkspaceActivationStatus(result)
+    }
+
+    suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult {
+        return runGitRequest {
+            decodeGitRepoSyncResult(
+                sendRequest("git/status", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult {
+        return runGitRequest {
+            decodeGitRepoDiffResult(
+                sendRequest("git/diff", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitCommit(
+        workingDirectory: String,
+        message: String,
+    ): GitCommitResult {
+        return runGitRequest {
+            decodeGitCommitResult(
+                sendRequest(
+                    "git/commit",
+                    gitParams(workingDirectory).put("message", message.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitPush(workingDirectory: String): GitPushResult {
+        return runGitRequest {
+            decodeGitPushResult(
+                sendRequest("git/push", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitPull(workingDirectory: String): GitPullResult {
+        return runGitRequest {
+            decodeGitPullResult(
+                sendRequest("git/pull", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
+        return runGitRequest {
+            decodeGitBranchesWithStatusResult(
+                sendRequest("git/branchesWithStatus", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitCheckout(
+        workingDirectory: String,
+        branch: String,
+    ): GitCheckoutResult {
+        return runGitRequest {
+            decodeGitCheckoutResult(
+                sendRequest(
+                    "git/checkout",
+                    gitParams(workingDirectory).put("branch", branch.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitCreateBranch(
+        workingDirectory: String,
+        name: String,
+    ): GitCreateBranchResult {
+        return runGitRequest {
+            decodeGitCreateBranchResult(
+                sendRequest(
+                    "git/createBranch",
+                    gitParams(workingDirectory).put("name", name.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitCreateWorktree(
+        workingDirectory: String,
+        name: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ): GitCreateWorktreeResult {
+        return runGitRequest {
+            decodeGitCreateWorktreeResult(
+                sendRequest(
+                    "git/createWorktree",
+                    gitParams(workingDirectory)
+                        .put("name", name.trim())
+                        .put("baseBranch", baseBranch.trim())
+                        .put("changeTransfer", changeTransfer.wireValue),
+                )
+            )
+        }
+    }
+
+    suspend fun gitRemoveWorktree(
+        workingDirectory: String,
+        branch: String,
+    ): GitRemoveWorktreeResult {
+        return runGitRequest {
+            decodeGitRemoveWorktreeResult(
+                sendRequest(
+                    "git/removeWorktree",
+                    gitParams(workingDirectory).put("branch", branch.trim()),
+                )
+            )
+        }
     }
 
     suspend fun loadThread(threadId: String): ThreadLoadResult {
@@ -1554,6 +1681,18 @@ class AndrodexClient(
         return socketMutex.withLock { webSocket === candidate }
     }
 
+    private fun gitParams(workingDirectory: String): JSONObject {
+        return JSONObject().put("cwd", workingDirectory.trim())
+    }
+
+    private suspend fun <T> runGitRequest(block: suspend () -> T): T {
+        return try {
+            block()
+        } catch (error: RpcException) {
+            throw error.toGitOperationException()
+        }
+    }
+
     private fun timeoutForMethod(method: String): Long {
         return when (method) {
             "thread/read" -> threadReadTimeoutMs
@@ -1609,6 +1748,16 @@ class AndrodexClient(
         var lastInboundBridgeOutboundSeq: Int,
         var lastInboundCounter: Int = -1,
         var nextOutboundCounter: Int = 0,
+    )
+}
+
+private fun AndrodexClient.RpcException.toGitOperationException(): GitOperationException {
+    val errorCode = data?.optString("errorCode")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: data?.optString("code")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: message.substringBefore(':').trim().takeIf { it.matches(Regex("[a-z0-9_]+")) }
+    return GitOperationException(
+        code = errorCode,
+        message = message.ifBlank { "Git operation failed." },
     )
 }
 

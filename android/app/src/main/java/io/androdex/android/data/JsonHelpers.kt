@@ -4,6 +4,19 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesResult
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitChangedFile
+import io.androdex.android.model.GitCheckoutResult
+import io.androdex.android.model.GitCommitResult
+import io.androdex.android.model.GitCreateBranchResult
+import io.androdex.android.model.GitCreateWorktreeResult
+import io.androdex.android.model.GitDiffTotals
+import io.androdex.android.model.GitPullResult
+import io.androdex.android.model.GitPushResult
+import io.androdex.android.model.GitRemoveWorktreeResult
+import io.androdex.android.model.GitRepoDiffResult
+import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
@@ -336,6 +349,119 @@ fun decodeModelOptions(resultObject: JSONObject): List<ModelOption> {
     return decoded
 }
 
+fun decodeGitRepoSyncResult(resultObject: JSONObject): GitRepoSyncResult {
+    return GitRepoSyncResult(
+        repoRoot = resultObject.stringOrNull("repoRoot", "repo_root"),
+        currentBranch = resultObject.stringOrNull("branch", "currentBranch", "current_branch"),
+        trackingBranch = resultObject.stringOrNull("tracking", "trackingBranch", "tracking_branch"),
+        isDirty = resultObject.optBoolean("dirty"),
+        aheadCount = resultObject.optInt("ahead"),
+        behindCount = resultObject.optInt("behind"),
+        localOnlyCommitCount = resultObject.optInt("localOnlyCommitCount", resultObject.optInt("local_only_commit_count")),
+        state = resultObject.stringOrNull("state") ?: "up_to_date",
+        canPush = resultObject.optBoolean("canPush", resultObject.optBoolean("can_push")),
+        isPublishedToRemote = resultObject.optBoolean(
+            "publishedToRemote",
+            resultObject.optBoolean("published_to_remote"),
+        ),
+        files = decodeGitChangedFiles(resultObject.optJSONArray("files") ?: JSONArray()),
+        repoDiffTotals = decodeGitDiffTotals(
+            resultObject.optJSONObject("diff")
+                ?: resultObject.optJSONObject("repoDiffTotals")
+                ?: resultObject.optJSONObject("repo_diff_totals")
+        ),
+    )
+}
+
+fun decodeGitRepoDiffResult(resultObject: JSONObject): GitRepoDiffResult {
+    return GitRepoDiffResult(
+        patch = resultObject.stringOrNull("patch") ?: "",
+    )
+}
+
+fun decodeGitCommitResult(resultObject: JSONObject): GitCommitResult {
+    return GitCommitResult(
+        commitHash = resultObject.stringOrNull("hash", "commitHash", "commit_hash") ?: "",
+        branch = resultObject.stringOrNull("branch") ?: "",
+        summary = resultObject.stringOrNull("summary") ?: "",
+    )
+}
+
+fun decodeGitPushResult(resultObject: JSONObject): GitPushResult {
+    return GitPushResult(
+        branch = resultObject.stringOrNull("branch") ?: "",
+        remote = resultObject.stringOrNull("remote"),
+        status = resultObject.optJSONObject("status")?.let(::decodeGitRepoSyncResult),
+    )
+}
+
+fun decodeGitPullResult(resultObject: JSONObject): GitPullResult {
+    return GitPullResult(
+        success = resultObject.optBoolean("success"),
+        status = resultObject.optJSONObject("status")?.let(::decodeGitRepoSyncResult),
+    )
+}
+
+fun decodeGitCheckoutResult(resultObject: JSONObject): GitCheckoutResult {
+    return GitCheckoutResult(
+        currentBranch = resultObject.stringOrNull("current", "currentBranch", "current_branch") ?: "",
+        tracking = resultObject.stringOrNull("tracking"),
+        status = resultObject.optJSONObject("status")?.let(::decodeGitRepoSyncResult),
+    )
+}
+
+fun decodeGitCreateBranchResult(resultObject: JSONObject): GitCreateBranchResult {
+    return GitCreateBranchResult(
+        branch = resultObject.stringOrNull("branch") ?: "",
+        status = resultObject.optJSONObject("status")?.let(::decodeGitRepoSyncResult),
+    )
+}
+
+fun decodeGitCreateWorktreeResult(resultObject: JSONObject): GitCreateWorktreeResult {
+    return GitCreateWorktreeResult(
+        branch = resultObject.stringOrNull("branch") ?: "",
+        worktreePath = resultObject.stringOrNull("worktreePath", "worktree_path") ?: "",
+        alreadyExisted = resultObject.optBoolean("alreadyExisted", resultObject.optBoolean("already_existed")),
+    )
+}
+
+fun decodeGitRemoveWorktreeResult(resultObject: JSONObject): GitRemoveWorktreeResult {
+    return GitRemoveWorktreeResult(
+        success = resultObject.optBoolean("success"),
+    )
+}
+
+fun decodeGitBranchesResult(resultObject: JSONObject): GitBranchesResult {
+    return GitBranchesResult(
+        branches = decodeGitBranches(resultObject.optJSONArray("branches") ?: JSONArray()),
+        branchesCheckedOutElsewhere = decodeGitBranches(
+            resultObject.optJSONArray("branchesCheckedOutElsewhere")
+                ?: resultObject.optJSONArray("branches_checked_out_elsewhere")
+                ?: JSONArray()
+        ).toSet(),
+        worktreePathByBranch = decodeStringMap(
+            resultObject.optJSONObject("worktreePathByBranch")
+                ?: resultObject.optJSONObject("worktree_path_by_branch")
+        ),
+        localCheckoutPath = resultObject.stringOrNull("localCheckoutPath", "local_checkout_path"),
+        currentBranch = resultObject.stringOrNull("current", "currentBranch", "current_branch"),
+        defaultBranch = resultObject.stringOrNull("default", "defaultBranch", "default_branch"),
+    )
+}
+
+fun decodeGitBranchesWithStatusResult(resultObject: JSONObject): GitBranchesWithStatusResult {
+    val branches = decodeGitBranchesResult(resultObject)
+    return GitBranchesWithStatusResult(
+        branches = branches.branches,
+        branchesCheckedOutElsewhere = branches.branchesCheckedOutElsewhere,
+        worktreePathByBranch = branches.worktreePathByBranch,
+        localCheckoutPath = branches.localCheckoutPath,
+        currentBranch = branches.currentBranch,
+        defaultBranch = branches.defaultBranch,
+        status = resultObject.optJSONObject("status")?.let(::decodeGitRepoSyncResult),
+    )
+}
+
 fun decodeWorkspaceRecentState(resultObject: JSONObject): WorkspaceRecentState {
   return WorkspaceRecentState(
     activeCwd = resultObject.stringOrNull("activeCwd", "active_cwd"),
@@ -468,6 +594,54 @@ private fun decodeWorkspaceDirectoryEntries(items: JSONArray): List<WorkspaceDir
     )
   }
   return decoded
+}
+
+private fun decodeGitDiffTotals(resultObject: JSONObject?): GitDiffTotals? {
+    resultObject ?: return null
+    val totals = GitDiffTotals(
+        additions = resultObject.optInt("additions"),
+        deletions = resultObject.optInt("deletions"),
+        binaryFiles = resultObject.optInt("binaryFiles", resultObject.optInt("binary_files")),
+    )
+    return totals.takeIf { it.hasChanges }
+}
+
+private fun decodeGitChangedFiles(items: JSONArray): List<GitChangedFile> {
+    val decoded = mutableListOf<GitChangedFile>()
+    for (index in 0 until items.length()) {
+        val item = items.optJSONObject(index) ?: continue
+        val path = item.stringOrNull("path") ?: continue
+        decoded += GitChangedFile(
+            path = path,
+            status = item.stringOrNull("status") ?: "",
+        )
+    }
+    return decoded
+}
+
+private fun decodeGitBranches(items: JSONArray): List<String> {
+    val decoded = mutableListOf<String>()
+    for (index in 0 until items.length()) {
+        val branch = items.optString(index).trim()
+        if (branch.isNotEmpty()) {
+            decoded += branch
+        }
+    }
+    return decoded
+}
+
+private fun decodeStringMap(resultObject: JSONObject?): Map<String, String> {
+    resultObject ?: return emptyMap()
+    val decoded = linkedMapOf<String, String>()
+    val keys = resultObject.keys()
+    while (keys.hasNext()) {
+        val key = keys.next().trim()
+        val value = resultObject.optString(key).trim()
+        if (key.isNotEmpty() && value.isNotEmpty()) {
+            decoded[key] = value
+        }
+    }
+    return decoded
 }
 
 private fun decodeReasoningEffortOptions(items: JSONArray): List<ReasoningEffortOption> {
