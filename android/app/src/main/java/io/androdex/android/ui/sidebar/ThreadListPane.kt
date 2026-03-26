@@ -23,10 +23,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.androdex.android.ui.state.ThreadListItemUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
+import io.androdex.android.ui.state.ThreadRunBadgeUiState
 
 @Composable
 internal fun ThreadListPane(
@@ -110,6 +113,12 @@ private fun ThreadCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                thread.runState?.let { runState ->
+                    ThreadRunBadge(
+                        state = runState,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
+                }
                 thread.updatedLabel?.let {
                     Text(
                         text = it,
@@ -141,5 +150,29 @@ private fun ThreadCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ThreadRunBadge(
+    state: ThreadRunBadgeUiState,
+    modifier: Modifier = Modifier,
+) {
+    val (label, color) = when (state) {
+        ThreadRunBadgeUiState.RUNNING -> "Running" to Color(0xFFF59E0B)
+        ThreadRunBadgeUiState.READY -> "Ready" to Color(0xFF10B981)
+        ThreadRunBadgeUiState.FAILED -> "Failed" to Color(0xFFEF4444)
+    }
+    Surface(
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp),
+        modifier = modifier,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            color = color,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
     }
 }

@@ -82,6 +82,7 @@ internal fun ThreadTimelineScreen(
     onRefresh: () -> Unit,
     onComposerChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val listState = remember { LazyListState() }
@@ -189,6 +190,7 @@ internal fun ThreadTimelineScreen(
                 state = state.composer,
                 onTextChange = onComposerChanged,
                 onSend = onSend,
+                onStop = onStop,
             )
         }
     }

@@ -38,6 +38,7 @@ class AndrodexFeatureStateTest {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,
             activeWorkspacePath = "C:\\Projects\\Androdex",
+            runningThreadIds = setOf("thread-1"),
             threads = listOf(
                 ThreadSummary(
                     id = "thread-1",
@@ -76,6 +77,7 @@ class AndrodexFeatureStateTest {
 
         assertEquals("30m ago", route.state.threadList.threads.single().updatedLabel)
         assertEquals("Androdex", route.state.threadList.threads.single().projectName)
+        assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
         assertNotNull(route.state.projectPicker)
         assertTrue(route.state.projectPicker?.isBrowsing == true)
         assertEquals(
@@ -91,6 +93,7 @@ class AndrodexFeatureStateTest {
             selectedThreadId = "thread-9",
             selectedThreadTitle = "Conversation",
             composerText = "Please continue",
+            protectedRunningFallbackThreadIds = setOf("thread-9"),
             messages = listOf(
                 ConversationMessage(
                     id = "msg-1",
@@ -123,7 +126,8 @@ class AndrodexFeatureStateTest {
         val route = appState.destination as AndrodexDestinationUiState.Thread
 
         assertEquals("thread-9", route.state.threadId)
-        assertTrue(route.state.composer.canSend)
+        assertFalse(route.state.composer.canSend)
+        assertTrue(route.state.composer.showStop)
         assertEquals("Please continue", route.state.composer.text)
         assertTrue(appState.settings.isVisible)
         assertTrue(appState.settings.modelOptions.any { it.value == "gpt-5.4" && it.selected })

@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -29,6 +30,7 @@ internal fun ComposerBar(
     state: ComposerUiState,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -63,35 +65,45 @@ internal fun ComposerBar(
                 maxLines = 5,
             )
 
-            IconButton(
-                onClick = onSend,
-                enabled = state.canSend,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (state.canSend) {
-                        MaterialTheme.colorScheme.primary
+            if (state.showStop) {
+                OutlinedButton(
+                    onClick = onStop,
+                    enabled = state.stopEnabled,
+                    shape = RoundedCornerShape(24.dp),
+                ) {
+                    Text("Stop")
+                }
+            } else {
+                IconButton(
+                    onClick = onSend,
+                    enabled = state.canSend,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = if (state.canSend) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        },
+                        contentColor = if (state.canSend) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        },
+                    ),
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    if (state.isBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
                     } else {
-                        MaterialTheme.colorScheme.surfaceContainerHighest
-                    },
-                    contentColor = if (state.canSend) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                ),
-                modifier = Modifier.size(44.dp),
-            ) {
-                if (state.isBusy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                } else {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                        modifier = Modifier.size(20.dp),
-                    )
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }

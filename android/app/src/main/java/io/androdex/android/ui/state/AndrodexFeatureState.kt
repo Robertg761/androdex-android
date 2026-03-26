@@ -68,6 +68,7 @@ internal data class ThreadListItemUiState(
     val preview: String?,
     val projectName: String,
     val updatedLabel: String?,
+    val runState: ThreadRunBadgeUiState?,
 )
 
 internal data class ThreadListEmptyStateUiState(
@@ -102,6 +103,7 @@ internal data class ThreadTimelineUiState(
     val threadId: String,
     val title: String,
     val messages: List<ConversationMessage>,
+    val runState: ThreadRunBadgeUiState?,
     val busy: BusyUiState,
     val composer: ComposerUiState,
 )
@@ -110,7 +112,15 @@ internal data class ComposerUiState(
     val text: String,
     val isBusy: Boolean,
     val canSend: Boolean,
+    val showStop: Boolean,
+    val stopEnabled: Boolean,
 )
+
+internal enum class ThreadRunBadgeUiState {
+    RUNNING,
+    READY,
+    FAILED,
+}
 
 internal data class RuntimeSettingsUiState(
     val isVisible: Boolean,
@@ -202,6 +212,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             preview = thread.preview,
             projectName = thread.projectName,
             updatedLabel = thread.updatedAtEpochMs?.let { relativeTimeLabel(it, nowEpochMs) },
+            runState = threadRunBadge(thread.id),
         )
     }
     val emptyState = if (items.isEmpty() && !isBusy) {
@@ -261,15 +272,19 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
+    val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
         messages = messages,
+        runState = threadRunBadge(threadId),
         busy = toBusyUiState(),
         composer = ComposerUiState(
             text = composerText,
             isBusy = isBusy,
-            canSend = composerText.isNotBlank() && !isBusy,
+            canSend = composerText.isNotBlank() && !isBusy && !isThreadRunning,
+            showStop = isThreadRunning,
+            stopEnabled = !isBusy,
         ),
     )
 }
@@ -343,6 +358,15 @@ private fun AndrodexUiState.toBusyUiState(): BusyUiState {
         isVisible = isBusy || isLoadingRuntimeConfig,
         label = busyLabel ?: if (isLoadingRuntimeConfig) "Loading models..." else null,
     )
+}
+
+private fun AndrodexUiState.threadRunBadge(threadId: String): ThreadRunBadgeUiState? {
+    return when {
+        threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds -> ThreadRunBadgeUiState.RUNNING
+        threadId in failedThreadIds -> ThreadRunBadgeUiState.FAILED
+        threadId in readyThreadIds -> ThreadRunBadgeUiState.READY
+        else -> null
+    }
 }
 
 private fun AndrodexUiState.reconnectButtonLabel(): String {

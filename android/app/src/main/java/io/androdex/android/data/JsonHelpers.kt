@@ -417,7 +417,7 @@ private fun decodeItemText(itemObject: JSONObject): String {
     return itemObject.stringOrNull("text", "message", "summary") ?: ""
 }
 
-private fun decodeReasoningText(itemObject: JSONObject): String {
+internal fun decodeReasoningText(itemObject: JSONObject): String {
     return itemObject.stringOrNull("summary", "text", "message")
         ?: itemObject.optJSONObject("summary")?.stringOrNull("text")
         ?: "Thinking..."

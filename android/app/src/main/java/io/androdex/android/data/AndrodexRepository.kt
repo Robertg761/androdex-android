@@ -3,8 +3,9 @@ package io.androdex.android.data
 import android.content.Context
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
-import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -21,8 +22,10 @@ interface AndrodexRepositoryContract {
     suspend fun disconnect(clearSavedPairing: Boolean = false)
     suspend fun refreshThreads(): List<ThreadSummary>
     suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary
-    suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>>
+    suspend fun loadThread(threadId: String): ThreadLoadResult
+    suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot
     suspend fun startTurn(threadId: String, userInput: String)
+    suspend fun interruptTurn(threadId: String, turnId: String)
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
     suspend fun setSelectedReasoningEffort(effort: String?)
@@ -60,12 +63,20 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun startThread(preferredProjectPath: String?): ThreadSummary = client.startThread(preferredProjectPath)
 
-    override suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
+    override suspend fun loadThread(threadId: String): ThreadLoadResult {
         return client.loadThread(threadId)
+    }
+
+    override suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
+        return client.readThreadRunSnapshot(threadId)
     }
 
     override suspend fun startTurn(threadId: String, userInput: String) {
         client.startTurn(threadId, userInput)
+    }
+
+    override suspend fun interruptTurn(threadId: String, turnId: String) {
+        client.interruptTurn(threadId, turnId)
     }
 
     override suspend fun loadRuntimeConfig() {

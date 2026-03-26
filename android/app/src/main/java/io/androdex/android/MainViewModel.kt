@@ -33,6 +33,9 @@ data class AndrodexUiState(
     val messages: List<ConversationMessage> = emptyList(),
     val activeTurnIdByThread: Map<String, String> = emptyMap(),
     val runningThreadIds: Set<String> = emptySet(),
+    val protectedRunningFallbackThreadIds: Set<String> = emptySet(),
+    val readyThreadIds: Set<String> = emptySet(),
+    val failedThreadIds: Set<String> = emptySet(),
     val composerText: String = "",
     val isBusy: Boolean = false,
     val busyLabel: String? = null,
@@ -175,6 +178,17 @@ class MainViewModel(
         }
     }
 
+    fun interruptSelectedThread() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        viewModelScope.launch {
+            try {
+                service.interruptThread(threadId)
+            } catch (error: Throwable) {
+                service.reportError(error.message ?: "Failed to stop the active run.")
+            }
+        }
+    }
+
     fun respondToApproval(accept: Boolean) {
         runBusyAction("Sending approval...") {
             service.respondToApproval(accept)
@@ -279,6 +293,9 @@ private fun applyServiceState(
         messages = serviceState.messages,
         activeTurnIdByThread = serviceState.activeTurnIdByThread,
         runningThreadIds = serviceState.runningThreadIds,
+        protectedRunningFallbackThreadIds = serviceState.protectedRunningFallbackThreadIds,
+        readyThreadIds = serviceState.readyThreadIds,
+        failedThreadIds = serviceState.failedThreadIds,
         isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,

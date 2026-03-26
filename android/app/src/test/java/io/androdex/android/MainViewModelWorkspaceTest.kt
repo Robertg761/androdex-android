@@ -5,6 +5,8 @@ import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -186,12 +188,34 @@ private class FakeRepository : AndrodexRepositoryContract {
         return ThreadSummary("thread-created", "Conversation", null, preferredProjectPath, null, null)
     }
 
-    override suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
+    override suspend fun loadThread(threadId: String): ThreadLoadResult {
         loadedThreadIds += threadId
-        return null to emptyList()
+        return ThreadLoadResult(
+            thread = null,
+            messages = emptyList(),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = null,
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+    }
+
+    override suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
+        return ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = null,
+            latestTurnTerminalState = null,
+            shouldAssumeRunningFromLatestTurn = false,
+        )
     }
 
     override suspend fun startTurn(threadId: String, userInput: String) = Unit
+
+    override suspend fun interruptTurn(threadId: String, turnId: String) = Unit
 
     override suspend fun loadRuntimeConfig() = Unit
 

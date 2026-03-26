@@ -98,6 +98,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onRefresh = { viewModel.openThread(destination.state.threadId) },
                 onComposerChanged = viewModel::updateComposerText,
                 onSend = viewModel::sendMessage,
+                onStop = viewModel::interruptSelectedThread,
             )
         }
     }

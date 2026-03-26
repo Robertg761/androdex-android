@@ -23,11 +23,13 @@ import io.androdex.android.crypto.verifyEd25519
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
-import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TrustedMacRecord
 import io.androdex.android.model.TrustedMacRegistry
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -208,7 +210,7 @@ class AndrodexClient(
         return decodeWorkspaceActivationStatus(result)
     }
 
-    suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
+    suspend fun loadThread(threadId: String): ThreadLoadResult {
         resumeThread(threadId)
         return try {
             val result = sendRequest(
@@ -220,20 +222,44 @@ class AndrodexClient(
             val threadObject = result.optJSONObject("thread") ?: JSONObject()
             val summary = decodeThreadSummary(threadObject)
             val messages = decodeMessagesFromThreadRead(threadId, threadObject)
-            updatesFlow.emit(ClientUpdate.ThreadLoaded(summary, messages))
-            summary to messages
+            ThreadLoadResult(
+                thread = summary,
+                messages = messages,
+                runSnapshot = decodeThreadRunSnapshot(threadObject),
+            )
         } catch (error: RpcException) {
             val lowered = error.message.lowercase(Locale.US)
             if (
                 lowered.contains("not materialized yet")
                 || lowered.contains("includeturns is unavailable before first user message")
             ) {
-                updatesFlow.emit(ClientUpdate.ThreadLoaded(null, emptyList()))
-                null to emptyList()
+                ThreadLoadResult(
+                    thread = null,
+                    messages = emptyList(),
+                    runSnapshot = ThreadRunSnapshot(
+                        interruptibleTurnId = null,
+                        hasInterruptibleTurnWithoutId = false,
+                        latestTurnId = null,
+                        latestTurnTerminalState = null,
+                        shouldAssumeRunningFromLatestTurn = false,
+                    ),
+                )
             } else {
                 throw error
             }
         }
+    }
+
+    suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
+        resumeThread(threadId)
+        val result = sendRequest(
+            "thread/read",
+            JSONObject()
+                .put("threadId", threadId)
+                .put("includeTurns", true),
+        )
+        val threadObject = result.optJSONObject("thread") ?: JSONObject()
+        return decodeThreadRunSnapshot(threadObject)
     }
 
     suspend fun startTurn(threadId: String, userInput: String) {
@@ -251,6 +277,15 @@ class AndrodexClient(
         runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
         selectedReasoningEffortForSelectedModel()?.let { params.put("effort", it) }
         sendRequest("turn/start", params)
+    }
+
+    suspend fun interruptTurn(threadId: String, turnId: String) {
+        sendRequest(
+            "turn/interrupt",
+            JSONObject()
+                .put("threadId", threadId)
+                .put("turnId", turnId),
+        )
     }
 
     suspend fun loadRuntimeConfig() {
@@ -777,6 +812,13 @@ class AndrodexClient(
                             turnId = extractTurnId(params),
                         )
                     )
+                } else if (method == "thread/status/changed") {
+                    updatesFlow.emit(
+                        ClientUpdate.ThreadStatusChanged(
+                            threadId = extractThreadId(params),
+                            status = extractThreadStatus(params),
+                        )
+                    )
                 }
                 try {
                     listThreads()
@@ -794,7 +836,30 @@ class AndrodexClient(
             }
 
             "turn/completed", "turn/failed", "error" -> {
-                updatesFlow.emit(ClientUpdate.TurnCompleted(extractThreadId(params)))
+                val threadId = extractThreadId(params)
+                val turnId = extractTurnId(params)
+                if (method == "error" && threadId.isNullOrBlank() && turnId.isNullOrBlank()) {
+                    extractTurnErrorMessage(params)?.let { updatesFlow.emit(ClientUpdate.Error(it)) }
+                    return
+                }
+                val terminalState = when (method) {
+                    "turn/failed" -> TurnTerminalState.FAILED
+                    "error" -> if (extractWillRetry(params)) {
+                        null
+                    } else {
+                        TurnTerminalState.FAILED
+                    }
+                    else -> extractTurnTerminalState(params)
+                } ?: return
+                updatesFlow.emit(
+                    ClientUpdate.TurnCompleted(
+                        threadId = threadId,
+                        turnId = turnId,
+                        terminalState = terminalState,
+                        errorMessage = extractTurnErrorMessage(params),
+                        willRetry = extractWillRetry(params),
+                    )
+                )
             }
 
             "item/agentMessage/delta",
@@ -811,7 +876,30 @@ class AndrodexClient(
                 )
             }
 
+            "item/reasoning/textDelta" -> {
+                val delta = extractReasoningDeltaText(params) ?: return
+                updatesFlow.emit(
+                    ClientUpdate.ReasoningDelta(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                        itemId = extractItemId(params),
+                        delta = delta,
+                    )
+                )
+            }
+
             "item/completed", "codex/event/item_completed", "codex/event/agent_message" -> {
+                extractReasoningCompletedText(params)?.let { text ->
+                    updatesFlow.emit(
+                        ClientUpdate.ReasoningCompleted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            itemId = extractItemId(params),
+                            text = text,
+                        )
+                    )
+                    return
+                }
                 val text = extractAssistantCompletedText(params) ?: return
                 updatesFlow.emit(
                     ClientUpdate.AssistantCompleted(
@@ -1080,6 +1168,12 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
     }
 
+    private fun extractReasoningDeltaText(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("delta")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
     private fun extractAssistantCompletedText(params: JSONObject?): String? {
         if (params == null) return null
         val item = params.objectOrNull("item")
@@ -1094,6 +1188,51 @@ class AndrodexClient(
         }
         return params.stringOrNull("message")
             ?: params.objectOrNull("msg", "event")?.stringOrNull("message")
+    }
+
+    private fun extractReasoningCompletedText(params: JSONObject?): String? {
+        if (params == null) return null
+        val item = params.objectOrNull("item")
+            ?: params.objectOrNull("msg", "event")?.optJSONObject("item")
+            ?: return null
+        if (normalizeItemType(item.optString("type")) != "reasoning") {
+            return null
+        }
+        return decodeReasoningText(item)
+    }
+
+    private fun extractThreadStatus(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.objectOrNull("status")?.stringOrNull("type", "status")
+            ?: params.stringOrNull("status")
+            ?: params.objectOrNull("msg", "event")?.let(::extractThreadStatus)
+    }
+
+    private fun extractTurnErrorMessage(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("message", "error")
+            ?: params.objectOrNull("msg", "event")?.let(::extractTurnErrorMessage)
+    }
+
+    private fun extractWillRetry(params: JSONObject?): Boolean {
+        if (params == null) return false
+        return params.optBoolean("willRetry", params.optBoolean("will_retry", false))
+            || params.objectOrNull("msg", "event")?.let(::extractWillRetry) == true
+    }
+
+    private fun extractTurnTerminalState(params: JSONObject?): TurnTerminalState? {
+        val normalizedStatus = normalizeTurnStatus(
+            params?.objectOrNull("status")?.stringOrNull("type", "status")
+                ?: params?.stringOrNull("status")
+                ?: params?.objectOrNull("turn")?.stringOrNull("status")
+        )
+        return when {
+            normalizedStatus == null -> TurnTerminalState.COMPLETED
+            isStoppedTurnStatus(normalizedStatus) -> TurnTerminalState.STOPPED
+            isFailedTurnStatus(normalizedStatus) -> TurnTerminalState.FAILED
+            isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
+            else -> TurnTerminalState.COMPLETED
+        }
     }
 
     private fun decodeThreadReadAssistantContent(item: JSONObject): String? {
@@ -1315,4 +1454,88 @@ internal fun connectionUpdateForSocketFailure(
             errorMessage ?: "Relay connection failed."
         },
     )
+}
+
+private fun decodeThreadRunSnapshot(threadObject: JSONObject): ThreadRunSnapshot {
+    val turns = threadObject.optJSONArray("turns") ?: JSONArray()
+    var interruptibleTurnId: String? = null
+    var hasInterruptibleTurnWithoutId = false
+    var latestTurnId: String? = null
+    var latestTurnTerminalState: TurnTerminalState? = null
+    var shouldAssumeRunningFromLatestTurn = false
+
+    for (index in turns.length() - 1 downTo 0) {
+        val turnObject = turns.optJSONObject(index) ?: continue
+        val turnId = turnObject.stringOrNull("id", "turnId", "turn_id")
+        val normalizedStatus = normalizeTurnStatus(
+            turnObject.stringOrNull("status")
+                ?: turnObject.optJSONObject("status")?.stringOrNull("type", "status")
+        )
+
+        if (latestTurnId == null && !turnId.isNullOrBlank()) {
+            latestTurnId = turnId
+            latestTurnTerminalState = terminalStateForStatus(normalizedStatus)
+            shouldAssumeRunningFromLatestTurn = normalizedStatus == null
+        }
+
+        if (normalizedStatus == null) {
+            continue
+        }
+        if (!isInterruptibleTurnStatus(normalizedStatus)) {
+            continue
+        }
+
+        if (!turnId.isNullOrBlank()) {
+            interruptibleTurnId = turnId
+            break
+        }
+        hasInterruptibleTurnWithoutId = true
+    }
+
+    return ThreadRunSnapshot(
+        interruptibleTurnId = interruptibleTurnId,
+        hasInterruptibleTurnWithoutId = hasInterruptibleTurnWithoutId,
+        latestTurnId = latestTurnId,
+        latestTurnTerminalState = latestTurnTerminalState,
+        shouldAssumeRunningFromLatestTurn = shouldAssumeRunningFromLatestTurn,
+    )
+}
+
+private fun normalizeTurnStatus(rawStatus: String?): String? {
+    return rawStatus?.trim()?.lowercase(Locale.US)?.takeIf { it.isNotEmpty() }
+}
+
+private fun isInterruptibleTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("in_progress", "running", "active", "queued")
+        || normalizedStatus.contains("progress")
+        || normalizedStatus.contains("running")
+}
+
+private fun isCompletedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("completed", "complete", "done", "success", "succeeded")
+        || normalizedStatus.contains("complete")
+        || normalizedStatus.contains("success")
+}
+
+private fun isFailedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("failed", "error")
+        || normalizedStatus.contains("fail")
+        || normalizedStatus.contains("error")
+    }
+
+private fun isStoppedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("stopped", "interrupted", "cancelled", "canceled")
+        || normalizedStatus.contains("stop")
+        || normalizedStatus.contains("interrupt")
+        || normalizedStatus.contains("cancel")
+}
+
+private fun terminalStateForStatus(normalizedStatus: String?): TurnTerminalState? {
+    return when {
+        normalizedStatus == null -> null
+        isStoppedTurnStatus(normalizedStatus) -> TurnTerminalState.STOPPED
+        isFailedTurnStatus(normalizedStatus) -> TurnTerminalState.FAILED
+        isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
+        else -> null
+    }
 }

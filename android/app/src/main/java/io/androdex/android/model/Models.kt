@@ -230,6 +230,20 @@ enum class ConversationKind {
     PLAN,
 }
 
+enum class TurnTerminalState {
+    COMPLETED,
+    FAILED,
+    STOPPED,
+}
+
+data class ThreadRunSnapshot(
+    val interruptibleTurnId: String?,
+    val hasInterruptibleTurnWithoutId: Boolean,
+    val latestTurnId: String?,
+    val latestTurnTerminalState: TurnTerminalState?,
+    val shouldAssumeRunningFromLatestTurn: Boolean,
+)
+
 data class ConversationMessage(
     val id: String,
     val threadId: String,
@@ -245,6 +259,12 @@ data class ConversationMessage(
     val diffText: String? = null,
     val command: String? = null,
     val planSteps: List<PlanStep>? = null,
+)
+
+data class ThreadLoadResult(
+    val thread: ThreadSummary?,
+    val messages: List<ConversationMessage>,
+    val runSnapshot: ThreadRunSnapshot,
 )
 
 data class PlanStep(
@@ -315,11 +335,36 @@ sealed interface ClientUpdate {
         val turnId: String?,
     ) : ClientUpdate
 
+    data class ReasoningDelta(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val delta: String,
+    ) : ClientUpdate
+
+    data class ReasoningCompleted(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val text: String,
+    ) : ClientUpdate
+
     data class ApprovalRequested(val request: ApprovalRequest) : ClientUpdate
 
     data object ApprovalCleared : ClientUpdate
 
-    data class TurnCompleted(val threadId: String?) : ClientUpdate
+    data class TurnCompleted(
+        val threadId: String?,
+        val turnId: String?,
+        val terminalState: TurnTerminalState,
+        val errorMessage: String? = null,
+        val willRetry: Boolean = false,
+    ) : ClientUpdate
+
+    data class ThreadStatusChanged(
+        val threadId: String?,
+        val status: String?,
+    ) : ClientUpdate
 
     data class Error(val message: String) : ClientUpdate
 }

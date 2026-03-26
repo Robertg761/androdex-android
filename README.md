@@ -48,7 +48,9 @@ Androdex does **not** run Codex on the phone itself.
 - QR pairing and pairing-payload paste
 - open existing threads and create new ones from Android
 - stream Codex output on the phone while work continues on the host
+- item-scoped timeline reconciliation with per-thread running, ready, and failed state on Android
 - reconnect-safe rollout mirroring for desktop-started runs reopened on Android
+- Stop-button recovery that falls back to `thread/read` when a live turn has not published a usable `turnId`
 - approval prompts on Android
 - reconnect from a saved pairing
 - model and reasoning controls on Android
