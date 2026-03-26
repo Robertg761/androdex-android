@@ -3,12 +3,14 @@ package io.androdex.android.service
 import io.androdex.android.AppEnvironment
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.attachmentSignature
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.SubagentAction
@@ -211,11 +213,12 @@ class AndrodexService(
     suspend fun sendMessage(
         input: String,
         preferredThreadId: String? = stateFlow.value.selectedThreadId,
+        attachments: List<ImageAttachment> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         val trimmedInput = input.trim()
-        if (trimmedInput.isEmpty()) {
+        if (trimmedInput.isEmpty() && attachments.isEmpty()) {
             return
         }
 
@@ -242,6 +245,7 @@ class AndrodexService(
                             threadId = threadId,
                             expectedTurnId = resolution.turnId,
                             userInput = trimmedInput,
+                            attachments = attachments,
                             skillMentions = skillMentions,
                             collaborationMode = collaborationMode,
                         )
@@ -258,6 +262,7 @@ class AndrodexService(
                         repository.startTurn(
                             threadId = threadId,
                             userInput = trimmedInput,
+                            attachments = attachments,
                             skillMentions = skillMentions,
                             collaborationMode = collaborationMode,
                         )
@@ -270,6 +275,7 @@ class AndrodexService(
                 repository.startTurn(
                     threadId = threadId,
                     userInput = trimmedInput,
+                    attachments = attachments,
                     skillMentions = skillMentions,
                     collaborationMode = collaborationMode,
                 )
@@ -284,6 +290,7 @@ class AndrodexService(
                 role = ConversationRole.USER,
                 kind = ConversationKind.CHAT,
                 text = trimmedInput,
+                attachments = attachments,
                 createdAtEpochMs = System.currentTimeMillis(),
             )
         )
@@ -1507,6 +1514,7 @@ private fun mergeMatchedMessage(
     return incoming.copy(
         id = incoming.id.ifBlank { existing.id },
         text = mergedText,
+        attachments = if (incoming.attachments.isEmpty()) existing.attachments else incoming.attachments,
         createdAtEpochMs = minOf(existing.createdAtEpochMs, incoming.createdAtEpochMs),
         isStreaming = incoming.isStreaming || shouldKeepStreaming,
         planExplanation = incoming.planExplanation ?: existing.planExplanation,
@@ -1539,6 +1547,7 @@ private fun messagesRepresentSameItem(
         && existing.kind == ConversationKind.CHAT
         && incoming.kind == ConversationKind.CHAT
         && existing.text == incoming.text
+        && attachmentSignature(existing.attachments) == attachmentSignature(incoming.attachments)
     ) {
         return kotlin.math.abs(existing.createdAtEpochMs - incoming.createdAtEpochMs) <= 60_000L
     }

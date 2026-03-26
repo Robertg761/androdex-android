@@ -1,10 +1,13 @@
 package io.androdex.android.ui.state
 
 import io.androdex.android.AndrodexUiState
+import io.androdex.android.model.ComposerImageAttachment
+import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
@@ -174,5 +177,74 @@ class AndrodexFeatureStateTest {
 
         assertTrue(route.state.composer.isSubagentsEnabled)
         assertTrue(route.state.composer.submitEnabled)
+    }
+
+    @Test
+    fun threadRoute_allowsImageOnlySendWhenAttachmentsAreReady() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            composerAttachmentsByThread = mapOf(
+                "thread-9" to listOf(
+                    ComposerImageAttachment(
+                        id = "attachment-1",
+                        state = ComposerImageAttachmentState.Ready(
+                            ImageAttachment(
+                                id = "image-1",
+                                thumbnailBase64Jpeg = "thumb",
+                                payloadDataUrl = "data:image/jpeg;base64,AAAA",
+                            )
+                        ),
+                    )
+                )
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertTrue(route.state.composer.submitEnabled)
+        assertEquals(1, route.state.composer.attachments.size)
+        assertEquals(3, route.state.composer.remainingAttachmentSlots)
+    }
+
+    @Test
+    fun threadRoute_blocksSendAndRestoreWhenAttachmentStateIsLoadingOrFailed() {
+        val loadingState = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            queuedDraftStateByThread = mapOf(
+                "thread-9" to ThreadQueuedDraftState(
+                    drafts = listOf(
+                        QueuedTurnDraft(
+                            id = "queued-1",
+                            text = "Restore me",
+                            createdAtEpochMs = 1L,
+                        )
+                    )
+                )
+            ),
+            composerAttachmentsByThread = mapOf(
+                "thread-9" to listOf(
+                    ComposerImageAttachment(
+                        id = "attachment-1",
+                        state = ComposerImageAttachmentState.Loading,
+                    ),
+                    ComposerImageAttachment(
+                        id = "attachment-2",
+                        state = ComposerImageAttachmentState.Failed("Couldn't load"),
+                    ),
+                )
+            ),
+        )
+
+        val appState = loadingState.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.composer.submitEnabled)
+        assertTrue(route.state.composer.hasBlockingAttachmentState)
+        assertFalse(route.state.canRestoreQueuedDrafts)
     }
 }

@@ -111,6 +111,9 @@ internal fun ThreadTimelineScreen(
     onSelectSkillAutocomplete: (SkillMetadata) -> Unit,
     onRemoveMentionedSkill: (String) -> Unit,
     onSelectSlashCommand: (ComposerSlashCommand) -> Unit,
+    onAddCamera: () -> Unit,
+    onAddGallery: () -> Unit,
+    onRemoveComposerAttachment: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -305,6 +308,9 @@ internal fun ThreadTimelineScreen(
                 onSelectSkillAutocomplete = onSelectSkillAutocomplete,
                 onRemoveMentionedSkill = onRemoveMentionedSkill,
                 onSelectSlashCommand = onSelectSlashCommand,
+                onAddCamera = onAddCamera,
+                onAddGallery = onAddGallery,
+                onRemoveAttachment = onRemoveComposerAttachment,
                 onSend = onSend,
                 onStop = onStop,
             )
@@ -433,6 +439,20 @@ private fun QueuedDraftsCard(
                                         text = "SUBAGENTS",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            if (draft.attachments.isNotEmpty()) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(999.dp),
+                                ) {
+                                    Text(
+                                        text = if (draft.attachments.size == 1) "1 PHOTO" else "${draft.attachments.size} PHOTOS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                     )
@@ -1009,11 +1029,17 @@ private fun MessageBubble(message: ConversationMessage) {
                     StreamingIndicator()
                 }
 
-                Text(
-                    text = message.text.ifBlank { " " },
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = textColor,
-                )
+                if (message.attachments.isNotEmpty()) {
+                    MessageAttachmentStrip(attachments = message.attachments)
+                }
+
+                if (message.text.isNotBlank() || message.attachments.isEmpty()) {
+                    Text(
+                        text = message.text.ifBlank { " " },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = textColor,
+                    )
+                }
 
                 Text(
                     text = DateFormat.getTimeInstance(DateFormat.SHORT)

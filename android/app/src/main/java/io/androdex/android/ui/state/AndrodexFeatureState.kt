@@ -8,16 +8,21 @@ import io.androdex.android.GitBranchDialogState
 import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.ComposerImageAttachment
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
+import io.androdex.android.model.ComposerSendAvailability
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.hasBlockingState
+import io.androdex.android.model.readyAttachments
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -144,6 +149,9 @@ internal data class ThreadGitUiState(
 
 internal data class ComposerUiState(
     val text: String,
+    val attachments: List<ComposerImageAttachment>,
+    val remainingAttachmentSlots: Int,
+    val hasBlockingAttachmentState: Boolean,
     val mentionedFiles: List<ComposerMentionedFile>,
     val mentionedSkills: List<ComposerMentionedSkill>,
     val fileAutocompleteItems: List<FuzzyFileMatch>,
@@ -336,6 +344,9 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
+    val composerAttachments = composerAttachmentsByThread[threadId].orEmpty()
+    val hasBlockingAttachmentState = composerAttachments.hasBlockingState()
+    val readyComposerAttachments = composerAttachments.readyAttachments()
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
@@ -343,6 +354,14 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    val sendAvailability = ComposerSendAvailability(
+        isSending = isSendingMessage || isBusy || isInterruptingSelectedThread,
+        isConnected = connectionStatus == ConnectionStatus.CONNECTED,
+        trimmedInput = composerText.trim(),
+        hasReadyImages = readyComposerAttachments.isNotEmpty(),
+        hasBlockingAttachmentState = hasBlockingAttachmentState,
+        hasSubagentsSelection = isSubagentsEnabled,
+    )
     val gitState = gitStateByThread[threadId]
     val runningGitAction = runningGitActionByThread[threadId]
     return ThreadTimelineUiState(
@@ -382,6 +401,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         canRestoreQueuedDrafts = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
             && composerText.isBlank()
+            && composerAttachments.isEmpty()
             && composerMentionedFilesByThread[threadId].orEmpty().isEmpty()
             && composerMentionedSkillsByThread[threadId].orEmpty().isEmpty()
             && !isSubagentsEnabled,
@@ -393,6 +413,9 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             && queueState?.isPaused == true,
         composer = ComposerUiState(
             text = composerText,
+            attachments = composerAttachments,
+            remainingAttachmentSlots = (MAX_COMPOSER_IMAGE_ATTACHMENTS - composerAttachments.size).coerceAtLeast(0),
+            hasBlockingAttachmentState = hasBlockingAttachmentState,
             mentionedFiles = composerMentionedFilesByThread[threadId].orEmpty(),
             mentionedSkills = composerMentionedSkillsByThread[threadId].orEmpty(),
             fileAutocompleteItems = composerFileAutocompleteItems,
@@ -413,10 +436,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             isSubagentsEnabled = isSubagentsEnabled,
             subagentsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             isSubmitting = isSendingMessage,
-            submitEnabled = (composerText.isNotBlank() || isSubagentsEnabled)
-                && !isBusy
-                && !isSendingMessage
-                && !isInterruptingSelectedThread,
+            submitEnabled = !sendAvailability.isSendDisabled,
             showStop = isThreadRunning,
             isStopping = isInterruptingSelectedThread,
             stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,

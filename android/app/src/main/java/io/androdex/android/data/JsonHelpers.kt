@@ -1,5 +1,7 @@
 package io.androdex.android.data
 
+import io.androdex.android.attachment.buildImageAttachmentFromBytes
+import io.androdex.android.attachment.decodeDataUrlImageData
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
@@ -186,12 +188,14 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
 
             when (itemType) {
                 "usermessage" -> {
+                    val attachments = decodeImageAttachments(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.USER,
                         kind = ConversationKind.CHAT,
                         text = decodeItemText(itemObject),
+                        attachments = attachments,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
@@ -199,12 +203,14 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                 }
 
                 "agentmessage", "assistantmessage" -> {
+                    val attachments = decodeImageAttachments(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = ConversationRole.ASSISTANT,
                         kind = ConversationKind.CHAT,
                         text = decodeItemText(itemObject),
+                        attachments = attachments,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
@@ -217,12 +223,14 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                         "assistant" -> ConversationRole.ASSISTANT
                         else -> ConversationRole.SYSTEM
                     }
+                    val attachments = decodeImageAttachments(itemObject)
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
                         threadId = threadId,
                         role = role,
                         kind = if (role == ConversationRole.SYSTEM) ConversationKind.THINKING else ConversationKind.CHAT,
                         text = decodeItemText(itemObject),
+                        attachments = attachments,
                         createdAtEpochMs = createdAt,
                         turnId = turnId,
                         itemId = itemId,
@@ -707,6 +715,52 @@ private fun decodeItemText(itemObject: JSONObject): String {
         return combined
     }
     return itemObject.stringOrNull("text", "message", "summary") ?: ""
+}
+
+private fun decodeImageAttachments(itemObject: JSONObject): List<io.androdex.android.model.ImageAttachment> {
+    val content = itemObject.optJSONArray("content") ?: return emptyList()
+    val attachments = mutableListOf<io.androdex.android.model.ImageAttachment>()
+    for (index in 0 until content.length()) {
+        val value = content.optJSONObject(index) ?: continue
+        when (normalizeItemType(value.optString("type"))) {
+            "image", "localimage", "inputimage" -> {
+                val sourceUrl = value.stringOrNull("url", "image_url", "path")
+                val payloadDataUrl = sourceUrl
+                    ?.trim()
+                    ?.takeIf { it.startsWith("data:image", ignoreCase = true) }
+                val attachment = when {
+                    payloadDataUrl != null -> {
+                        val payloadBytes = decodeDataUrlImageData(payloadDataUrl) ?: continue
+                        buildImageAttachmentFromBytes(payloadBytes, sourceUrl = sourceUrl)
+                            ?.copy(payloadDataUrl = payloadDataUrl, sourceUrl = sourceUrl)
+                    }
+
+                    !value.stringOrNull("thumbnailBase64JPEG", "thumbnail_base64_jpeg").isNullOrBlank() -> {
+                        io.androdex.android.model.ImageAttachment(
+                            thumbnailBase64Jpeg = value.stringOrNull(
+                                "thumbnailBase64JPEG",
+                                "thumbnail_base64_jpeg",
+                            ).orEmpty(),
+                            payloadDataUrl = null,
+                            sourceUrl = sourceUrl,
+                        )
+                    }
+
+                    sourceUrl != null -> {
+                        io.androdex.android.model.ImageAttachment(
+                            thumbnailBase64Jpeg = "",
+                            payloadDataUrl = null,
+                            sourceUrl = sourceUrl,
+                        )
+                    }
+
+                    else -> null
+                } ?: continue
+                attachments += attachment
+            }
+        }
+    }
+    return attachments
 }
 
 internal fun decodeReasoningText(itemObject: JSONObject): String {

@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -55,6 +57,9 @@ internal fun ComposerBar(
     onSelectSkillAutocomplete: (SkillMetadata) -> Unit,
     onRemoveMentionedSkill: (String) -> Unit,
     onSelectSlashCommand: (ComposerSlashCommand) -> Unit,
+    onAddCamera: () -> Unit,
+    onAddGallery: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -122,6 +127,53 @@ internal fun ComposerBar(
                         onRemove = { onSubagentsModeChanged(false) },
                     )
                 }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(
+                        onClick = onAddCamera,
+                        enabled = state.inputEnabled && state.remainingAttachmentSlots > 0,
+                    ) {
+                        Icon(
+                            Icons.Default.PhotoCamera,
+                            contentDescription = "Take photo",
+                        )
+                    }
+                    IconButton(
+                        onClick = onAddGallery,
+                        enabled = state.inputEnabled && state.remainingAttachmentSlots > 0,
+                    ) {
+                        Icon(
+                            Icons.Default.PhotoLibrary,
+                            contentDescription = "Choose photo",
+                        )
+                    }
+                }
+                Text(
+                    text = if (state.remainingAttachmentSlots == 1) {
+                        "1 slot left"
+                    } else {
+                        "${state.remainingAttachmentSlots} slots left"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (state.hasBlockingAttachmentState) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+
+            if (state.attachments.isNotEmpty()) {
+                ComposerAttachmentStrip(
+                    attachments = state.attachments,
+                    onRemove = onRemoveAttachment,
+                )
             }
 
             Row(

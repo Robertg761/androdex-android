@@ -425,6 +425,7 @@ data class ConversationMessage(
     val role: ConversationRole,
     val kind: ConversationKind,
     val text: String,
+    val attachments: List<ImageAttachment> = emptyList(),
     val createdAtEpochMs: Long,
     val turnId: String? = null,
     val itemId: String? = null,
@@ -441,6 +442,7 @@ data class ConversationMessage(
 data class QueuedTurnDraft(
     val id: String,
     val text: String,
+    val attachments: List<ImageAttachment> = emptyList(),
     val createdAtEpochMs: Long,
     val collaborationMode: CollaborationModeKind? = null,
     val subagentsSelectionEnabled: Boolean = false,

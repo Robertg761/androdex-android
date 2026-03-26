@@ -1,6 +1,7 @@
 package io.androdex.android.data
 
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.TurnSkillMention
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,6 +73,33 @@ class AndrodexClientTurnPayloadTest {
             "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
             payload[1]["path"],
         )
+    }
+
+    @Test
+    fun buildTurnInputPayload_placesImagesBeforeTextAndSupportsLegacyImageUrlRetry() {
+        val payload = buildTurnInputPayloadSpec(
+            userInput = "Describe this photo",
+            attachments = listOf(
+                ImageAttachment(
+                    id = "image-1",
+                    thumbnailBase64Jpeg = "thumb",
+                    payloadDataUrl = "data:image/jpeg;base64,AAAA",
+                )
+            ),
+            imageUrlKey = "image_url",
+        )
+
+        assertEquals(2, payload.size)
+        assertEquals("image", payload[0]["type"])
+        assertEquals("data:image/jpeg;base64,AAAA", payload[0]["image_url"])
+        assertEquals("text", payload[1]["type"])
+        assertEquals("Describe this photo", payload[1]["text"])
+    }
+
+    @Test
+    fun shouldRetryTurnWithImageUrlField_matchesLegacyServerErrors() {
+        assertTrue(shouldRetryTurnWithImageUrlField("Missing required field image_url in image item"))
+        assertFalse(shouldRetryTurnWithImageUrlField("Invalid skill item"))
     }
 
     @Test(expected = IllegalStateException::class)

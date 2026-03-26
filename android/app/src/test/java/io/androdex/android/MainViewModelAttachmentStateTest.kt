@@ -4,6 +4,7 @@ import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
@@ -18,11 +19,13 @@ import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ImageAttachment
+import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.TurnSkillMention
+import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
@@ -30,19 +33,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-class MainViewModelComposerAutocompleteTest {
+class MainViewModelAttachmentStateTest {
     private val dispatcher = StandardTestDispatcher()
 
     @Before
@@ -56,66 +59,11 @@ class MainViewModelComposerAutocompleteTest {
     }
 
     @Test
-    fun fileAutocomplete_selectionAddsChipAndRewritesText() = runTest(dispatcher) {
-        val repository = ComposerRepository().apply {
-            fuzzyMatches = listOf(
-                FuzzyFileMatch(
-                    root = "C:\\Projects\\Androdex",
-                    path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
-                    fileName = "MainViewModel.kt",
-                )
-            )
-        }
+    fun beginComposerAttachmentIntake_capsAtMaxAndCreatesLoadingTiles() = runTest(dispatcher) {
+        val repository = AttachmentRepository()
         val viewModel = MainViewModel(repository)
         dispatcher.scheduler.runCurrent()
-        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
-        repository.emit(
-            ClientUpdate.ThreadsLoaded(
-                listOf(
-                    ThreadSummary(
-                        id = "thread-1",
-                        title = "Conversation",
-                        preview = null,
-                        cwd = "C:\\Projects\\Androdex",
-                        createdAtEpochMs = null,
-                        updatedAtEpochMs = null,
-                    )
-                )
-            )
-        )
-        dispatcher.scheduler.runCurrent()
-        viewModel.openThread("thread-1")
-        dispatcher.scheduler.runCurrent()
 
-        viewModel.updateComposerText("Inspect @Ma")
-        dispatcher.scheduler.advanceTimeBy(200)
-        dispatcher.scheduler.runCurrent()
-
-        val beforeSelect = viewModel.uiState.value
-        assertTrue(beforeSelect.isFileAutocompleteVisible)
-        assertEquals(1, beforeSelect.composerFileAutocompleteItems.size)
-
-        viewModel.selectFileAutocomplete(beforeSelect.composerFileAutocompleteItems.single())
-
-        val afterSelect = viewModel.uiState.value
-        assertEquals("Inspect @MainViewModel.kt ", afterSelect.composerText)
-        assertEquals(1, afterSelect.composerMentionedFilesByThread["thread-1"]?.size)
-        assertFalse(afterSelect.isFileAutocompleteVisible)
-    }
-
-    @Test
-    fun skillAutocomplete_andSlashCommandSelectionUpdateComposerState() = runTest(dispatcher) {
-        val repository = ComposerRepository().apply {
-            skills = listOf(
-                SkillMetadata(
-                    name = "frontend-design",
-                    description = "Build polished UI",
-                    path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
-                )
-            )
-        }
-        val viewModel = MainViewModel(repository)
-        dispatcher.scheduler.runCurrent()
         repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
         repository.emit(
             ClientUpdate.ThreadsLoaded(
@@ -126,53 +74,23 @@ class MainViewModelComposerAutocompleteTest {
         viewModel.openThread("thread-1")
         dispatcher.scheduler.runCurrent()
 
-        viewModel.updateComposerText("Use \$fr")
-        dispatcher.scheduler.advanceTimeBy(200)
+        val reservation = viewModel.beginComposerAttachmentIntake(MAX_COMPOSER_IMAGE_ATTACHMENTS + 2)
         dispatcher.scheduler.runCurrent()
 
-        val skillState = viewModel.uiState.value
-        assertTrue(skillState.isSkillAutocompleteVisible)
-        viewModel.selectSkillAutocomplete(skillState.composerSkillAutocompleteItems.single())
-
-        val selectedSkillState = viewModel.uiState.value
-        assertEquals("Use \$frontend-design ", selectedSkillState.composerText)
-        assertEquals(1, selectedSkillState.composerMentionedSkillsByThread["thread-1"]?.size)
-
-        viewModel.updateComposerText("/sub")
-        dispatcher.scheduler.runCurrent()
-
-        val slashState = viewModel.uiState.value
-        assertTrue(slashState.isSlashCommandAutocompleteVisible)
-        assertEquals(listOf(ComposerSlashCommand.SUBAGENTS), slashState.composerSlashCommandItems)
-
-        viewModel.selectSlashCommand(ComposerSlashCommand.SUBAGENTS)
-
-        val selectedSlashState = viewModel.uiState.value
-        assertTrue(selectedSlashState.isComposerSubagentsEnabled)
-        assertEquals("", selectedSlashState.composerText)
-        assertFalse(selectedSlashState.isSlashCommandAutocompleteVisible)
+        assertNotNull(reservation)
+        assertEquals(MAX_COMPOSER_IMAGE_ATTACHMENTS, reservation?.acceptedIds?.size)
+        assertEquals(2, reservation?.droppedCount)
+        val attachments = viewModel.uiState.value.composerAttachmentsByThread["thread-1"].orEmpty()
+        assertEquals(MAX_COMPOSER_IMAGE_ATTACHMENTS, attachments.size)
+        assertTrue(attachments.all { it.state == ComposerImageAttachmentState.Loading })
     }
 
     @Test
-    fun sendMessage_buildsCanonicalFilePayloadAndStructuredSkillMentions() = runTest(dispatcher) {
-        val repository = ComposerRepository().apply {
-            fuzzyMatches = listOf(
-                FuzzyFileMatch(
-                    root = "C:\\Projects\\Androdex",
-                    path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
-                    fileName = "MainViewModel.kt",
-                )
-            )
-            skills = listOf(
-                SkillMetadata(
-                    name = "frontend-design",
-                    description = "Build polished UI",
-                    path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
-                )
-            )
-        }
+    fun sendMessage_doesNothingWhileAttachmentStateIsBlocking() = runTest(dispatcher) {
+        val repository = AttachmentRepository()
         val viewModel = MainViewModel(repository)
         dispatcher.scheduler.runCurrent()
+
         repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
         repository.emit(
             ClientUpdate.ThreadsLoaded(
@@ -183,44 +101,97 @@ class MainViewModelComposerAutocompleteTest {
         viewModel.openThread("thread-1")
         dispatcher.scheduler.runCurrent()
 
-        viewModel.updateComposerText("Inspect @Ma")
-        dispatcher.scheduler.advanceTimeBy(200)
+        val reservation = requireNotNull(viewModel.beginComposerAttachmentIntake(1))
+        viewModel.updateComposerAttachmentState(
+            threadId = reservation.threadId,
+            attachmentId = reservation.acceptedIds.single(),
+            state = ComposerImageAttachmentState.Failed("Couldn't load"),
+        )
         dispatcher.scheduler.runCurrent()
-        viewModel.selectFileAutocomplete(viewModel.uiState.value.composerFileAutocompleteItems.single())
-        viewModel.updateComposerText(viewModel.uiState.value.composerText + "with \$fr")
-        dispatcher.scheduler.advanceTimeBy(200)
-        dispatcher.scheduler.runCurrent()
-        viewModel.selectSkillAutocomplete(viewModel.uiState.value.composerSkillAutocompleteItems.single())
 
         viewModel.sendMessage()
         dispatcher.scheduler.runCurrent()
 
-        assertEquals(
-            listOf("thread-1:Inspect @android/app/src/main/java/io/androdex/android/MainViewModel.kt with \$frontend-design"),
-            repository.startedTurns,
+        assertTrue(repository.startedTurnInputs.isEmpty())
+        assertEquals(1, viewModel.uiState.value.composerAttachmentsByThread["thread-1"]?.size)
+    }
+
+    @Test
+    fun queuedAttachmentDraft_restoresReadyTilesAndFlushesAttachmentPayload() = runTest(dispatcher) {
+        val repository = AttachmentRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
         )
-        assertEquals(
-            listOf(
-                listOf(
-                    TurnSkillMention(
-                        id = "frontend-design",
-                        name = "frontend-design",
-                        path = "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
-                    )
-                )
-            ),
-            repository.startedTurnSkillMentions,
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        val reservation = requireNotNull(viewModel.beginComposerAttachmentIntake(1))
+        val attachment = ImageAttachment(
+            id = "image-1",
+            thumbnailBase64Jpeg = "thumb",
+            payloadDataUrl = "data:image/jpeg;base64,AAAA",
         )
+        viewModel.updateComposerAttachmentState(
+            threadId = reservation.threadId,
+            attachmentId = reservation.acceptedIds.single(),
+            state = ComposerImageAttachmentState.Ready(attachment),
+        )
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+        viewModel.pauseSelectedThreadQueue()
+        dispatcher.scheduler.runCurrent()
+
+        val queuedDraft = viewModel.uiState.value.queuedDraftStateByThread["thread-1"]
+            ?.drafts
+            ?.single()
+        assertNotNull(queuedDraft)
+        assertTrue(viewModel.uiState.value.composerAttachmentsByThread["thread-1"].isNullOrEmpty())
+        assertEquals(listOf(attachment), queuedDraft?.attachments)
+
+        repository.emit(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                terminalState = TurnTerminalState.COMPLETED,
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.restoreQueuedDraftToComposer(requireNotNull(queuedDraft).id)
+        dispatcher.scheduler.runCurrent()
+
+        val restoredAttachments = viewModel.uiState.value.composerAttachmentsByThread["thread-1"].orEmpty()
+        assertEquals(1, restoredAttachments.size)
+        assertEquals(
+            ComposerImageAttachmentState.Ready(attachment),
+            restoredAttachments.single().state,
+        )
+
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1:"), repository.startedTurnInputs)
+        assertEquals(listOf(listOf(attachment)), repository.startedTurnAttachments)
+        assertTrue(viewModel.uiState.value.composerAttachmentsByThread["thread-1"].isNullOrEmpty())
     }
 }
 
-private class ComposerRepository : AndrodexRepositoryContract {
+private class AttachmentRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>()
 
-    var fuzzyMatches: List<FuzzyFileMatch> = emptyList()
-    var skills: List<SkillMetadata> = emptyList()
-    val startedTurns = mutableListOf<String>()
-    val startedTurnSkillMentions = mutableListOf<List<TurnSkillMention>>()
+    val startedTurnInputs = mutableListOf<String>()
+    val startedTurnAttachments = mutableListOf<List<ImageAttachment>>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -274,9 +245,9 @@ private class ComposerRepository : AndrodexRepositoryContract {
         query: String,
         roots: List<String>,
         cancellationToken: String?,
-    ): List<FuzzyFileMatch> = fuzzyMatches
+    ): List<FuzzyFileMatch> = emptyList()
 
-    override suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> = skills
+    override suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> = emptyList()
 
     override suspend fun startTurn(
         threadId: String,
@@ -285,8 +256,8 @@ private class ComposerRepository : AndrodexRepositoryContract {
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
-        startedTurns += "$threadId:$userInput"
-        startedTurnSkillMentions += skillMentions
+        startedTurnInputs += "$threadId:$userInput"
+        startedTurnAttachments += attachments
     }
 
     override suspend fun steerTurn(
@@ -344,7 +315,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
             aheadCount = 0,
             behindCount = 0,
             localOnlyCommitCount = 0,
-            state = "up_to_date",
+            state = "clean",
             canPush = false,
             isPublishedToRemote = true,
             files = emptyList(),
@@ -352,18 +323,20 @@ private class ComposerRepository : AndrodexRepositoryContract {
         )
     }
 
-    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult = GitRepoDiffResult("")
+    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult {
+        return GitRepoDiffResult(patch = "")
+    }
 
     override suspend fun gitCommit(workingDirectory: String, message: String): GitCommitResult {
-        return GitCommitResult("abc1234", "main", message)
+        return GitCommitResult("sha", "main", message)
     }
 
     override suspend fun gitPush(workingDirectory: String): GitPushResult {
-        return GitPushResult("main", "origin", gitStatus(workingDirectory))
+        return GitPushResult("main", "origin", null)
     }
 
     override suspend fun gitPull(workingDirectory: String): GitPullResult {
-        return GitPullResult(success = true, status = gitStatus(workingDirectory))
+        return GitPullResult(success = true, status = null)
     }
 
     override suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
@@ -374,16 +347,16 @@ private class ComposerRepository : AndrodexRepositoryContract {
             localCheckoutPath = workingDirectory,
             currentBranch = "main",
             defaultBranch = "main",
-            status = gitStatus(workingDirectory),
+            status = null,
         )
     }
 
     override suspend fun gitCheckout(workingDirectory: String, branch: String): GitCheckoutResult {
-        return GitCheckoutResult(branch, "origin/$branch", gitStatus(workingDirectory))
+        return GitCheckoutResult(branch, "origin/$branch", null)
     }
 
     override suspend fun gitCreateBranch(workingDirectory: String, name: String): GitCreateBranchResult {
-        return GitCreateBranchResult("remodex/$name", gitStatus(workingDirectory))
+        return GitCreateBranchResult(name, null)
     }
 
     override suspend fun gitCreateWorktree(
@@ -393,8 +366,8 @@ private class ComposerRepository : AndrodexRepositoryContract {
         changeTransfer: GitWorktreeChangeTransferMode,
     ): GitCreateWorktreeResult {
         return GitCreateWorktreeResult(
-            branch = "remodex/$name",
-            worktreePath = "$workingDirectory\\worktree",
+            branch = name,
+            worktreePath = "$workingDirectory\\..\\$name",
             alreadyExisted = false,
         )
     }

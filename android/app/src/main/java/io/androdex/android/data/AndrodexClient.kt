@@ -37,6 +37,7 @@ import io.androdex.android.model.GitRemoveWorktreeResult
 import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
@@ -438,17 +439,21 @@ class AndrodexClient(
     suspend fun startTurn(
         threadId: String,
         userInput: String,
+        attachments: List<ImageAttachment> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
         var effectiveCollaborationMode = collaborationMode
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
+        var imageUrlKey = "url"
         while (true) {
             val params = buildTurnStartParams(
                 threadId = threadId,
                 userInput = userInput,
+                attachments = attachments,
                 skillMentions = skillMentions,
+                imageUrlKey = imageUrlKey,
                 includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForSelectedModel(),
@@ -458,6 +463,10 @@ class AndrodexClient(
                 sendRequest("turn/start", params)
                 return
             } catch (error: RpcException) {
+                if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
+                    imageUrlKey = "image_url"
+                    continue
+                }
                 if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
                     includeStructuredSkillItems = false
                     continue
@@ -475,18 +484,22 @@ class AndrodexClient(
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        attachments: List<ImageAttachment> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
         var effectiveCollaborationMode = collaborationMode
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
+        var imageUrlKey = "url"
         while (true) {
             val params = buildTurnSteerParams(
                 threadId = threadId,
                 expectedTurnId = expectedTurnId,
                 userInput = userInput,
+                attachments = attachments,
                 skillMentions = skillMentions,
+                imageUrlKey = imageUrlKey,
                 includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForSelectedModel(),
@@ -496,6 +509,10 @@ class AndrodexClient(
                 sendRequest("turn/steer", params)
                 return
             } catch (error: RpcException) {
+                if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
+                    imageUrlKey = "image_url"
+                    continue
+                }
                 if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
                     includeStructuredSkillItems = false
                     continue
@@ -1799,10 +1816,23 @@ internal fun connectionUpdateForSocketClose(
 
 internal fun buildTurnInputPayloadSpec(
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
 ): List<Map<String, Any?>> {
     val payload = mutableListOf<Map<String, Any?>>()
+    attachments.forEach { attachment ->
+        val payloadDataUrl = attachment.payloadDataUrl?.trim()
+        if (payloadDataUrl.isNullOrEmpty()) {
+            return@forEach
+        }
+        payload += linkedMapOf(
+            "type" to "image",
+            imageUrlKey to payloadDataUrl,
+        )
+    }
+
     val trimmedInput = userInput.trim()
     if (trimmedInput.isNotEmpty()) {
         payload += mapOf(
@@ -1831,12 +1861,16 @@ internal fun buildTurnInputPayloadSpec(
 
 internal fun buildTurnInputPayload(
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
 ): JSONArray {
     return buildTurnInputPayloadSpec(
         userInput = userInput,
+        attachments = attachments,
         skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
         includeStructuredSkillItems = includeStructuredSkillItems,
     ).toJsonArray()
 }
@@ -1844,7 +1878,9 @@ internal fun buildTurnInputPayload(
 internal fun buildTurnStartParams(
     threadId: String,
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -1853,6 +1889,10 @@ internal fun buildTurnStartParams(
     return buildTurnStartPayloadSpec(
         threadId = threadId,
         userInput = userInput,
+        attachments = attachments,
+        skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
+        includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
         collaborationMode = collaborationMode,
@@ -1862,7 +1902,9 @@ internal fun buildTurnStartParams(
 internal fun buildTurnStartPayloadSpec(
     threadId: String,
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -1872,7 +1914,9 @@ internal fun buildTurnStartPayloadSpec(
         "threadId" to threadId,
         "input" to buildTurnInputPayloadSpec(
             userInput = userInput,
+            attachments = attachments,
             skillMentions = skillMentions,
+            imageUrlKey = imageUrlKey,
             includeStructuredSkillItems = includeStructuredSkillItems,
         ),
     )
@@ -1890,7 +1934,9 @@ internal fun buildTurnSteerParams(
     threadId: String,
     expectedTurnId: String,
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -1900,6 +1946,10 @@ internal fun buildTurnSteerParams(
         threadId = threadId,
         expectedTurnId = expectedTurnId,
         userInput = userInput,
+        attachments = attachments,
+        skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
+        includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
         collaborationMode = collaborationMode,
@@ -1910,7 +1960,9 @@ internal fun buildTurnSteerPayloadSpec(
     threadId: String,
     expectedTurnId: String,
     userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -1921,7 +1973,9 @@ internal fun buildTurnSteerPayloadSpec(
         "expectedTurnId" to expectedTurnId,
         "input" to buildTurnInputPayloadSpec(
             userInput = userInput,
+            attachments = attachments,
             skillMentions = skillMentions,
+            imageUrlKey = imageUrlKey,
             includeStructuredSkillItems = includeStructuredSkillItems,
         ),
     )
@@ -1970,6 +2024,18 @@ internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boo
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
         && !normalizedMessage.contains("experimentalapi")
+}
+
+internal fun shouldRetryTurnWithImageUrlField(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    if (!normalizedMessage.contains("image_url")) {
+        return false
+    }
+    return normalizedMessage.contains("missing")
+        || normalizedMessage.contains("unknown")
+        || normalizedMessage.contains("invalid")
+        || normalizedMessage.contains("expected")
+        || normalizedMessage.contains("field")
 }
 
 internal fun shouldRetryTurnWithoutSkillItems(errorMessage: String?): Boolean {

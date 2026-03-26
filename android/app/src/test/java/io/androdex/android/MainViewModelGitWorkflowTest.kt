@@ -17,6 +17,7 @@ import io.androdex.android.model.GitRemoveWorktreeResult
 import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
@@ -316,6 +317,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
     override suspend fun startTurn(
         threadId: String,
         userInput: String,
+        attachments: List<ImageAttachment>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit
@@ -324,6 +326,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
         threadId: String,
         expectedTurnId: String,
         userInput: String,
+        attachments: List<ImageAttachment>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit

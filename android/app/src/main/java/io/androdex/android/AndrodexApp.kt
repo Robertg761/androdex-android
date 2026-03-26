@@ -1,11 +1,19 @@
 package io.androdex.android
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -17,16 +25,64 @@ import io.androdex.android.ui.shared.ErrorMessageDialog
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.toAppUiState
 import io.androdex.android.ui.turn.ThreadTimelineScreen
+import io.androdex.android.ui.turn.TurnAttachmentPipeline
+import kotlinx.coroutines.launch
 
 @Composable
 fun AndrodexApp(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var settingsOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val activity = LocalActivity.current
+    val scope = rememberCoroutineScope()
     val appState = remember(uiState, settingsOpen) {
         uiState.toAppUiState(isSettingsVisible = settingsOpen)
     }
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let(viewModel::updatePairingInput)
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        if (bitmap == null) {
+            return@rememberLauncherForActivityResult
+        }
+        val reservation = viewModel.beginComposerAttachmentIntake(1) ?: return@rememberLauncherForActivityResult
+        val attachmentId = reservation.acceptedIds.firstOrNull() ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val state = TurnAttachmentPipeline.loadCameraAttachment(bitmap)
+            viewModel.updateComposerAttachmentState(
+                threadId = reservation.threadId,
+                attachmentId = attachmentId,
+                state = state,
+            )
+        }
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            cameraLauncher.launch(null)
+        } else {
+            viewModel.reportAttachmentError("Camera permission is required to take a photo.")
+        }
+    }
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isEmpty()) {
+            return@rememberLauncherForActivityResult
+        }
+        val reservation = viewModel.beginComposerAttachmentIntake(uris.size) ?: return@rememberLauncherForActivityResult
+        uris.take(reservation.acceptedIds.size)
+            .zip(reservation.acceptedIds)
+            .forEach { (uri, attachmentId) ->
+                scope.launch {
+                    val state = TurnAttachmentPipeline.loadGalleryAttachment(
+                        contentResolver = context.contentResolver,
+                        uriString = uri.toString(),
+                    )
+                    viewModel.updateComposerAttachmentState(
+                        threadId = reservation.threadId,
+                        attachmentId = attachmentId,
+                        state = state,
+                    )
+                }
+            }
     }
 
     if (appState.overlay.approvalRequest != null) {
@@ -104,6 +160,23 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onSelectSkillAutocomplete = viewModel::selectSkillAutocomplete,
                 onRemoveMentionedSkill = viewModel::removeMentionedSkill,
                 onSelectSlashCommand = viewModel::selectSlashCommand,
+                onAddCamera = {
+                    val permissionGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.CAMERA,
+                    ) == PackageManager.PERMISSION_GRANTED
+                    when {
+                        permissionGranted -> cameraLauncher.launch(null)
+                        activity == null -> viewModel.reportAttachmentError("Camera is unavailable right now.")
+                        else -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                },
+                onAddGallery = {
+                    galleryLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onRemoveComposerAttachment = viewModel::removeComposerAttachment,
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::interruptSelectedThread,
                 onPauseQueue = viewModel::pauseSelectedThreadQueue,

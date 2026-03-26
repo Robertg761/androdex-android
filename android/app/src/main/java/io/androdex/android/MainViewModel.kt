@@ -7,6 +7,10 @@ import androidx.lifecycle.viewModelScope
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ComposerAttachmentIntakePlan
+import io.androdex.android.model.ComposerAttachmentIntakeReservation
+import io.androdex.android.model.ComposerImageAttachment
+import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ConnectionStatus
@@ -14,6 +18,7 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitOperationException
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
@@ -22,6 +27,8 @@ import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.model.hasBlockingState
+import io.androdex.android.model.readyAttachments
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import kotlinx.coroutines.Job
@@ -53,6 +60,7 @@ data class AndrodexUiState(
     val composerDraftsByThread: Map<String, String> = emptyMap(),
     val composerPlanModeByThread: Set<String> = emptySet(),
     val composerSubagentsByThread: Set<String> = emptySet(),
+    val composerAttachmentsByThread: Map<String, List<ComposerImageAttachment>> = emptyMap(),
     val composerMentionedFilesByThread: Map<String, List<ComposerMentionedFile>> = emptyMap(),
     val composerMentionedSkillsByThread: Map<String, List<ComposerMentionedSkill>> = emptyMap(),
     val composerFileAutocompleteItems: List<FuzzyFileMatch> = emptyList(),
@@ -184,6 +192,83 @@ class MainViewModel(
         if (!enabled) {
             clearSlashCommandAutocomplete()
         }
+    }
+
+    fun beginComposerAttachmentIntake(requestedCount: Int): ComposerAttachmentIntakeReservation? {
+        var reservation: ComposerAttachmentIntakeReservation? = null
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            val existingAttachments = current.composerAttachmentsByThread[threadId].orEmpty()
+            val intakePlan = ComposerAttachmentIntakePlan.make(
+                requestedCount = requestedCount,
+                remainingSlots = (MAX_COMPOSER_IMAGE_ATTACHMENTS - existingAttachments.size).coerceAtLeast(0),
+            )
+            if (intakePlan.acceptedCount == 0) {
+                service.reportError("You can attach up to $MAX_COMPOSER_IMAGE_ATTACHMENTS images per message.")
+                return@update current
+            }
+            if (intakePlan.hasOverflow) {
+                service.reportError("Only $MAX_COMPOSER_IMAGE_ATTACHMENTS images are allowed per message.")
+            }
+
+            val acceptedIds = List(intakePlan.acceptedCount) { UUID.randomUUID().toString() }
+            reservation = ComposerAttachmentIntakeReservation(
+                threadId = threadId,
+                acceptedIds = acceptedIds,
+                droppedCount = intakePlan.droppedCount,
+            )
+            current.copy(
+                composerAttachmentsByThread = current.composerAttachmentsByThread.updatedComposerAttachments(
+                    threadId = threadId,
+                    attachments = existingAttachments + acceptedIds.map { attachmentId ->
+                        ComposerImageAttachment(
+                            id = attachmentId,
+                            state = ComposerImageAttachmentState.Loading,
+                        )
+                    },
+                ),
+            )
+        }
+        return reservation
+    }
+
+    fun updateComposerAttachmentState(
+        threadId: String,
+        attachmentId: String,
+        state: ComposerImageAttachmentState,
+    ) {
+        uiStateFlow.update { current ->
+            val attachments = current.composerAttachmentsByThread[threadId].orEmpty()
+            val attachmentIndex = attachments.indexOfFirst { it.id == attachmentId }
+            if (attachmentIndex < 0) {
+                return@update current
+            }
+            val updatedAttachments = attachments.toMutableList()
+            updatedAttachments[attachmentIndex] = updatedAttachments[attachmentIndex].copy(state = state)
+            current.copy(
+                composerAttachmentsByThread = current.composerAttachmentsByThread.updatedComposerAttachments(
+                    threadId = threadId,
+                    attachments = updatedAttachments,
+                ),
+            )
+        }
+    }
+
+    fun removeComposerAttachment(id: String) {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            val attachments = current.composerAttachmentsByThread[threadId].orEmpty()
+            current.copy(
+                composerAttachmentsByThread = current.composerAttachmentsByThread.updatedComposerAttachments(
+                    threadId = threadId,
+                    attachments = attachments.filterNot { it.id == id },
+                ),
+            )
+        }
+    }
+
+    fun reportAttachmentError(message: String) {
+        service.reportError(message)
     }
 
     fun selectFileAutocomplete(item: FuzzyFileMatch) {
@@ -330,6 +415,7 @@ class MainViewModel(
             || current.isInterruptingSelectedThread
             || current.isBusy
             || current.composerText.isNotEmpty()
+            || current.composerAttachmentsByThread[threadId].orEmpty().isNotEmpty()
             || current.composerMentionedFilesByThread[threadId].orEmpty().isNotEmpty()
             || current.composerMentionedSkillsByThread[threadId].orEmpty().isNotEmpty()
             || current.isComposerSubagentsEnabled
@@ -359,6 +445,15 @@ class MainViewModel(
                 composerDraftsByThread = state.composerDraftsByThread + (threadId to draft.text),
                 composerPlanModeByThread = nextPlanModes,
                 composerSubagentsByThread = nextSubagents,
+                composerAttachmentsByThread = state.composerAttachmentsByThread.updatedComposerAttachments(
+                    threadId = threadId,
+                    attachments = draft.attachments.map { attachment ->
+                        ComposerImageAttachment(
+                            id = attachment.id,
+                            state = ComposerImageAttachmentState.Ready(attachment),
+                        )
+                    },
+                ),
                 composerMentionedFilesByThread = state.composerMentionedFilesByThread.updatedMentionedFiles(
                     threadId,
                     draft.mentionedFiles,
@@ -928,6 +1023,9 @@ class MainViewModel(
         val rawInput = current.composerText
         val subagentsEnabled = current.isComposerSubagentsEnabled
         val threadId = current.selectedThreadId
+        val composerAttachments = threadId?.let { current.composerAttachmentsByThread[it].orEmpty() }.orEmpty()
+        val hasBlockingAttachmentState = composerAttachments.hasBlockingState()
+        val readyAttachments = composerAttachments.readyAttachments()
         val mentionedFiles = threadId?.let { current.composerMentionedFilesByThread[it].orEmpty() }.orEmpty()
         val mentionedSkills = threadId?.let { current.composerMentionedSkillsByThread[it].orEmpty() }.orEmpty()
         val payload = buildComposerPayloadText(
@@ -936,7 +1034,12 @@ class MainViewModel(
             isSubagentsSelected = subagentsEnabled,
         )
         val skillMentions = buildTurnSkillMentions(mentionedSkills)
-        if (payload.isEmpty() || current.isSendingMessage || current.isInterruptingSelectedThread || current.isBusy) {
+        if ((payload.isEmpty() && readyAttachments.isEmpty())
+            || hasBlockingAttachmentState
+            || current.isSendingMessage
+            || current.isInterruptingSelectedThread
+            || current.isBusy
+        ) {
             return
         }
         val collaborationMode = if (current.isComposerPlanMode) {
@@ -949,6 +1052,7 @@ class MainViewModel(
             val queuedDraft = QueuedTurnDraft(
                 id = UUID.randomUUID().toString(),
                 text = rawInput,
+                attachments = readyAttachments,
                 createdAtEpochMs = System.currentTimeMillis(),
                 collaborationMode = collaborationMode,
                 subagentsSelectionEnabled = subagentsEnabled,
@@ -961,6 +1065,7 @@ class MainViewModel(
                     composerText = "",
                     composerDraftsByThread = state.composerDraftsByThread - threadId,
                     composerSubagentsByThread = state.composerSubagentsByThread - threadId,
+                    composerAttachmentsByThread = state.composerAttachmentsByThread - threadId,
                     composerMentionedFilesByThread = state.composerMentionedFilesByThread - threadId,
                     composerMentionedSkillsByThread = state.composerMentionedSkillsByThread - threadId,
                     isComposerSubagentsEnabled = false,
@@ -982,6 +1087,8 @@ class MainViewModel(
                 composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread - id } ?: it.composerDraftsByThread,
                 composerSubagentsByThread = threadId?.let { id -> it.composerSubagentsByThread - id }
                     ?: it.composerSubagentsByThread,
+                composerAttachmentsByThread = threadId?.let { id -> it.composerAttachmentsByThread - id }
+                    ?: it.composerAttachmentsByThread,
                 composerMentionedFilesByThread = threadId?.let { id -> it.composerMentionedFilesByThread - id }
                     ?: it.composerMentionedFilesByThread,
                 composerMentionedSkillsByThread = threadId?.let { id -> it.composerMentionedSkillsByThread - id }
@@ -996,6 +1103,7 @@ class MainViewModel(
                 service.sendMessage(
                     input = payload,
                     preferredThreadId = threadId,
+                    attachments = readyAttachments,
                     skillMentions = skillMentions,
                     collaborationMode = collaborationMode,
                 )
@@ -1009,6 +1117,9 @@ class MainViewModel(
                         composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread + (id to rawInput) }
                             ?: it.composerDraftsByThread,
                         composerSubagentsByThread = nextSubagents,
+                        composerAttachmentsByThread = threadId?.let { id ->
+                            it.composerAttachmentsByThread.updatedComposerAttachments(id, composerAttachments)
+                        } ?: it.composerAttachmentsByThread,
                         composerMentionedFilesByThread = threadId?.let { id ->
                             it.composerMentionedFilesByThread + (id to mentionedFiles)
                         } ?: it.composerMentionedFilesByThread,
@@ -1549,6 +1660,7 @@ class MainViewModel(
                         isSubagentsSelected = draftToSend.subagentsSelectionEnabled,
                     ),
                     preferredThreadId = threadId,
+                    attachments = draftToSend.attachments,
                     skillMentions = buildTurnSkillMentions(draftToSend.mentionedSkills),
                     collaborationMode = draftToSend.collaborationMode,
                 )
@@ -1852,6 +1964,7 @@ private fun applyServiceState(
         readyThreadIds = serviceState.readyThreadIds,
         failedThreadIds = serviceState.failedThreadIds,
         composerText = selectedThreadComposerText,
+        composerAttachmentsByThread = current.composerAttachmentsByThread,
         composerMentionedFilesByThread = current.composerMentionedFilesByThread,
         composerMentionedSkillsByThread = current.composerMentionedSkillsByThread,
         composerFileAutocompleteItems = if (selectedThreadId == null) emptyList() else current.composerFileAutocompleteItems,
@@ -1917,6 +2030,17 @@ private fun Map<String, String>.updatedThreadDraft(
         this - threadId
     } else {
         this + (threadId to value)
+    }
+}
+
+private fun Map<String, List<ComposerImageAttachment>>.updatedComposerAttachments(
+    threadId: String,
+    attachments: List<ComposerImageAttachment>,
+): Map<String, List<ComposerImageAttachment>> {
+    return if (attachments.isEmpty()) {
+        this - threadId
+    } else {
+        this + (threadId to attachments)
     }
 }
 

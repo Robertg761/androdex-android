@@ -54,6 +54,7 @@ Androdex does **not** run Codex on the phone itself.
 - queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
 - Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
 - Android composer `@file`, `$skill`, and `/subagents` affordances with autocomplete chips and structured skill turn payloads
+- Android photo attachments from camera and gallery with Remodex-style intake limits, preview tiles, loading and failure states, queued-draft restore, and in-memory cleanup after send or removal
 - Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
 - reconnect from a saved pairing
@@ -130,7 +131,8 @@ Use this after host-side changes to make sure Windows and macOS still behave the
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
 5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
-6. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
+6. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
+7. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands
 
