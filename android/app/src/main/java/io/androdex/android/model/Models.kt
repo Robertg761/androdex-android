@@ -310,6 +310,11 @@ sealed interface ClientUpdate {
         val text: String,
     ) : ClientUpdate
 
+    data class TurnStarted(
+        val threadId: String?,
+        val turnId: String?,
+    ) : ClientUpdate
+
     data class ApprovalRequested(val request: ApprovalRequest) : ClientUpdate
 
     data object ApprovalCleared : ClientUpdate

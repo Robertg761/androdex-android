@@ -770,10 +770,27 @@ class AndrodexClient(
     private suspend fun handleNotification(method: String, params: JSONObject?) {
         when (method) {
             "thread/started", "thread/name/updated", "thread/status/changed" -> {
+                if (method == "thread/started") {
+                    updatesFlow.emit(
+                        ClientUpdate.TurnStarted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                        )
+                    )
+                }
                 try {
                     listThreads()
                 } catch (_: Throwable) {
                 }
+            }
+
+            "turn/started" -> {
+                updatesFlow.emit(
+                    ClientUpdate.TurnStarted(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                    )
+                )
             }
 
             "turn/completed", "turn/failed", "error" -> {

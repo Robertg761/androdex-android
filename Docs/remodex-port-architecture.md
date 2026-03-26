@@ -22,6 +22,16 @@ The goal is not to copy Remodex file-for-file. The goal is to port its layering:
 - dedicated composer state/actions separate from the timeline and connection state
 - smaller feature-oriented UI files instead of one large Compose entry file
 
+## Incremental Status
+
+The first migration slice is now in place:
+
+- `android/app/src/main/java/io/androdex/android/service/AndrodexService.kt` is the new central Android service/state owner
+- `MainViewModel.kt` now acts as a compatibility facade that adapts service state into the existing Compose UI
+- connection state, approvals, runtime config, workspace state, per-thread timelines, and active turn/run tracking have started moving out of the root view model
+
+This keeps the app working while we continue the larger split into dedicated home, thread, timeline, and workspace feature layers.
+
 ## Current Androdex Shape
 
 Today the Android app is concentrated in a few files:

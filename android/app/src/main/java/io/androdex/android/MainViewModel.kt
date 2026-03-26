@@ -6,26 +6,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
-import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
-import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
-import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import io.androdex.android.service.AndrodexService
+import io.androdex.android.service.AndrodexServiceState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.UUID
-
-private const val savedReconnectRetryDelayMs = 5_000L
 
 data class AndrodexUiState(
     val pairingInput: String = "",
@@ -38,6 +31,8 @@ data class AndrodexUiState(
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
     val messages: List<ConversationMessage> = emptyList(),
+    val activeTurnIdByThread: Map<String, String> = emptyMap(),
+    val runningThreadIds: Set<String> = emptySet(),
     val composerText: String = "",
     val isBusy: Boolean = false,
     val busyLabel: String? = null,
@@ -57,19 +52,15 @@ data class AndrodexUiState(
 )
 
 class MainViewModel(
-    private val repository: AndrodexRepositoryContract,
+    repository: AndrodexRepositoryContract,
 ) : ViewModel() {
-    private var appInForeground = false
-    private var savedReconnectInFlight = false
-    private var savedReconnectRetryJob: Job? = null
-    private var suppressSavedReconnect = false
+    private val service = AndrodexService(repository, viewModelScope)
+    private var lastConnectionStatus: ConnectionStatus = service.state.value.connectionStatus
 
     private val uiStateFlow = MutableStateFlow(
-        AndrodexUiState(
-            hasSavedPairing = repository.hasSavedPairing(),
-            defaultRelayUrl = AppEnvironment.defaultRelayUrl.takeIf { it.isNotEmpty() },
-            secureFingerprint = repository.currentFingerprint(),
-            errorMessage = repository.startupNotice(),
+        applyServiceState(
+            current = AndrodexUiState(),
+            serviceState = service.state.value,
         )
     )
 
@@ -77,7 +68,15 @@ class MainViewModel(
 
     init {
         viewModelScope.launch {
-            repository.updates.collect(::handleClientUpdate)
+            service.state.collect { serviceState ->
+                uiStateFlow.update { current -> applyServiceState(current, serviceState) }
+                if (lastConnectionStatus != ConnectionStatus.CONNECTED
+                    && serviceState.connectionStatus == ConnectionStatus.CONNECTED
+                ) {
+                    uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
+                }
+                lastConnectionStatus = serviceState.connectionStatus
+            }
         }
     }
 
@@ -99,122 +98,68 @@ class MainViewModel(
     }
 
     fun clearError() {
-        uiStateFlow.update { it.copy(errorMessage = null) }
+        service.clearError()
     }
 
     fun connectWithCurrentPairingInput() {
         val payload = uiStateFlow.value.pairingInput.trim()
         if (payload.isEmpty()) {
-            uiStateFlow.update { it.copy(errorMessage = "Paste or scan the pairing payload first.") }
+            service.reportError("Paste or scan the pairing payload first.")
             return
         }
 
-        suppressSavedReconnect = false
-        cancelSavedReconnectRetry()
         runBusyAction {
-            repository.connectWithPairingPayload(payload)
-            repository.refreshThreads()
-            loadWorkspaceState()
+            service.connectWithPairingPayload(payload)
         }
     }
 
     fun reconnectSaved() {
-        suppressSavedReconnect = false
-        cancelSavedReconnectRetry()
         runBusyAction {
-            repository.reconnectSaved()
-            repository.refreshThreads()
-            loadWorkspaceState()
+            service.reconnectSaved()
         }
     }
 
     fun reconnectSavedIfAvailable() {
-        if (!appInForeground) {
+        if (uiStateFlow.value.isBusy || uiStateFlow.value.pairingInput.isNotBlank()) {
             return
         }
-        val snapshot = uiStateFlow.value
-        if (!snapshot.hasSavedPairing || savedReconnectInFlight) {
-            return
-        }
-        if (snapshot.isBusy || snapshot.pairingInput.isNotBlank()) {
-            return
-        }
-        if (snapshot.connectionStatus == ConnectionStatus.CONNECTED
-            || snapshot.connectionStatus == ConnectionStatus.CONNECTING
-            || snapshot.connectionStatus == ConnectionStatus.HANDSHAKING
-        ) {
-            return
-        }
-
-        suppressSavedReconnect = false
-        scheduleSavedReconnectRetry(immediate = true)
+        service.reconnectSavedIfAvailable()
     }
 
     fun onAppForegrounded() {
-        appInForeground = true
+        service.onAppForegrounded()
         reconnectSavedIfAvailable()
     }
 
     fun onAppBackgrounded() {
-        appInForeground = false
-        cancelSavedReconnectRetry()
+        service.onAppBackgrounded()
     }
 
     fun disconnect(clearSavedPairing: Boolean = false) {
-        suppressSavedReconnect = true
-        cancelSavedReconnectRetry()
         runBusyAction {
-            repository.disconnect(clearSavedPairing)
+            service.disconnect(clearSavedPairing)
         }
     }
 
     fun refreshThreads() {
         runBusyAction("Loading threads...") {
-            repository.refreshThreads()
-            loadWorkspaceState()
+            service.refreshThreads()
         }
     }
 
     fun openThread(threadId: String) {
-        val targetThread = uiStateFlow.value.threads.firstOrNull { it.id == threadId }
-        uiStateFlow.update { current ->
-            current.copy(
-                selectedThreadId = threadId,
-                selectedThreadTitle = targetThread?.title,
-                messages = emptyList(),
-            )
-        }
-
         runBusyAction("Loading messages...") {
-            ensureWorkspaceActivated(targetThread?.cwd)
-            repository.loadThread(threadId)
+            service.openThread(threadId)
         }
     }
 
     fun closeThread() {
-        uiStateFlow.update {
-            it.copy(
-                selectedThreadId = null,
-                selectedThreadTitle = null,
-                messages = emptyList(),
-            )
-        }
+        service.closeThread()
     }
 
     fun createThread() {
         runBusyAction("Creating thread...") {
-            val preferredWorkspace = uiStateFlow.value.activeWorkspacePath
-            ensureWorkspaceActivated(preferredWorkspace)
-            val thread = repository.startThread(preferredWorkspace)
-            repository.refreshThreads()
-            loadWorkspaceState()
-            uiStateFlow.update { current ->
-                current.copy(
-                    selectedThreadId = thread.id,
-                    selectedThreadTitle = thread.title.ifBlank { "Conversation" },
-                    messages = emptyList(),
-                )
-            }
+            service.createThread()
         }
     }
 
@@ -224,65 +169,33 @@ class MainViewModel(
             return
         }
 
+        uiStateFlow.update { it.copy(composerText = "") }
         runBusyAction("Sending message...") {
-            val preferredWorkspace = uiStateFlow.value.activeWorkspacePath
-            val threadId = uiStateFlow.value.selectedThreadId ?: repository.startThread(preferredWorkspace).id.also { newThreadId ->
-                repository.refreshThreads()
-                loadWorkspaceState()
-                uiStateFlow.update { current ->
-                    current.copy(
-                        selectedThreadId = newThreadId,
-                        selectedThreadTitle = current.threads.firstOrNull { it.id == newThreadId }?.title ?: "Conversation",
-                    )
-                }
-            }
-
-            uiStateFlow.update { current ->
-                current.copy(
-                    composerText = "",
-                    messages = current.messages + ConversationMessage(
-                        id = UUID.randomUUID().toString(),
-                        threadId = threadId,
-                        role = ConversationRole.USER,
-                        kind = ConversationKind.CHAT,
-                        text = input,
-                        createdAtEpochMs = System.currentTimeMillis(),
-                    )
-                )
-            }
-
-            repository.startTurn(threadId, input)
+            service.sendMessage(input)
         }
     }
 
     fun respondToApproval(accept: Boolean) {
-        val request = uiStateFlow.value.pendingApproval ?: return
         runBusyAction("Sending approval...") {
-            repository.respondToApproval(request, accept)
+            service.respondToApproval(accept)
         }
     }
 
     fun loadRuntimeConfig() {
         viewModelScope.launch {
-            uiStateFlow.update { it.copy(isLoadingRuntimeConfig = true) }
-            try {
-                repository.loadRuntimeConfig()
-            } catch (_: Throwable) {
-            } finally {
-                uiStateFlow.update { it.copy(isLoadingRuntimeConfig = false) }
-            }
+            service.loadRuntimeConfig()
         }
     }
 
     fun selectModel(modelId: String?) {
         viewModelScope.launch {
-            repository.setSelectedModelId(modelId)
+            service.selectModel(modelId)
         }
     }
 
     fun selectReasoningEffort(effort: String?) {
         viewModelScope.launch {
-            repository.setSelectedReasoningEffort(effort)
+            service.selectReasoningEffort(effort)
         }
     }
 
@@ -290,82 +203,43 @@ class MainViewModel(
         uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
         viewModelScope.launch {
             try {
-                loadWorkspaceState()
+                service.loadWorkspaceState()
             } catch (error: Throwable) {
-                uiStateFlow.update { current ->
-                    current.copy(errorMessage = error.message ?: "Failed to load projects.")
-                }
+                service.reportError(error.message ?: "Failed to load projects.")
             }
         }
     }
 
     fun closeProjectPicker() {
-        uiStateFlow.update {
-            it.copy(
-                isProjectPickerOpen = false,
-                workspaceBrowserPath = null,
-                workspaceBrowserParentPath = null,
-                workspaceBrowserEntries = emptyList(),
-                isWorkspaceBrowserLoading = false,
-            )
-        }
+        service.clearWorkspaceBrowser()
+        uiStateFlow.update { it.copy(isProjectPickerOpen = false) }
     }
 
     fun loadRecentWorkspaces() {
         runBusyAction("Loading projects...") {
-            loadWorkspaceState()
+            service.loadWorkspaceState()
         }
     }
 
     fun browseWorkspace(path: String?) {
         viewModelScope.launch {
-            uiStateFlow.update { it.copy(isWorkspaceBrowserLoading = true) }
             try {
-                val result = repository.listWorkspaceDirectory(path)
-                uiStateFlow.update {
-                    it.copy(
-                        activeWorkspacePath = result.activeCwd,
-                        recentWorkspaces = result.recentWorkspaces,
-                        workspaceBrowserPath = result.requestedPath,
-                        workspaceBrowserParentPath = result.parentPath,
-                        workspaceBrowserEntries = if (result.requestedPath == null) result.rootEntries else result.entries,
-                        isWorkspaceBrowserLoading = false,
-                        isProjectPickerOpen = true,
-                    )
-                }
+                service.browseWorkspace(path)
+                uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
             } catch (error: Throwable) {
-                uiStateFlow.update {
-                    it.copy(
-                        isWorkspaceBrowserLoading = false,
-                        errorMessage = error.message ?: "Failed to browse folders.",
-                    )
-                }
+                service.reportError(error.message ?: "Failed to browse folders.")
             }
         }
     }
 
     fun updateWorkspaceBrowserPath(path: String) {
-        uiStateFlow.update { it.copy(workspaceBrowserPath = path) }
+        service.updateWorkspaceBrowserPath(path)
     }
 
     fun activateWorkspace(path: String) {
         runBusyAction("Switching project...") {
-            val status = repository.activateWorkspace(path)
-            repository.refreshThreads()
-            val recent = repository.listRecentWorkspaces()
-            uiStateFlow.update {
-                it.copy(
-                    activeWorkspacePath = status.currentCwd,
-                    recentWorkspaces = recent.recentWorkspaces,
-                    isProjectPickerOpen = false,
-                    workspaceBrowserPath = null,
-                    workspaceBrowserParentPath = null,
-                    workspaceBrowserEntries = emptyList(),
-                    selectedThreadId = null,
-                    selectedThreadTitle = null,
-                    messages = emptyList(),
-                )
-            }
+            service.activateWorkspace(path)
+            uiStateFlow.update { it.copy(isProjectPickerOpen = false) }
         }
     }
 
@@ -375,261 +249,10 @@ class MainViewModel(
             try {
                 block()
             } catch (error: Throwable) {
-                uiStateFlow.update {
-                    it.copy(errorMessage = error.message ?: "Request failed.")
-                }
+                service.reportError(error.message ?: "Request failed.")
             } finally {
                 uiStateFlow.update { it.copy(isBusy = false, busyLabel = null) }
             }
-        }
-    }
-
-    private fun handleClientUpdate(update: ClientUpdate) {
-        when (update) {
-            is ClientUpdate.Connection -> {
-                uiStateFlow.update {
-                    it.copy(
-                        connectionStatus = update.status,
-                        connectionDetail = update.detail,
-                        secureFingerprint = update.fingerprint ?: it.secureFingerprint,
-                    )
-                }
-                when (update.status) {
-                    ConnectionStatus.CONNECTED -> {
-                        cancelSavedReconnectRetry()
-                        loadRuntimeConfig()
-                        openProjectPicker()
-                    }
-
-                    ConnectionStatus.RETRYING_SAVED_PAIRING -> {
-                        if (appInForeground) {
-                            scheduleSavedReconnectRetry()
-                        } else {
-                            cancelSavedReconnectRetry()
-                        }
-                    }
-
-                    ConnectionStatus.DISCONNECTED,
-                    ConnectionStatus.RECONNECT_REQUIRED,
-                    ConnectionStatus.UPDATE_REQUIRED -> {
-                        cancelSavedReconnectRetry()
-                    }
-
-                    ConnectionStatus.CONNECTING,
-                    ConnectionStatus.HANDSHAKING -> Unit
-                }
-            }
-
-            is ClientUpdate.PairingAvailability -> {
-                uiStateFlow.update {
-                    it.copy(
-                        hasSavedPairing = update.hasSavedPairing,
-                        secureFingerprint = update.fingerprint,
-                    )
-                }
-                if (!update.hasSavedPairing) {
-                    suppressSavedReconnect = false
-                    cancelSavedReconnectRetry()
-                }
-            }
-
-            is ClientUpdate.ThreadsLoaded -> {
-                uiStateFlow.update { current ->
-                    current.copy(
-                        threads = update.threads,
-                        selectedThreadTitle = update.threads.firstOrNull { it.id == current.selectedThreadId }?.title
-                            ?: current.selectedThreadTitle,
-                    )
-                }
-            }
-
-            is ClientUpdate.ThreadLoaded -> {
-                uiStateFlow.update { current ->
-                    current.copy(
-                        selectedThreadTitle = update.thread?.title ?: current.selectedThreadTitle,
-                        messages = update.messages,
-                    )
-                }
-            }
-
-            is ClientUpdate.RuntimeConfigLoaded -> {
-                uiStateFlow.update {
-                    it.copy(
-                        availableModels = update.models,
-                        selectedModelId = update.selectedModelId,
-                        selectedReasoningEffort = update.selectedReasoningEffort,
-                    )
-                }
-            }
-
-            is ClientUpdate.AssistantDelta -> {
-                val selectedThreadId = uiStateFlow.value.selectedThreadId
-                if (update.threadId != null && selectedThreadId != null && update.threadId != selectedThreadId) {
-                    return
-                }
-                uiStateFlow.update { current ->
-                    current.copy(messages = applyAssistantDelta(current.messages, current.selectedThreadId, update))
-                }
-            }
-
-            is ClientUpdate.AssistantCompleted -> {
-                uiStateFlow.update { current ->
-                    current.copy(messages = applyAssistantCompletion(current.messages, current.selectedThreadId, update))
-                }
-            }
-
-            is ClientUpdate.ApprovalRequested -> {
-                uiStateFlow.update { it.copy(pendingApproval = update.request) }
-            }
-
-            ClientUpdate.ApprovalCleared -> {
-                uiStateFlow.update { it.copy(pendingApproval = null) }
-            }
-
-            is ClientUpdate.TurnCompleted -> {
-                val selectedThreadId = uiStateFlow.value.selectedThreadId
-                if (selectedThreadId != null && (update.threadId == null || update.threadId == selectedThreadId)) {
-                    openThread(selectedThreadId)
-                } else {
-                    refreshThreads()
-                }
-            }
-
-            is ClientUpdate.Error -> {
-                uiStateFlow.update { it.copy(errorMessage = update.message) }
-            }
-        }
-    }
-
-    private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
-        val snapshot = uiStateFlow.value
-        if (!appInForeground || suppressSavedReconnect || !snapshot.hasSavedPairing || snapshot.pairingInput.isNotBlank()) {
-            return
-        }
-        if (savedReconnectRetryJob?.isActive == true) {
-            return
-        }
-
-        savedReconnectRetryJob = viewModelScope.launch {
-            if (!immediate) {
-                delay(savedReconnectRetryDelayMs)
-            }
-            while (isActive) {
-                val state = uiStateFlow.value
-                if (!appInForeground || suppressSavedReconnect || !state.hasSavedPairing || state.pairingInput.isNotBlank()) {
-                    break
-                }
-                if (state.connectionStatus == ConnectionStatus.CONNECTED) {
-                    break
-                }
-                if (savedReconnectInFlight) {
-                    delay(savedReconnectRetryDelayMs)
-                    continue
-                }
-
-                savedReconnectInFlight = true
-                try {
-                    repository.reconnectSaved()
-                    repository.refreshThreads()
-                    loadWorkspaceState()
-                    break
-                } catch (_: Throwable) {
-                    delay(savedReconnectRetryDelayMs)
-                } finally {
-                    savedReconnectInFlight = false
-                }
-            }
-        }.also { job ->
-            job.invokeOnCompletion {
-                if (savedReconnectRetryJob === job) {
-                    savedReconnectRetryJob = null
-                }
-            }
-        }
-    }
-
-    private fun cancelSavedReconnectRetry() {
-        savedReconnectRetryJob?.cancel()
-        savedReconnectRetryJob = null
-    }
-
-    private fun applyAssistantDelta(
-        messages: List<ConversationMessage>,
-        selectedThreadId: String?,
-        update: ClientUpdate.AssistantDelta,
-    ): List<ConversationMessage> {
-        val threadId = update.threadId ?: selectedThreadId ?: return messages
-        val existingIndex = messages.indexOfLast { message ->
-            message.role == ConversationRole.ASSISTANT
-                && message.isStreaming
-                && (update.turnId == null || message.turnId == update.turnId)
-        }
-        if (existingIndex >= 0) {
-            val updated = messages.toMutableList()
-            val message = updated[existingIndex]
-            updated[existingIndex] = message.copy(text = message.text + update.delta)
-            return updated
-        }
-        return messages + ConversationMessage(
-            id = update.itemId ?: UUID.randomUUID().toString(),
-            threadId = threadId,
-            role = ConversationRole.ASSISTANT,
-            kind = ConversationKind.CHAT,
-            text = update.delta,
-            createdAtEpochMs = System.currentTimeMillis(),
-            turnId = update.turnId,
-            itemId = update.itemId,
-            isStreaming = true,
-        )
-    }
-
-    private fun applyAssistantCompletion(
-        messages: List<ConversationMessage>,
-        selectedThreadId: String?,
-        update: ClientUpdate.AssistantCompleted,
-    ): List<ConversationMessage> {
-        val threadId = update.threadId ?: selectedThreadId ?: return messages
-        val existingIndex = messages.indexOfLast { message ->
-            message.role == ConversationRole.ASSISTANT
-                && (update.turnId == null || message.turnId == update.turnId)
-        }
-        if (existingIndex >= 0) {
-            val updated = messages.toMutableList()
-            updated[existingIndex] = updated[existingIndex].copy(
-                text = update.text,
-                isStreaming = false,
-            )
-            return updated
-        }
-        return messages + ConversationMessage(
-            id = update.itemId ?: UUID.randomUUID().toString(),
-            threadId = threadId,
-            role = ConversationRole.ASSISTANT,
-            kind = ConversationKind.CHAT,
-            text = update.text,
-            createdAtEpochMs = System.currentTimeMillis(),
-            turnId = update.turnId,
-            itemId = update.itemId,
-            isStreaming = false,
-        )
-    }
-
-    private suspend fun ensureWorkspaceActivated(path: String?) {
-        val normalizedPath = path?.trim()?.takeIf { it.isNotEmpty() } ?: return
-        if (normalizedPath == uiStateFlow.value.activeWorkspacePath) {
-            return
-        }
-        val status = repository.activateWorkspace(normalizedPath)
-        uiStateFlow.update { it.copy(activeWorkspacePath = status.currentCwd ?: normalizedPath) }
-    }
-
-    private suspend fun loadWorkspaceState() {
-        val recent = repository.listRecentWorkspaces()
-        uiStateFlow.update {
-            it.copy(
-                activeWorkspacePath = recent.activeCwd,
-                recentWorkspaces = recent.recentWorkspaces,
-            )
         }
     }
 }
@@ -638,4 +261,35 @@ private fun Uri.extractPairingPayload(): String? {
     return getQueryParameter("payload")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
+}
+
+private fun applyServiceState(
+    current: AndrodexUiState,
+    serviceState: AndrodexServiceState,
+): AndrodexUiState {
+    return current.copy(
+        hasSavedPairing = serviceState.hasSavedPairing,
+        defaultRelayUrl = serviceState.defaultRelayUrl,
+        connectionStatus = serviceState.connectionStatus,
+        connectionDetail = serviceState.connectionDetail,
+        secureFingerprint = serviceState.secureFingerprint,
+        threads = serviceState.threads,
+        selectedThreadId = serviceState.selectedThreadId,
+        selectedThreadTitle = serviceState.selectedThreadTitle,
+        messages = serviceState.messages,
+        activeTurnIdByThread = serviceState.activeTurnIdByThread,
+        runningThreadIds = serviceState.runningThreadIds,
+        isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
+        availableModels = serviceState.availableModels,
+        selectedModelId = serviceState.selectedModelId,
+        selectedReasoningEffort = serviceState.selectedReasoningEffort,
+        activeWorkspacePath = serviceState.activeWorkspacePath,
+        recentWorkspaces = serviceState.recentWorkspaces,
+        workspaceBrowserPath = serviceState.workspaceBrowserPath,
+        workspaceBrowserParentPath = serviceState.workspaceBrowserParentPath,
+        workspaceBrowserEntries = serviceState.workspaceBrowserEntries,
+        isWorkspaceBrowserLoading = serviceState.isWorkspaceBrowserLoading,
+        errorMessage = serviceState.errorMessage,
+        pendingApproval = serviceState.pendingApproval,
+    )
 }
