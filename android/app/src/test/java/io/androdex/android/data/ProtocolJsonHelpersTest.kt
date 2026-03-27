@@ -157,6 +157,42 @@ class ProtocolJsonHelpersTest {
     }
 
     @Test
+    fun resolveExecutionUpdateItemId_usesNestedDirectMsgEventId() {
+        val params = JSONObject(
+            """
+            {
+              "msg": {
+                "event": {
+                  "id": "review-1",
+                  "type": "reviewRequest",
+                  "status": "completed",
+                  "summary": "Reviewing current changes"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+        val item = extractProtocolItemCandidate(params)
+
+        assertEquals("review-1", resolveExecutionUpdateItemId(params, item))
+    }
+
+    @Test
+    fun decodedHostAccountStatusOrNull_returnsNullForObjectStatePayloads() {
+        val decoded = JSONObject(
+            """
+            {
+              "state": {
+                "kind": "authenticated"
+              }
+            }
+            """.trimIndent()
+        ).decodedHostAccountStatusOrNull()
+
+        assertEquals(null, decoded)
+    }
+
+    @Test
     fun decodeMessagesFromThreadRead_preservesExecutionStyleHistoryRows() {
         val messages = decodeMessagesFromThreadRead(
             threadId = "thread-1",

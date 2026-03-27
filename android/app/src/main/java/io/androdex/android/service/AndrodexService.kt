@@ -39,6 +39,7 @@ import io.androdex.android.model.requestId
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.reviewRequestText
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -611,6 +612,8 @@ class AndrodexService(
         keepStreamingRowsOverride: Boolean? = null,
     ) {
         val result = repository.loadThread(threadId)
+        val turnIdToInvalidatePendingToolInputs =
+            pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
         stateFlow.update { current ->
             val existingMessages = current.timelineByThread[threadId].orEmpty()
             val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
@@ -627,6 +630,14 @@ class AndrodexService(
                         keepStreamingRows = keepStreamingRows,
                     )
                 ),
+                pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
+                    current.pendingToolInputsByThread.removePendingToolInputTurn(
+                        threadId = threadId,
+                        turnId = turnIdToInvalidatePendingToolInputs,
+                    )
+                } else {
+                    current.pendingToolInputsByThread
+                },
             )
         }
         syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
@@ -696,6 +707,8 @@ class AndrodexService(
         result: ThreadLoadResult,
     ) {
         ensureWorkspaceActivated(result.thread?.cwd)
+        val turnIdToInvalidatePendingToolInputs =
+            pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
         stateFlow.update { current ->
             val updatedThreads = mergeRecoveredNotificationThread(current.threads, result.thread)
             current.copy(
@@ -712,6 +725,14 @@ class AndrodexService(
                 pendingNotificationOpenThreadId = null,
                 pendingNotificationOpenTurnId = null,
                 missingNotificationThreadPrompt = null,
+                pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
+                    current.pendingToolInputsByThread.removePendingToolInputTurn(
+                        threadId = threadId,
+                        turnId = turnIdToInvalidatePendingToolInputs,
+                    )
+                } else {
+                    current.pendingToolInputsByThread
+                },
                 readyThreadIds = current.readyThreadIds - threadId,
                 failedThreadIds = current.failedThreadIds - threadId,
             )
@@ -1078,20 +1099,27 @@ class AndrodexService(
             }
 
             is ClientUpdate.ToolUserInputRequested -> {
-                val resolvedThreadId = resolveToolInputThreadId(update.request)
-                if (resolvedThreadId == null) {
-                    val summary = update.request.title
-                        ?: update.request.message
-                        ?: "The host requested structured tool input without a thread context."
-                    stateFlow.update { it.copy(errorMessage = summary) }
-                } else {
-                    stateFlow.update { current ->
-                        val existingForThread = current.pendingToolInputsByThread[resolvedThreadId].orEmpty()
-                        current.copy(
-                            pendingToolInputsByThread = current.pendingToolInputsByThread + (
-                                resolvedThreadId to (existingForThread + (update.request.requestId to update.request))
+                when (val resolution = resolveToolInputThreadOwnership(update.request)) {
+                    is ToolInputThreadOwnership.Resolved -> {
+                        stateFlow.update { current ->
+                            val existingForThread = current.pendingToolInputsByThread[resolution.threadId].orEmpty()
+                            current.copy(
+                                pendingToolInputsByThread = current.pendingToolInputsByThread + (
+                                    resolution.threadId to (existingForThread + (update.request.requestId to update.request))
+                                )
                             )
-                        )
+                        }
+                    }
+
+                    is ToolInputThreadOwnership.Unroutable -> {
+                        stateFlow.update { it.copy(errorMessage = resolution.userMessage) }
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            runCatching {
+                                repository.rejectToolUserInput(update.request, resolution.hostMessage)
+                            }.onFailure { error ->
+                                reportError(error.message ?: resolution.userMessage)
+                            }
+                        }
                     }
                 }
             }
@@ -1114,6 +1142,10 @@ class AndrodexService(
                 }
                 resolvedThreadId?.let {
                     markTurnCompleted(it, update.turnId, update.terminalState)
+                    clearPendingToolInputsForTurn(
+                        threadId = it,
+                        turnId = update.turnId,
+                    )
                     emitRunCompletionEvent(it, update.turnId, update.terminalState)
                 }
                 val selectedThreadId = stateFlow.value.selectedThreadId
@@ -1318,10 +1350,30 @@ class AndrodexService(
         }
     }
 
-    private fun resolveToolInputThreadId(request: ToolUserInputRequest): String? {
-        return resolveThreadId(request.threadId, request.turnId, request.itemId)
-            ?: stateFlow.value.selectedThreadId
-            ?: stateFlow.value.threads.singleOrNull()?.id
+    private fun resolveToolInputThreadOwnership(request: ToolUserInputRequest): ToolInputThreadOwnership {
+        resolveThreadId(request.threadId, request.turnId, request.itemId)?.let {
+            return ToolInputThreadOwnership.Resolved(it)
+        }
+
+        val snapshot = stateFlow.value
+        snapshot.selectedThreadId?.let {
+            return ToolInputThreadOwnership.Resolved(it)
+        }
+        val knownThreadIds = buildSet {
+            addAll(snapshot.timelineByThread.keys)
+            addAll(snapshot.threads.map { it.id })
+        }
+        return when (knownThreadIds.size) {
+            1 -> ToolInputThreadOwnership.Resolved(knownThreadIds.first())
+            0 -> ToolInputThreadOwnership.Unroutable(
+                userMessage = "Structured tool input could not be matched to a thread. Open the relevant thread and retry from the host.",
+                hostMessage = "Structured tool input requires an explicit or uniquely derivable thread id.",
+            )
+            else -> ToolInputThreadOwnership.Unroutable(
+                userMessage = "Structured tool input could not be matched to a single thread. Reopen the intended thread and retry from the host.",
+                hostMessage = "Structured tool input could not be routed because multiple candidate threads are open.",
+            )
+        }
     }
 
     private suspend fun resolveActiveTurn(threadId: String): ActiveTurnResolution {
@@ -1478,6 +1530,26 @@ class AndrodexService(
                 threadTitle = threadTitle,
             )
         )
+    }
+
+    private fun clearPendingToolInputsForTurn(threadId: String, turnId: String?) {
+        stateFlow.update { current ->
+            current.copy(
+                pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputTurn(
+                    threadId = threadId,
+                    turnId = turnId,
+                ),
+            )
+        }
+    }
+
+    private fun pendingToolInputTurnToInvalidateAfterThreadRecovery(snapshot: ThreadRunSnapshot): String? {
+        return snapshot.latestTurnId?.takeIf {
+            snapshot.latestTurnTerminalState != null
+            && snapshot.interruptibleTurnId == null
+            && !snapshot.hasInterruptibleTurnWithoutId
+            && !snapshot.shouldAssumeRunningFromLatestTurn
+        }
     }
 
     private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
@@ -1754,10 +1826,39 @@ private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInpu
     }
 }
 
+private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputTurn(
+    threadId: String,
+    turnId: String?,
+): Map<String, Map<String, ToolUserInputRequest>> {
+    val normalizedTurnId = turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return this
+    val requestsForThread = this[threadId].orEmpty()
+    if (requestsForThread.isEmpty()) {
+        return this
+    }
+
+    val remaining = requestsForThread.filterValues { request ->
+        request.turnId?.trim()?.takeIf { it.isNotEmpty() } != normalizedTurnId
+    }
+    return when {
+        remaining.size == requestsForThread.size -> this
+        remaining.isEmpty() -> this - threadId
+        else -> this + (threadId to remaining)
+    }
+}
+
 private sealed interface ActiveTurnResolution {
     data class Resolved(val turnId: String) : ActiveTurnResolution
     data object WaitingForTurnId : ActiveTurnResolution
     data object NoActiveTurn : ActiveTurnResolution
+}
+
+private sealed interface ToolInputThreadOwnership {
+    data class Resolved(val threadId: String) : ToolInputThreadOwnership
+
+    data class Unroutable(
+        val userMessage: String,
+        val hostMessage: String,
+    ) : ToolInputThreadOwnership
 }
 
 private fun applyStreamingItemDelta(
@@ -2005,11 +2106,15 @@ private fun mergeThreadMessages(
     }
 
     val merged = existing.toMutableList()
+    val existingCount = existing.size
+    val consumedExistingIndexes = mutableSetOf<Int>()
     incoming.forEach { incomingMessage ->
-        val existingIndex = merged.indexOfFirst { existingMessage ->
-            timelineMessagesRepresentSameItem(existingMessage, incomingMessage)
+        val existingIndex = (0 until existingCount).firstOrNull { index ->
+            index !in consumedExistingIndexes
+                && timelineMessagesRepresentSameItem(merged[index], incomingMessage)
         }
-        if (existingIndex >= 0) {
+        if (existingIndex != null) {
+            consumedExistingIndexes += existingIndex
             merged[existingIndex] = mergeMatchedMessage(
                 existing = merged[existingIndex],
                 incoming = incomingMessage,

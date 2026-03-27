@@ -302,6 +302,8 @@ private class AttachmentRepository : AndrodexRepositoryContract {
 
     override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) = Unit
 
+    override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) = Unit
+
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
         return WorkspaceRecentState(activeCwd = "C:\\Projects\\Androdex", recentWorkspaces = emptyList())
     }

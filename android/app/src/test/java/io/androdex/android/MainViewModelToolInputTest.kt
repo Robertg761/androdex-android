@@ -285,6 +285,8 @@ private class ToolInputRepository : AndrodexRepositoryContract {
         toolInputResponseGate?.await()
     }
 
+    override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) = Unit
+
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
         return WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
     }

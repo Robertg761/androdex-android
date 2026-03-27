@@ -433,9 +433,7 @@ fun decodeCollaborationModes(resultObject: JSONObject): Set<CollaborationModeKin
 }
 
 fun decodeHostAccountSnapshot(resultObject: JSONObject): HostAccountSnapshot? {
-    val status = decodeHostAccountStatus(
-        resultObject.stringOrNull("status", "state")
-    )
+    val status = resultObject.decodedHostAccountStatusOrNull() ?: HostAccountStatus.UNKNOWN
     return HostAccountSnapshot(
         status = status,
         authMethod = resultObject.stringOrNull("authMethod", "auth_method"),
@@ -466,6 +464,20 @@ fun decodeHostAccountSnapshot(resultObject: JSONObject): HostAccountSnapshot? {
         ),
         rateLimits = decodeHostRateLimitBuckets(resultObject),
     )
+}
+
+internal fun JSONObject.decodedHostAccountStatusOrNull(): HostAccountStatus? {
+    val statusKey = sequenceOf("status", "state").firstOrNull(::has) ?: return null
+    val rawValue = opt(statusKey)
+    val normalized = when (rawValue) {
+        null,
+        JSONObject.NULL -> return null
+        is String -> rawValue.trim().takeIf { it.isNotEmpty() }
+        is Number,
+        is Boolean -> rawValue.toString().trim().takeIf { it.isNotEmpty() }
+        else -> return null
+    } ?: return null
+    return decodeHostAccountStatus(normalized)
 }
 
 internal fun decodeHostRateLimitBuckets(resultObject: JSONObject): List<HostRateLimitBucket> {

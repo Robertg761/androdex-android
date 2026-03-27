@@ -837,6 +837,13 @@ class AndrodexClient(
         sendResponse(request.idValue, response.toJson())
     }
 
+    suspend fun rejectToolUserInput(
+        request: ToolUserInputRequest,
+        message: String,
+    ) {
+        sendErrorResponse(request.idValue, -32602, message)
+    }
+
     private suspend fun connect(pairing: PairingPayload) {
         connectionLifecycleMutex.withLock {
             disconnectInternal(clearSavedPairing = false)
@@ -1642,11 +1649,13 @@ class AndrodexClient(
             )
         }
         val resolvedSnapshot = nativeSnapshot ?: run {
-            val bridgeSnapshot = runCatching {
-                decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
+            val bridgePayload = runCatching {
+                sendRequest("account/status/read", JSONObject())
             }.getOrNull()
+            val bridgeSnapshot = bridgePayload?.let(::decodeHostAccountSnapshot)
             resolveLiveHostAccountSnapshot(
                 currentSnapshot = hostAccountSnapshot,
+                bridgePayload = bridgePayload,
                 bridgeSnapshot = bridgeSnapshot,
             )
         }
@@ -2027,7 +2036,7 @@ class AndrodexClient(
         return ClientUpdate.CommandExecutionUpdate(
             threadId = extractThreadId(params),
             turnId = extractTurnId(params),
-            itemId = extractItemId(params),
+            itemId = resolveExecutionUpdateItemId(params, item),
             command = commandData.command,
             status = commandData.status,
             text = commandData.text,
@@ -2057,7 +2066,7 @@ class AndrodexClient(
         return ClientUpdate.ExecutionUpdate(
             threadId = extractThreadId(params),
             turnId = extractTurnId(params),
-            itemId = extractItemId(params),
+            itemId = resolveExecutionUpdateItemId(params, item),
             text = executionData.text,
             isStreaming = isStreaming,
             execution = executionData.execution,
@@ -3310,6 +3319,20 @@ private fun decodeThreadRunSnapshot(threadObject: JSONObject): ThreadRunSnapshot
     )
 }
 
+internal fun resolveExecutionUpdateItemId(
+    params: JSONObject?,
+    item: JSONObject?,
+): String? {
+    val directItemId = params?.stringOrNull("itemId", "item_id", "messageId", "message_id")
+        ?: params?.optJSONObject("item")?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+        ?: params?.objectOrNull("msg", "event")?.let { nested ->
+            nested.stringOrNull("itemId", "item_id", "messageId", "message_id")
+                ?: nested.optJSONObject("item")?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+        }
+    return directItemId
+        ?: item?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+}
+
 internal fun resolveInitialHostAccountSnapshot(
     currentSnapshot: HostAccountSnapshot?,
     bridgeSnapshot: HostAccountSnapshot?,
@@ -3326,12 +3349,14 @@ internal fun resolveInitialHostAccountSnapshot(
 
 internal fun resolveLiveHostAccountSnapshot(
     currentSnapshot: HostAccountSnapshot?,
+    bridgePayload: JSONObject?,
     bridgeSnapshot: HostAccountSnapshot?,
 ): HostAccountSnapshot? {
     return when {
         bridgeSnapshot != null -> mergeHostAccountSnapshot(
             base = bridgeSnapshot.copy(origin = HostAccountSnapshotOrigin.BRIDGE_FALLBACK),
             fallback = currentSnapshot,
+            sparseBridgePayload = bridgePayload,
         )
         else -> currentSnapshot
     }
@@ -3343,6 +3368,7 @@ internal fun applyHostAccountUpdatePayload(
     origin: HostAccountSnapshotOrigin,
 ): HostAccountSnapshot? {
     val decodedSnapshot = decodeHostAccountSnapshot(payload)
+    val decodedStatus = payload.decodedHostAccountStatusOrNull()
     val canSeedFromPayload = currentSnapshot != null || payload.hasAnyKey(
         "status",
         "state",
@@ -3358,9 +3384,10 @@ internal fun applyHostAccountUpdatePayload(
         "tokenReady",
         "token_ready",
     )
-    val seed = currentSnapshot ?: decodedSnapshot?.takeIf { canSeedFromPayload } ?: return null
+    val canSeedDecodedSnapshot = canSeedFromPayload && (!payload.hasAnyKey("status", "state") || decodedStatus != null)
+    val seed = currentSnapshot ?: decodedSnapshot?.takeIf { canSeedDecodedSnapshot } ?: return null
     val resolvedStatus = if (payload.hasAnyKey("status", "state")) {
-        decodedSnapshot?.status ?: seed.status
+        decodedStatus ?: seed.status
     } else {
         seed.status
     }
@@ -3444,6 +3471,7 @@ internal fun applyHostAccountUpdatePayload(
 internal fun mergeHostAccountSnapshot(
     base: HostAccountSnapshot?,
     fallback: HostAccountSnapshot?,
+    sparseBridgePayload: JSONObject? = null,
 ): HostAccountSnapshot? {
     if (base == null) {
         return fallback
@@ -3452,11 +3480,18 @@ internal fun mergeHostAccountSnapshot(
         return base
     }
 
+    val preserveLoginInFlight = sparseBridgePayload?.hasAnyKey("loginInFlight", "login_in_flight") != true
+    val preserveNeedsReauth = sparseBridgePayload?.hasAnyKey("needsReauth", "needs_reauth") != true
+    val preserveTokenReady = sparseBridgePayload?.hasAnyKey("tokenReady", "token_ready") != true
+
     return base.copy(
         status = if (base.status == HostAccountStatus.UNKNOWN) fallback.status else base.status,
         authMethod = base.authMethod ?: fallback.authMethod,
         email = base.email ?: fallback.email,
         planType = base.planType ?: fallback.planType,
+        loginInFlight = if (preserveLoginInFlight) fallback.loginInFlight else base.loginInFlight,
+        needsReauth = if (preserveNeedsReauth) fallback.needsReauth else base.needsReauth,
+        tokenReady = if (preserveTokenReady) fallback.tokenReady else base.tokenReady,
         expiresAtEpochMs = base.expiresAtEpochMs ?: fallback.expiresAtEpochMs,
         bridgeVersion = base.bridgeVersion ?: fallback.bridgeVersion,
         bridgeLatestVersion = base.bridgeLatestVersion ?: fallback.bridgeLatestVersion,

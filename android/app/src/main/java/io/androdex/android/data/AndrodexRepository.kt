@@ -111,6 +111,7 @@ interface AndrodexRepositoryContract {
     }
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean)
     suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse)
+    suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String)
     suspend fun listRecentWorkspaces(): WorkspaceRecentState
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult
     suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus
@@ -289,6 +290,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
         client.respondToToolUserInput(request, response)
+    }
+
+    override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) {
+        client.rejectToolUserInput(request, message)
     }
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState = client.listRecentWorkspaces()

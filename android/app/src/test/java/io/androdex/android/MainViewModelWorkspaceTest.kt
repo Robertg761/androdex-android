@@ -604,6 +604,8 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) = Unit
 
+    override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) = Unit
+
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState = recentState
 
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {

@@ -60,6 +60,14 @@ class AndrodexClientAccountStatusTest {
 
         val resolvedSnapshot = resolveLiveHostAccountSnapshot(
             currentSnapshot = currentSnapshot,
+            bridgePayload = JSONObject(
+                """
+                {
+                  "status": "authenticated",
+                  "bridgeVersion": "1.2.3"
+                }
+                """.trimIndent()
+            ),
             bridgeSnapshot = bridgeFallback,
         )
 
@@ -68,6 +76,67 @@ class AndrodexClientAccountStatusTest {
         assertEquals("pro", resolvedSnapshot?.planType)
         assertEquals("1.2.3", resolvedSnapshot?.bridgeVersion)
         assertEquals(HostAccountSnapshotOrigin.BRIDGE_FALLBACK, resolvedSnapshot?.origin)
+    }
+
+    @Test
+    fun resolveLiveHostAccountSnapshot_preservesAuthFlagsWhenBridgeFallbackOmitsThem() {
+        val currentSnapshot = HostAccountSnapshot(
+            status = HostAccountStatus.AUTHENTICATED,
+            loginInFlight = true,
+            needsReauth = true,
+            tokenReady = false,
+            origin = HostAccountSnapshotOrigin.NATIVE_LIVE,
+        )
+        val bridgeFallback = HostAccountSnapshot(
+            status = HostAccountStatus.AUTHENTICATED,
+            bridgeVersion = "1.2.3",
+        )
+
+        val resolvedSnapshot = resolveLiveHostAccountSnapshot(
+            currentSnapshot = currentSnapshot,
+            bridgePayload = JSONObject(
+                """
+                {
+                  "status": "authenticated",
+                  "bridgeVersion": "1.2.3"
+                }
+                """.trimIndent()
+            ),
+            bridgeSnapshot = bridgeFallback,
+        )
+
+        assertNotNull(resolvedSnapshot)
+        assertTrue(resolvedSnapshot?.loginInFlight == true)
+        assertTrue(resolvedSnapshot?.needsReauth == true)
+        assertEquals(false, resolvedSnapshot?.tokenReady)
+    }
+
+    @Test
+    fun applyHostAccountUpdatePayload_keepsKnownStatusWhenLiveStateShapeIsUndecodable() {
+        val currentSnapshot = HostAccountSnapshot(
+            status = HostAccountStatus.AUTHENTICATED,
+            email = "host@example.com",
+            origin = HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP,
+        )
+
+        val updatedSnapshot = applyHostAccountUpdatePayload(
+            currentSnapshot = currentSnapshot,
+            payload = JSONObject(
+                """
+                {
+                  "state": {
+                    "kind": "authenticated"
+                  },
+                  "email": "updated@example.com"
+                }
+                """.trimIndent()
+            ),
+            origin = HostAccountSnapshotOrigin.NATIVE_LIVE,
+        )
+
+        assertNotNull(updatedSnapshot)
+        assertEquals(HostAccountStatus.AUTHENTICATED, updatedSnapshot?.status)
+        assertEquals("updated@example.com", updatedSnapshot?.email)
     }
 
     @Test
