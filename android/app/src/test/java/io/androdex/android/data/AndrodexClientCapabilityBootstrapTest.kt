@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class AndrodexClientCapabilityBootstrapTest {
     @Test
@@ -62,5 +63,39 @@ class AndrodexClientCapabilityBootstrapTest {
     fun collaborationModeKind_fromWireValue_handlesUnknownModes() {
         assertEquals(CollaborationModeKind.PLAN, CollaborationModeKind.fromWireValue("plan"))
         assertNull(CollaborationModeKind.fromWireValue("delegate"))
+    }
+
+    @Test
+    fun resolveCollaborationModesAfterProbeFailure_preservesExistingModesForTransientErrors() {
+        val resolved = resolveCollaborationModesAfterProbeFailure(
+            currentModes = setOf(CollaborationModeKind.PLAN),
+            failure = IOException("Timed out talking to relay"),
+        )
+
+        assertEquals(setOf(CollaborationModeKind.PLAN), resolved)
+    }
+
+    @Test
+    fun resolveCollaborationModesAfterProbeFailure_clearsModesWhenMethodIsUnsupported() {
+        val resolved = resolveCollaborationModesAfterProbeFailure(
+            currentModes = setOf(CollaborationModeKind.PLAN),
+            failure = AndrodexClient.RpcException(
+                code = -32601,
+                message = "Method not found",
+                data = null,
+            ),
+        )
+
+        assertTrue(resolved.isEmpty())
+    }
+
+    @Test
+    fun shouldTreatAsUnsupportedCollaborationModeList_ignoresGenericRpcFailures() {
+        assertFalse(
+            shouldTreatAsUnsupportedCollaborationModeList(
+                errorCode = -32000,
+                errorMessage = "Temporary relay issue",
+            )
+        )
     }
 }

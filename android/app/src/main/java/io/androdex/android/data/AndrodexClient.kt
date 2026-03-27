@@ -1638,8 +1638,21 @@ class AndrodexClient(
     private suspend fun refreshCollaborationModes() {
         collaborationModes = try {
             decodeCollaborationModes(sendRequest("collaborationMode/list", JSONObject()))
-        } catch (_: Throwable) {
-            emptySet()
+        } catch (error: Throwable) {
+            val resolvedModes = resolveCollaborationModesAfterProbeFailure(
+                currentModes = collaborationModes,
+                failure = error,
+            )
+            if (resolvedModes == collaborationModes) {
+                Log.w(
+                    logTag,
+                    "collaborationMode/list probe failed; preserving ${collaborationModes.size} previously discovered mode(s)",
+                    error,
+                )
+            } else {
+                Log.i(logTag, "collaborationMode/list unsupported; clearing discovered collaboration modes")
+            }
+            resolvedModes
         }
         emitRuntimeConfig()
     }
@@ -2519,6 +2532,30 @@ internal fun shouldRetryInitializeWithoutCapabilities(errorMessage: String?): Bo
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return normalizedMessage.contains("capabilities")
         || normalizedMessage.contains("experimentalapi")
+}
+
+internal fun resolveCollaborationModesAfterProbeFailure(
+    currentModes: Set<CollaborationModeKind>,
+    failure: Throwable,
+): Set<CollaborationModeKind> {
+    if (failure is AndrodexClient.RpcException &&
+        shouldTreatAsUnsupportedCollaborationModeList(failure.code, failure.message)
+    ) {
+        return emptySet()
+    }
+    return currentModes
+}
+
+internal fun shouldTreatAsUnsupportedCollaborationModeList(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode == -32601) {
+        return true
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("method not found")
+        || normalizedMessage.contains("unknown method")
+        || normalizedMessage.contains("not implemented")
+        || normalizedMessage.contains("does not support")
 }
 
 internal fun shouldRetryWithApprovalPolicyFallback(errorMessage: String?): Boolean {
