@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
+import io.androdex.android.ui.shared.HostAccountCard
 import io.androdex.android.ui.state.PairingScreenUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -138,6 +139,14 @@ internal fun PairingScreen(
                         .padding(bottom = 8.dp),
                 )
                 TrustedPairCard(state = trustedPair, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            state.hostAccount?.let { hostAccount ->
+                HostAccountCard(
+                    state = hostAccount,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(modifier = Modifier.height(16.dp))
             }
 

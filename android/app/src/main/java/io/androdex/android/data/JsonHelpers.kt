@@ -19,6 +19,8 @@ import io.androdex.android.model.GitPushResult
 import io.androdex.android.model.GitRemoveWorktreeResult
 import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
@@ -363,6 +365,41 @@ fun decodeModelOptions(resultObject: JSONObject): List<ModelOption> {
     return decoded
 }
 
+fun decodeHostAccountSnapshot(resultObject: JSONObject): HostAccountSnapshot? {
+    val status = decodeHostAccountStatus(
+        resultObject.stringOrNull("status", "state")
+    )
+    return HostAccountSnapshot(
+        status = status,
+        authMethod = resultObject.stringOrNull("authMethod", "auth_method"),
+        email = resultObject.stringOrNull("email"),
+        planType = resultObject.stringOrNull("planType", "plan_type"),
+        loginInFlight = resultObject.optBoolean("loginInFlight", resultObject.optBoolean("login_in_flight", false)),
+        needsReauth = resultObject.optBoolean("needsReauth", resultObject.optBoolean("needs_reauth", false)),
+        tokenReady = resultObject.opt("tokenReady")
+            .takeUnless { it == null || it == JSONObject.NULL }
+            ?.let {
+                when (it) {
+                    is Boolean -> it
+                    is String -> it.equals("true", ignoreCase = true)
+                    is Number -> it.toInt() != 0
+                    else -> null
+                }
+            },
+        expiresAtEpochMs = parseTimestamp(
+            resultObject.opt("expiresAt").takeUnless { it == null }
+                ?: resultObject.opt("expires_at").takeUnless { it == null }
+        ),
+        bridgeVersion = resultObject.stringOrNull("bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version"),
+        bridgeLatestVersion = resultObject.stringOrNull(
+            "bridgeLatestVersion",
+            "bridge_latest_version",
+            "bridgePublishedVersion",
+            "bridge_published_version",
+        ),
+    )
+}
+
 fun decodeGitRepoSyncResult(resultObject: JSONObject): GitRepoSyncResult {
     return GitRepoSyncResult(
         repoRoot = resultObject.stringOrNull("repoRoot", "repo_root"),
@@ -669,6 +706,19 @@ private fun decodeReasoningEffortOptions(items: JSONArray): List<ReasoningEffort
         )
     }
     return decoded
+}
+
+private fun decodeHostAccountStatus(rawValue: String?): HostAccountStatus {
+    return when (rawValue?.trim()?.lowercase(Locale.US)) {
+        "authenticated", "logged_in", "loggedin", "connected" -> HostAccountStatus.AUTHENTICATED
+        "pending_login", "pending", "login_pending", "loginpending" -> HostAccountStatus.LOGIN_PENDING
+        "expired", "needs_reauth", "needsreauth", "reauth_required" -> HostAccountStatus.EXPIRED
+        "not_logged_in", "notloggedin", "signed_out", "logged_out", "unauthenticated" -> {
+            HostAccountStatus.NOT_LOGGED_IN
+        }
+        "unavailable", "offline" -> HostAccountStatus.UNAVAILABLE
+        else -> HostAccountStatus.UNKNOWN
+    }
 }
 
 private fun decodeSingleSkillMetadata(item: JSONObject): SkillMetadata? {

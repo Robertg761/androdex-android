@@ -15,6 +15,8 @@ const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
+const { createAccountStatusHandler } = require("./account-handler");
+const { createCodexRpcClient } = require("./codex-rpc-client");
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
@@ -90,6 +92,14 @@ function startBridge() {
     endpoint: config.codexEndpoint,
     env: process.env,
     logPrefix: "[androdex]",
+  });
+  const codexRpcClient = createCodexRpcClient({
+    sendToCodex(message) {
+      codex.send(message);
+    },
+  });
+  const accountStatusHandler = createAccountStatusHandler({
+    sendCodexRequest: codexRpcClient.sendRequest,
   });
 
   codex.onError((error) => {
@@ -210,6 +220,9 @@ function startBridge() {
   connectRelay();
 
   codex.onMessage((message) => {
+    if (codexRpcClient.handleCodexMessage(message)) {
+      return;
+    }
     trackCodexHandshakeState(message);
     desktopRefresher.handleOutbound(message);
     pushNotificationTracker.handleOutbound(message);
@@ -222,6 +235,7 @@ function startBridge() {
   });
 
   codex.onClose(() => {
+    codexRpcClient.rejectAllPending(new Error("Codex transport closed before the bridge RPC completed."));
     logConnectionStatus("disconnected");
     isShuttingDown = true;
     clearReconnectTimer();
@@ -254,6 +268,9 @@ function startBridge() {
       return;
     }
     if (notificationsHandler.handleNotificationsRequest(normalizedRawMessage, sendApplicationResponse)) {
+      return;
+    }
+    if (accountStatusHandler.handleAccountStatusRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
     if (handleGitRequest(normalizedRawMessage, sendApplicationResponse)) {

@@ -150,6 +150,28 @@ data class TrustedPairSnapshot(
     val lastPairedAtEpochMs: Long?,
 )
 
+enum class HostAccountStatus {
+    UNKNOWN,
+    UNAVAILABLE,
+    NOT_LOGGED_IN,
+    LOGIN_PENDING,
+    AUTHENTICATED,
+    EXPIRED,
+}
+
+data class HostAccountSnapshot(
+    val status: HostAccountStatus,
+    val authMethod: String? = null,
+    val email: String? = null,
+    val planType: String? = null,
+    val loginInFlight: Boolean = false,
+    val needsReauth: Boolean = false,
+    val tokenReady: Boolean? = null,
+    val expiresAtEpochMs: Long? = null,
+    val bridgeVersion: String? = null,
+    val bridgeLatestVersion: String? = null,
+)
+
 data class ThreadSummary(
     val id: String,
     val title: String,
@@ -618,6 +640,10 @@ sealed interface ClientUpdate {
         val supportsServiceTier: Boolean,
         val supportsThreadFork: Boolean,
         val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride>,
+    ) : ClientUpdate
+
+    data class AccountStatusLoaded(
+        val snapshot: HostAccountSnapshot?,
     ) : ClientUpdate
 
     data class PlanUpdated(

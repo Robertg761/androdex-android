@@ -39,6 +39,8 @@ import io.androdex.android.model.GitRemoveWorktreeResult
 import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
@@ -125,6 +127,7 @@ class AndrodexClient(
     private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
     private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
     private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides()
+    private var hostAccountSnapshot: HostAccountSnapshot? = null
     private var supportsServiceTier = true
     private var supportsThreadFork = true
 
@@ -685,6 +688,14 @@ class AndrodexClient(
         persistence.saveSelectedModelId(selectedModelId)
         persistence.saveSelectedReasoningEffort(selectedReasoningEffortForSelectedModel())
         emitRuntimeConfig()
+        hostAccountSnapshot = runCatching {
+            decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
+        }.getOrElse {
+            hostAccountSnapshot ?: HostAccountSnapshot(
+                status = HostAccountStatus.UNAVAILABLE,
+            )
+        }
+        emitAccountStatus()
     }
 
     suspend fun setSelectedModelId(modelId: String?) {
@@ -1641,6 +1652,14 @@ class AndrodexClient(
                 supportsServiceTier = supportsServiceTier,
                 supportsThreadFork = supportsThreadFork,
                 threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
+            )
+        )
+    }
+
+    private fun emitAccountStatus() {
+        updatesFlow.tryEmit(
+            ClientUpdate.AccountStatusLoaded(
+                snapshot = hostAccountSnapshot,
             )
         )
     }

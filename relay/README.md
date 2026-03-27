@@ -52,6 +52,32 @@ The push helper persists:
 - completion dedupe keys so the same turn does not fan out twice
 - a small health payload that shows whether webhook forwarding is configured
 
+The push portion of `GET /healthz` reports:
+
+- `status=disabled`: the relay is not hosting the push helper
+- `status=needs_webhook`: the helper is enabled, but no webhook target is configured yet
+- `status=idle`: webhook forwarding is configured, but no Android device has registered yet
+- `status=ready`: webhook forwarding is configured and at least one session has a registered Android device
+
+Generic webhook contract:
+
+```json
+{
+  "sessionId": "host-session-id",
+  "threadId": "thread-id",
+  "turnId": "turn-id-or-null",
+  "result": "completed",
+  "title": "Thread title",
+  "body": "Response ready",
+  "dedupeKey": "stable-turn-key",
+  "deviceToken": "android-push-token",
+  "devicePlatform": "android",
+  "appEnvironment": "production"
+}
+```
+
+Your webhook is responsible for the final handoff to FCM or your own notification provider. The relay intentionally stays generic and does not bundle provider credentials or platform-specific delivery code.
+
 ## Security Model
 
 Androdex uses the relay as a transport hop, not as a trusted application server.

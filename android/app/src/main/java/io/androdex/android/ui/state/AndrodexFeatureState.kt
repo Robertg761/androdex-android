@@ -21,6 +21,8 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.MissingNotificationThreadPrompt
 import io.androdex.android.model.ModelOption
@@ -72,6 +74,7 @@ internal data class PairingScreenUiState(
     val pairingInput: String,
     val hasSavedPairing: Boolean,
     val trustedPair: TrustedPairUiState?,
+    val hostAccount: HostAccountUiState?,
     val defaultRelayUrl: String?,
     val isBusy: Boolean,
     val reconnectButtonLabel: String,
@@ -86,6 +89,7 @@ internal data class HomeScreenUiState(
     val connection: ConnectionBannerUiState,
     val busy: BusyUiState,
     val trustedPair: TrustedPairUiState?,
+    val hostAccount: HostAccountUiState?,
     val bridgeStatus: BridgeStatusUiState,
     val activeWorkspacePath: String?,
     val threadList: ThreadListPaneUiState,
@@ -108,6 +112,14 @@ internal data class BridgeStatusUiState(
     val serviceTierMessage: String,
     val threadForkMessage: String,
     val updateCommand: String,
+)
+
+internal data class HostAccountUiState(
+    val title: String,
+    val statusLabel: String,
+    val detail: String?,
+    val providerLabel: String?,
+    val bridgeVersionLabel: String?,
 )
 
 internal data class ThreadListPaneUiState(
@@ -213,6 +225,7 @@ internal data class ComposerUiState(
     val reviewSelection: ComposerReviewSelection?,
     val isReviewModeEnabled: Boolean,
     val reviewTarget: ComposerReviewTarget?,
+    val reviewBaseBranchValue: String,
     val reviewBaseBranchLabel: String?,
     val placeholderText: String,
     val submitButtonLabel: String,
@@ -242,6 +255,7 @@ internal data class RuntimeSettingsUiState(
     val isVisible: Boolean,
     val isLoading: Boolean,
     val trustedPair: TrustedPairUiState?,
+    val hostAccount: HostAccountUiState?,
     val bridgeStatus: BridgeStatusUiState,
     val about: AboutUiState,
     val modelOptions: List<RuntimeSettingsOptionUiState>,
@@ -341,6 +355,7 @@ private fun AndrodexUiState.toPairingScreenUiState(): PairingScreenUiState {
         pairingInput = pairingInput,
         hasSavedPairing = hasSavedPairing,
         trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         defaultRelayUrl = defaultRelayUrl,
         isBusy = isBusy,
         reconnectButtonLabel = reconnectButtonLabel(),
@@ -357,6 +372,7 @@ private fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long): HomeScreenUiS
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),
         trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         bridgeStatus = toBridgeStatusUiState(),
         activeWorkspacePath = activeWorkspacePath,
         threadList = toThreadListPaneUiState(nowEpochMs),
@@ -438,6 +454,10 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
     val reviewSelection = composerReviewSelectionByThread[threadId]
+    val reviewBaseBranchValue = reviewSelection
+        ?.takeIf { it.target == ComposerReviewTarget.BASE_BRANCH }
+        ?.baseBranch
+        .orEmpty()
     val reviewBaseBranchLabel = reviewSelection?.takeIf { it.target == ComposerReviewTarget.BASE_BRANCH }
         ?.baseBranch
         ?.trim()
@@ -584,6 +604,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             reviewSelection = reviewSelection,
             isReviewModeEnabled = reviewSelection != null,
             reviewTarget = reviewSelection?.target,
+            reviewBaseBranchValue = reviewBaseBranchValue,
             reviewBaseBranchLabel = reviewBaseBranchLabel,
             placeholderText = when {
                 reviewSelection?.target == ComposerReviewTarget.BASE_BRANCH && !reviewBaseBranchLabel.isNullOrEmpty() ->
@@ -623,7 +644,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             },
             isSubmitting = isSendingMessage,
             submitEnabled = if (reviewSelection?.target == ComposerReviewTarget.BASE_BRANCH
-                && reviewBaseBranchLabel.isNullOrEmpty()
+                && reviewBaseBranchValue.trim().isEmpty()
             ) {
                 false
             } else {
@@ -727,6 +748,7 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
         isVisible = isVisible,
         isLoading = isLoadingRuntimeConfig,
         trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         bridgeStatus = toBridgeStatusUiState(),
         about = AboutUiState(
             appVersionLabel = AppEnvironment.appVersionLabel,
@@ -891,6 +913,33 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
         detail = detailParts.joinToString(" • ").takeIf { it.isNotBlank() },
         relayLabel = snapshot.relayUrl?.let(::compactRelayLabel),
         fingerprint = snapshot.fingerprint,
+    )
+}
+
+private fun HostAccountSnapshot?.toHostAccountUiState(): HostAccountUiState? {
+    val snapshot = this ?: return null
+    val statusLabel = when (snapshot.status) {
+        HostAccountStatus.AUTHENTICATED -> if (snapshot.needsReauth) "Needs reauth" else "Authenticated"
+        HostAccountStatus.EXPIRED -> "Expired"
+        HostAccountStatus.LOGIN_PENDING -> "Login pending"
+        HostAccountStatus.NOT_LOGGED_IN -> "Not logged in"
+        HostAccountStatus.UNAVAILABLE -> "Unavailable"
+        HostAccountStatus.UNKNOWN -> "Unknown"
+    }
+    val detail = buildList {
+        snapshot.email?.trim()?.takeIf { it.isNotEmpty() }?.let(::add)
+        snapshot.planType?.trim()?.takeIf { it.isNotEmpty() }?.let(::add)
+        if (snapshot.status == HostAccountStatus.AUTHENTICATED && snapshot.tokenReady == false) {
+            add("Token syncing")
+        }
+    }.joinToString(" • ").takeIf { it.isNotBlank() }
+
+    return HostAccountUiState(
+        title = "Host account",
+        statusLabel = statusLabel,
+        detail = detail,
+        providerLabel = snapshot.authMethod?.trim()?.takeIf { it.isNotEmpty() },
+        bridgeVersionLabel = snapshot.bridgeVersion?.trim()?.takeIf { it.isNotEmpty() }?.let { "Bridge $it" },
     )
 }
 

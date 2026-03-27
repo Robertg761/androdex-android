@@ -204,9 +204,11 @@ function createDisabledPushSessionService() {
     getStats() {
       return {
         enabled: false,
+        status: "disabled",
         registeredSessions: 0,
         deliveredDedupeKeys: 0,
         webhookConfigured: false,
+        reason: "Set ANDRODEX_ENABLE_PUSH_SERVICE=true to expose the public push-session helper.",
       };
     },
     async registerDevice() {

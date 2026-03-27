@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.shared.BridgeStatusCard
+import io.androdex.android.ui.shared.HostAccountCard
 import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.sidebar.ThreadListPane
@@ -155,6 +156,13 @@ internal fun HomeScreen(
 
             state.trustedPair?.let {
                 TrustedPairCard(
+                    state = it,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            state.hostAccount?.let {
+                HostAccountCard(
                     state = it,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )

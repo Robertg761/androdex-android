@@ -209,6 +209,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onPlanModeChanged = viewModel::updateComposerPlanMode,
                 onSubagentsModeChanged = viewModel::updateComposerSubagentsEnabled,
                 onSelectReviewTarget = viewModel::updateComposerReviewTarget,
+                onReviewBaseBranchChanged = viewModel::updateComposerReviewBaseBranch,
                 onRemoveReviewSelection = viewModel::clearComposerReviewSelection,
                 onSelectFileAutocomplete = viewModel::selectFileAutocomplete,
                 onRemoveMentionedFile = viewModel::removeMentionedFile,

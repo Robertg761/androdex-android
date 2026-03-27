@@ -296,6 +296,33 @@ class MainViewModelComposerAutocompleteTest {
     }
 
     @Test
+    fun sendMessage_routesBaseBranchReviewWithEditedBranch() = runTest(dispatcher) {
+        val repository = ComposerRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.selectSlashCommand(ComposerSlashCommand.REVIEW)
+        viewModel.updateComposerReviewTarget(ComposerReviewTarget.BASE_BRANCH)
+        viewModel.updateComposerReviewBaseBranch("release/2026.03")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf("thread-1:BASE_BRANCH:release/2026.03"),
+            repository.startedReviews,
+        )
+    }
+
+    @Test
     fun slashCommandFiltering_keepsReviewCommandVisible() {
         assertTrue(ComposerSlashCommand.filtered("").contains(ComposerSlashCommand.REVIEW))
     }

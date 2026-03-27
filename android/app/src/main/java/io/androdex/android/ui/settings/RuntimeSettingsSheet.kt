@@ -36,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.shared.BridgeStatusCard
+import io.androdex.android.ui.shared.HostAccountCard
 import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.RuntimeSettingsOptionUiState
 import io.androdex.android.ui.state.RuntimeSettingsUiState
@@ -116,6 +117,10 @@ internal fun RuntimeSettingsSheet(
 
             state.trustedPair?.let {
                 TrustedPairCard(state = it)
+            }
+
+            state.hostAccount?.let {
+                HostAccountCard(state = it)
             }
 
             BridgeStatusCard(state = state.bridgeStatus)

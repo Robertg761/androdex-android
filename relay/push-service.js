@@ -142,11 +142,22 @@ function createPushSessionService({
 
   function getStats() {
     pruneDeliveredDedupeKeys();
+    const webhookConfigured = Boolean(webhookClient?.hasConfiguredBaseUrl);
+    const registeredSessions = sessions.size;
+    const status = !webhookConfigured
+      ? "needs_webhook"
+      : (registeredSessions > 0 ? "ready" : "idle");
     return {
       enabled: true,
-      registeredSessions: sessions.size,
+      status,
+      registeredSessions,
       deliveredDedupeKeys: deliveredDedupeKeys.size,
-      webhookConfigured: Boolean(webhookClient?.hasConfiguredBaseUrl),
+      webhookConfigured,
+      reason: !webhookConfigured
+        ? "Configure ANDRODEX_PUSH_WEBHOOK_URL so the relay can hand off completion events."
+        : (registeredSessions > 0
+          ? "Relay has at least one registered Android device and can forward completion events."
+          : "Push helper is configured but no Android device has registered for the current sessions yet."),
     };
   }
 

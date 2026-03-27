@@ -11,6 +11,7 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.MissingNotificationThreadPrompt
@@ -59,6 +60,7 @@ private data class SubagentIdentityEntry(
 data class AndrodexServiceState(
     val hasSavedPairing: Boolean = false,
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
+    val hostAccountSnapshot: HostAccountSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -748,6 +750,14 @@ class AndrodexService(
                         supportsServiceTier = update.supportsServiceTier,
                         supportsThreadFork = update.supportsThreadFork,
                         threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
+                    )
+                }
+            }
+
+            is ClientUpdate.AccountStatusLoaded -> {
+                stateFlow.update {
+                    it.copy(
+                        hostAccountSnapshot = update.snapshot,
                     )
                 }
             }

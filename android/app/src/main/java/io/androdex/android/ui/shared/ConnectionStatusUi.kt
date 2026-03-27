@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.SettingsEthernet
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.ui.state.BridgeStatusUiState
 import io.androdex.android.ui.state.BusyUiState
 import io.androdex.android.ui.state.ConnectionBannerUiState
+import io.androdex.android.ui.state.HostAccountUiState
 import io.androdex.android.ui.state.TrustedPairUiState
 
 @Composable
@@ -300,6 +302,61 @@ internal fun BridgeStatusCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
             )
+        }
+    }
+}
+
+@Composable
+internal fun HostAccountCard(
+    state: HostAccountUiState,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(18.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Key,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = state.title,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                StatusPill(label = state.statusLabel)
+            }
+
+            state.detail?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            state.providerLabel?.let { provider ->
+                MetadataRow(label = "Auth", value = provider)
+            }
+            state.bridgeVersionLabel?.let { version ->
+                MetadataRow(label = "Version", value = version)
+            }
         }
     }
 }

@@ -111,6 +111,7 @@ internal fun ThreadTimelineScreen(
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
     onSelectReviewTarget: (io.androdex.android.ComposerReviewTarget) -> Unit,
+    onReviewBaseBranchChanged: (String) -> Unit,
     onRemoveReviewSelection: () -> Unit,
     onSelectFileAutocomplete: (FuzzyFileMatch) -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
@@ -350,6 +351,7 @@ internal fun ThreadTimelineScreen(
                 onPlanModeChanged = onPlanModeChanged,
                 onSubagentsModeChanged = onSubagentsModeChanged,
                 onSelectReviewTarget = onSelectReviewTarget,
+                onReviewBaseBranchChanged = onReviewBaseBranchChanged,
                 onRemoveReviewSelection = onRemoveReviewSelection,
                 onSelectFileAutocomplete = onSelectFileAutocomplete,
                 onRemoveMentionedFile = onRemoveMentionedFile,
@@ -1086,6 +1088,16 @@ private fun MessageBubble(message: ConversationMessage) {
     } else {
         MaterialTheme.colorScheme.onSurface
     }
+    val directiveContent = remember(message.text) {
+        if (isUser) {
+            CodeCommentDirectiveContent(
+                findings = emptyList(),
+                fallbackText = message.text,
+            )
+        } else {
+            CodeCommentDirectiveParser.parse(message.text)
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -1108,9 +1120,16 @@ private fun MessageBubble(message: ConversationMessage) {
                     MessageAttachmentStrip(attachments = message.attachments)
                 }
 
-                if (message.text.isNotBlank() || message.attachments.isEmpty()) {
+                if (!isUser && directiveContent.findings.isNotEmpty()) {
+                    directiveContent.findings.forEach { finding ->
+                        ReviewFindingCard(finding = finding)
+                    }
+                }
+
+                val bodyText = if (isUser) message.text else directiveContent.fallbackText
+                if (bodyText.isNotBlank() || message.attachments.isEmpty()) {
                     Text(
-                        text = message.text.ifBlank { " " },
+                        text = bodyText.ifBlank { " " },
                         style = MaterialTheme.typography.bodyLarge,
                         color = textColor,
                     )
@@ -1123,6 +1142,78 @@ private fun MessageBubble(message: ConversationMessage) {
                     color = textColor.copy(alpha = 0.5f),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ReviewFindingCard(finding: CodeCommentDirectiveFinding) {
+    val priorityLabel = finding.priority?.let { "P$it" } ?: "Finding"
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(999.dp),
+                ) {
+                    Text(
+                        text = priorityLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+                finding.confidence?.let { confidence ->
+                    Text(
+                        text = "${(confidence * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Text(
+                text = finding.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = finding.body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = buildString {
+                    append(finding.file)
+                    finding.startLine?.let { start ->
+                        append(":")
+                        append(start)
+                        finding.endLine?.takeIf { it != start }?.let { end ->
+                            append("-")
+                            append(end)
+                        }
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                ),
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

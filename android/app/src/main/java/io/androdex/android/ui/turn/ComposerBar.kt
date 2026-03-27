@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -53,6 +54,7 @@ internal fun ComposerBar(
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
     onSelectReviewTarget: (ComposerReviewTarget) -> Unit,
+    onReviewBaseBranchChanged: (String) -> Unit,
     onRemoveReviewSelection: () -> Unit,
     onSelectFileAutocomplete: (FuzzyFileMatch) -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
@@ -190,6 +192,20 @@ internal fun ComposerBar(
                                     ?: ComposerReviewTarget.BASE_BRANCH.title
                             )
                         },
+                    )
+                }
+                if (state.reviewTarget == ComposerReviewTarget.BASE_BRANCH) {
+                    OutlinedTextField(
+                        value = state.reviewBaseBranchValue,
+                        onValueChange = onReviewBaseBranchChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = state.inputEnabled,
+                        singleLine = true,
+                        label = { Text("Base branch") },
+                        placeholder = {
+                            Text(state.reviewBaseBranchLabel ?: "main")
+                        },
+                        shape = RoundedCornerShape(18.dp),
                     )
                 }
             }

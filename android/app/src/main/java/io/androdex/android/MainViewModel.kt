@@ -19,6 +19,7 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitOperationException
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.MissingNotificationThreadPrompt
@@ -54,6 +55,7 @@ data class AndrodexUiState(
     val pairingInput: String = "",
     val hasSavedPairing: Boolean = false,
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
+    val hostAccountSnapshot: HostAccountSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -267,6 +269,22 @@ class MainViewModel(
             )
         }
         clearSlashCommandAutocomplete()
+    }
+
+    fun updateComposerReviewBaseBranch(value: String) {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            val currentReview = current.composerReviewSelectionByThread[threadId]
+                ?: return@update current
+            if (currentReview.target != ComposerReviewTarget.BASE_BRANCH) {
+                return@update current
+            }
+            current.copy(
+                composerReviewSelectionByThread = current.composerReviewSelectionByThread + (
+                    threadId to currentReview.copy(baseBranch = value)
+                ),
+            )
+        }
     }
 
     fun clearComposerReviewSelection() {
@@ -2251,6 +2269,7 @@ private fun applyServiceState(
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         trustedPairSnapshot = serviceState.trustedPairSnapshot,
+        hostAccountSnapshot = serviceState.hostAccountSnapshot,
         defaultRelayUrl = serviceState.defaultRelayUrl,
         connectionStatus = serviceState.connectionStatus,
         connectionDetail = serviceState.connectionDetail,

@@ -8,6 +8,8 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
@@ -37,6 +39,13 @@ class AndrodexFeatureStateTest {
                 fingerprint = "ABCD1234EFGH5678",
                 lastPairedAtEpochMs = 1_000L,
             ),
+            hostAccountSnapshot = HostAccountSnapshot(
+                status = HostAccountStatus.AUTHENTICATED,
+                authMethod = "chatgpt",
+                email = "host@example.com",
+                planType = "pro",
+                bridgeVersion = "1.1.3",
+            ),
             connectionStatus = ConnectionStatus.RETRYING_SAVED_PAIRING,
             connectionDetail = "Waiting for host",
         )
@@ -48,6 +57,8 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.reconnectEnabled)
         assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, route.state.connection.status)
         assertNotNull(route.state.trustedPair)
+        assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
+        assertEquals("host@example.com • pro", route.state.hostAccount?.detail)
         assertEquals("Retrying saved pair", route.state.trustedPair?.statusLabel)
         assertEquals("relay.example.com", route.state.trustedPair?.relayLabel)
         assertTrue(route.state.compatibilityMessage.isNullOrBlank())

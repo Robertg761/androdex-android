@@ -15,6 +15,8 @@ const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
+const { createAccountStatusHandler } = require("./account-handler");
+const { createCodexRpcClient } = require("./codex-rpc-client");
 const { createNotificationsHandler } = require("./notifications-handler");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
@@ -72,6 +74,18 @@ class HostRuntime {
       sessionId: this.hostId,
       pushServiceClient: this.pushServiceClient,
       previewMaxChars: this.config.pushPreviewMaxChars,
+    });
+    this.codexRpcClient = createCodexRpcClient({
+      sendToCodex: (message) => {
+        if (!this.codex) {
+          throw new Error("No active Codex workspace on the host.");
+        }
+        this.codex.send(message);
+      },
+      requestIdPrefix: `androdex-host-${this.hostId}`,
+    });
+    this.accountStatusHandler = createAccountStatusHandler({
+      sendCodexRequest: (...args) => this.codexRpcClient.sendRequest(...args),
     });
     this.rolloutLiveMirror = !this.config.codexEndpoint
       ? createRolloutLiveMirrorController({
@@ -345,6 +359,7 @@ class HostRuntime {
     }
 
     this.codex = null;
+    this.codexRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge RPC completed."));
     this.codexHandshakeState = "cold";
     try {
       activeCodex.shutdown();
@@ -397,6 +412,9 @@ class HostRuntime {
       if (this.handleSyntheticInitializeMessage(message)) {
         return;
       }
+      if (this.codexRpcClient.handleCodexMessage(message)) {
+        return;
+      }
       this.trackCodexHandshakeState(message);
       this.desktopRefresher.handleOutbound(message);
       this.pushNotificationTracker.handleOutbound(message);
@@ -436,6 +454,9 @@ class HostRuntime {
       return;
     }
     if (this.notificationsHandler.handleNotificationsRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
+      return;
+    }
+    if (this.accountStatusHandler.handleAccountStatusRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
     if (handleGitRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
