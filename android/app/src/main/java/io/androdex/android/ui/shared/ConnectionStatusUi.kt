@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.SettingsEthernet
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -354,8 +355,51 @@ internal fun HostAccountCard(
             state.providerLabel?.let { provider ->
                 MetadataRow(label = "Auth", value = provider)
             }
+            state.sourceLabel?.let { source ->
+                MetadataRow(label = "Source", value = source)
+            }
+            state.authControlLabel?.let { authControl ->
+                MetadataRow(label = "Sign-in", value = authControl)
+            }
             state.bridgeVersionLabel?.let { version ->
                 MetadataRow(label = "Version", value = version)
+            }
+            if (state.rateLimits.isNotEmpty()) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    text = "Rate limits",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                state.rateLimits.forEach { rateLimit ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = rateLimit.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            rateLimit.usageLabel?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        rateLimit.resetLabel?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

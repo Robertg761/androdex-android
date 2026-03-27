@@ -23,6 +23,7 @@ import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.MissingNotificationThreadPrompt
@@ -122,7 +123,16 @@ internal data class HostAccountUiState(
     val statusLabel: String,
     val detail: String?,
     val providerLabel: String?,
+    val sourceLabel: String?,
+    val authControlLabel: String?,
     val bridgeVersionLabel: String?,
+    val rateLimits: List<HostAccountRateLimitUiState>,
+)
+
+internal data class HostAccountRateLimitUiState(
+    val name: String,
+    val usageLabel: String?,
+    val resetLabel: String?,
 )
 
 internal data class ThreadListPaneUiState(
@@ -1015,8 +1025,36 @@ private fun HostAccountSnapshot?.toHostAccountUiState(): HostAccountUiState? {
         statusLabel = statusLabel,
         detail = detail,
         providerLabel = snapshot.authMethod?.trim()?.takeIf { it.isNotEmpty() },
+        sourceLabel = when (snapshot.origin) {
+            HostAccountSnapshotOrigin.NATIVE_LIVE -> "Live host updates"
+            HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP -> "Bridge snapshot"
+            HostAccountSnapshotOrigin.BRIDGE_FALLBACK -> "Bridge snapshot fallback"
+        },
+        authControlLabel = "Managed on the host",
         bridgeVersionLabel = snapshot.bridgeVersion?.trim()?.takeIf { it.isNotEmpty() }?.let { "Bridge $it" },
+        rateLimits = snapshot.rateLimits.map { rateLimit ->
+            HostAccountRateLimitUiState(
+                name = rateLimit.name,
+                usageLabel = rateLimit.usageLabel(),
+                resetLabel = rateLimit.resetsAtEpochMs?.let(::rateLimitResetLabel),
+            )
+        },
     )
+}
+
+private fun io.androdex.android.model.HostRateLimitBucket.usageLabel(): String? {
+    return when {
+        remaining != null && limit != null -> "$remaining left of $limit"
+        used != null && limit != null -> "$used used of $limit"
+        remaining != null -> "$remaining remaining"
+        used != null -> "$used used"
+        limit != null -> "Limit $limit"
+        else -> null
+    }
+}
+
+private fun rateLimitResetLabel(epochMs: Long): String {
+    return "Resets ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(epochMs))}"
 }
 
 private fun compactRelayLabel(rawUrl: String): String {

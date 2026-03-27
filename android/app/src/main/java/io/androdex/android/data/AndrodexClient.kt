@@ -40,6 +40,7 @@ import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
@@ -693,13 +694,13 @@ class AndrodexClient(
         persistence.saveSelectedModelId(selectedModelId)
         persistence.saveSelectedReasoningEffort(selectedReasoningEffortForSelectedModel())
         emitRuntimeConfig()
-        hostAccountSnapshot = runCatching {
+        val bridgeSnapshot = runCatching {
             decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
-        }.getOrElse {
-            hostAccountSnapshot ?: HostAccountSnapshot(
-                status = HostAccountStatus.UNAVAILABLE,
-            )
-        }
+        }.getOrNull()
+        hostAccountSnapshot = resolveInitialHostAccountSnapshot(
+            currentSnapshot = hostAccountSnapshot,
+            bridgeSnapshot = bridgeSnapshot,
+        )
         emitAccountStatus()
     }
 
@@ -1411,7 +1412,7 @@ class AndrodexClient(
             }
 
             "account/updated", "account/login/completed", "account/rateLimits/updated" -> {
-                refreshHostAccountSnapshot(extractHostAccountSnapshot(params))
+                applyLiveHostAccountUpdate(extractHostAccountSnapshotPayload(params))
                 true
             }
 
@@ -1534,23 +1535,25 @@ class AndrodexClient(
         return true
     }
 
-    private suspend fun refreshHostAccountSnapshot(fallbackSnapshot: HostAccountSnapshot?) {
-        val refreshedSnapshot = runCatching {
-            decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
-        }.getOrNull()
-        val mergedSnapshot = when {
-            refreshedSnapshot != null -> mergeHostAccountSnapshot(
-                base = refreshedSnapshot,
-                fallback = fallbackSnapshot,
-            )
-
-            else -> mergeHostAccountSnapshot(
-                base = hostAccountSnapshot,
-                fallback = fallbackSnapshot,
+    private suspend fun applyLiveHostAccountUpdate(payload: JSONObject?) {
+        val nativeSnapshot = payload?.let { rawPayload ->
+            applyHostAccountUpdatePayload(
+                currentSnapshot = hostAccountSnapshot,
+                payload = rawPayload,
+                origin = HostAccountSnapshotOrigin.NATIVE_LIVE,
             )
         }
-        hostAccountSnapshot = mergedSnapshot
-        updatesFlow.emit(ClientUpdate.AccountStatusLoaded(snapshot = mergedSnapshot))
+        val resolvedSnapshot = nativeSnapshot ?: run {
+            val bridgeSnapshot = runCatching {
+                decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
+            }.getOrNull()
+            resolveLiveHostAccountSnapshot(
+                currentSnapshot = hostAccountSnapshot,
+                bridgeSnapshot = bridgeSnapshot,
+            )
+        }
+        hostAccountSnapshot = resolvedSnapshot
+        updatesFlow.emit(ClientUpdate.AccountStatusLoaded(snapshot = resolvedSnapshot))
     }
 
     private suspend fun sendRequest(method: String, params: JSONObject?): JSONObject {
@@ -2083,7 +2086,7 @@ class AndrodexClient(
         }
     }
 
-    private fun extractHostAccountSnapshot(params: JSONObject?): HostAccountSnapshot? {
+    private fun extractHostAccountSnapshotPayload(params: JSONObject?): JSONObject? {
         if (params == null) {
             return null
         }
@@ -2094,7 +2097,7 @@ class AndrodexClient(
             params.takeIf(::looksLikeHostAccountSnapshot),
             event?.takeIf(::looksLikeHostAccountSnapshot),
         )
-        return candidates.firstNotNullOfOrNull(::decodeHostAccountSnapshot)
+        return candidates.firstOrNull()
     }
 
     private fun extractSkillChangeCwds(params: JSONObject?): List<String> {
@@ -2151,28 +2154,6 @@ class AndrodexClient(
             "rate_limits",
             "limits",
         ).any(candidate::has)
-    }
-
-    private fun mergeHostAccountSnapshot(
-        base: HostAccountSnapshot?,
-        fallback: HostAccountSnapshot?,
-    ): HostAccountSnapshot? {
-        if (base == null) {
-            return fallback
-        }
-        if (fallback == null) {
-            return base
-        }
-
-        return base.copy(
-            authMethod = base.authMethod ?: fallback.authMethod,
-            email = base.email ?: fallback.email,
-            planType = base.planType ?: fallback.planType,
-            expiresAtEpochMs = base.expiresAtEpochMs ?: fallback.expiresAtEpochMs,
-            bridgeVersion = base.bridgeVersion ?: fallback.bridgeVersion,
-            bridgeLatestVersion = base.bridgeLatestVersion ?: fallback.bridgeLatestVersion,
-            rateLimits = if (base.rateLimits.isNotEmpty()) base.rateLimits else fallback.rateLimits,
-        )
     }
 
     private fun isTerminalCommandStatus(status: String?): Boolean {
@@ -3130,6 +3111,160 @@ private fun decodeThreadRunSnapshot(threadObject: JSONObject): ThreadRunSnapshot
     )
 }
 
+internal fun resolveInitialHostAccountSnapshot(
+    currentSnapshot: HostAccountSnapshot?,
+    bridgeSnapshot: HostAccountSnapshot?,
+): HostAccountSnapshot {
+    return when {
+        bridgeSnapshot != null -> bridgeSnapshot.copy(origin = HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP)
+        currentSnapshot != null -> currentSnapshot
+        else -> HostAccountSnapshot(
+            status = HostAccountStatus.UNAVAILABLE,
+            origin = HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP,
+        )
+    }
+}
+
+internal fun resolveLiveHostAccountSnapshot(
+    currentSnapshot: HostAccountSnapshot?,
+    bridgeSnapshot: HostAccountSnapshot?,
+): HostAccountSnapshot? {
+    return when {
+        bridgeSnapshot != null -> mergeHostAccountSnapshot(
+            base = bridgeSnapshot.copy(origin = HostAccountSnapshotOrigin.BRIDGE_FALLBACK),
+            fallback = currentSnapshot,
+        )
+        else -> currentSnapshot
+    }
+}
+
+internal fun applyHostAccountUpdatePayload(
+    currentSnapshot: HostAccountSnapshot?,
+    payload: JSONObject,
+    origin: HostAccountSnapshotOrigin,
+): HostAccountSnapshot? {
+    val decodedSnapshot = decodeHostAccountSnapshot(payload)
+    val canSeedFromPayload = currentSnapshot != null || payload.hasAnyKey(
+        "status",
+        "state",
+        "email",
+        "authMethod",
+        "auth_method",
+        "planType",
+        "plan_type",
+        "loginInFlight",
+        "login_in_flight",
+        "needsReauth",
+        "needs_reauth",
+        "tokenReady",
+        "token_ready",
+    )
+    val seed = currentSnapshot ?: decodedSnapshot?.takeIf { canSeedFromPayload } ?: return null
+    val resolvedStatus = if (payload.hasAnyKey("status", "state")) {
+        decodedSnapshot?.status ?: seed.status
+    } else {
+        seed.status
+    }
+
+    return seed.copy(
+        status = resolvedStatus,
+        authMethod = if (payload.hasAnyKey("authMethod", "auth_method")) {
+            payload.stringOrNull("authMethod", "auth_method")
+        } else {
+            seed.authMethod
+        },
+        email = if (payload.has("email")) {
+            payload.stringOrNull("email")
+        } else {
+            seed.email
+        },
+        planType = if (payload.hasAnyKey("planType", "plan_type")) {
+            payload.stringOrNull("planType", "plan_type")
+        } else {
+            seed.planType
+        },
+        loginInFlight = if (payload.hasAnyKey("loginInFlight", "login_in_flight")) {
+            payload.booleanValueOrDefault(
+                defaultValue = seed.loginInFlight,
+                names = arrayOf("loginInFlight", "login_in_flight"),
+            )
+        } else {
+            seed.loginInFlight
+        },
+        needsReauth = if (payload.hasAnyKey("needsReauth", "needs_reauth")) {
+            payload.booleanValueOrDefault(
+                defaultValue = seed.needsReauth,
+                names = arrayOf("needsReauth", "needs_reauth"),
+            )
+        } else {
+            seed.needsReauth
+        },
+        tokenReady = if (payload.hasAnyKey("tokenReady", "token_ready")) {
+            payload.optionalBooleanValue("tokenReady", "token_ready")
+        } else {
+            seed.tokenReady
+        },
+        expiresAtEpochMs = if (payload.hasAnyKey("expiresAt", "expires_at")) {
+            decodedSnapshot?.expiresAtEpochMs
+        } else {
+            seed.expiresAtEpochMs
+        },
+        bridgeVersion = if (
+            payload.hasAnyKey("bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version")
+        ) {
+            payload.stringOrNull("bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version")
+        } else {
+            seed.bridgeVersion
+        },
+        bridgeLatestVersion = if (
+            payload.hasAnyKey(
+                "bridgeLatestVersion",
+                "bridge_latest_version",
+                "bridgePublishedVersion",
+                "bridge_published_version",
+            )
+        ) {
+            payload.stringOrNull(
+                "bridgeLatestVersion",
+                "bridge_latest_version",
+                "bridgePublishedVersion",
+                "bridge_published_version",
+            )
+        } else {
+            seed.bridgeLatestVersion
+        },
+        rateLimits = if (payload.hasAnyKey("rateLimits", "rate_limits", "limits", "buckets")) {
+            decodeHostRateLimitBuckets(payload)
+        } else {
+            seed.rateLimits
+        },
+        origin = origin,
+    )
+}
+
+internal fun mergeHostAccountSnapshot(
+    base: HostAccountSnapshot?,
+    fallback: HostAccountSnapshot?,
+): HostAccountSnapshot? {
+    if (base == null) {
+        return fallback
+    }
+    if (fallback == null) {
+        return base
+    }
+
+    return base.copy(
+        status = if (base.status == HostAccountStatus.UNKNOWN) fallback.status else base.status,
+        authMethod = base.authMethod ?: fallback.authMethod,
+        email = base.email ?: fallback.email,
+        planType = base.planType ?: fallback.planType,
+        expiresAtEpochMs = base.expiresAtEpochMs ?: fallback.expiresAtEpochMs,
+        bridgeVersion = base.bridgeVersion ?: fallback.bridgeVersion,
+        bridgeLatestVersion = base.bridgeLatestVersion ?: fallback.bridgeLatestVersion,
+        rateLimits = if (base.rateLimits.isNotEmpty()) base.rateLimits else fallback.rateLimits,
+    )
+}
+
 private fun normalizeTurnStatus(rawStatus: String?): String? {
     return rawStatus?.trim()?.lowercase(Locale.US)?.takeIf { it.isNotEmpty() }
 }
@@ -3165,6 +3300,31 @@ private fun terminalStateForStatus(normalizedStatus: String?): TurnTerminalState
         isStoppedTurnStatus(normalizedStatus) -> TurnTerminalState.STOPPED
         isFailedTurnStatus(normalizedStatus) -> TurnTerminalState.FAILED
         isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
+        else -> null
+    }
+}
+
+private fun JSONObject.hasAnyKey(vararg names: String): Boolean {
+    return names.any(::has)
+}
+
+private fun JSONObject.booleanValueOrDefault(
+    defaultValue: Boolean,
+    names: Array<String>,
+): Boolean {
+    val firstKey = names.firstOrNull { has(it) } ?: return defaultValue
+    return optBoolean(firstKey, defaultValue)
+}
+
+private fun JSONObject.optionalBooleanValue(vararg names: String): Boolean? {
+    val firstKey = names.firstOrNull { has(it) } ?: return null
+    val rawValue = opt(firstKey)
+    return when (rawValue) {
+        null,
+        JSONObject.NULL -> null
+        is Boolean -> rawValue
+        is String -> rawValue.equals("true", ignoreCase = true)
+        is Number -> rawValue.toInt() != 0
         else -> null
     }
 }

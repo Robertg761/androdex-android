@@ -10,6 +10,7 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
@@ -66,6 +67,36 @@ class AndrodexFeatureStateTest {
         assertEquals("Retrying saved pair", route.state.trustedPair?.statusLabel)
         assertEquals("relay.example.com", route.state.trustedPair?.relayLabel)
         assertTrue(route.state.compatibilityMessage.isNullOrBlank())
+    }
+
+    @Test
+    fun pairingRoute_surfacesAccountSourceAndRateLimits() {
+        val state = AndrodexUiState(
+            hostAccountSnapshot = HostAccountSnapshot(
+                status = HostAccountStatus.AUTHENTICATED,
+                authMethod = "chatgpt",
+                email = "host@example.com",
+                planType = "pro",
+                bridgeVersion = "1.1.3",
+                rateLimits = listOf(
+                    io.androdex.android.model.HostRateLimitBucket(
+                        name = "gpt-5.4",
+                        remaining = 42,
+                        limit = 100,
+                        resetsAtEpochMs = 1_774_614_600_000L,
+                    )
+                ),
+                origin = HostAccountSnapshotOrigin.NATIVE_LIVE,
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Pairing
+
+        assertEquals("Live host updates", route.state.hostAccount?.sourceLabel)
+        assertEquals("Managed on the host", route.state.hostAccount?.authControlLabel)
+        assertEquals("gpt-5.4", route.state.hostAccount?.rateLimits?.single()?.name)
+        assertEquals("42 left of 100", route.state.hostAccount?.rateLimits?.single()?.usageLabel)
     }
 
     @Test

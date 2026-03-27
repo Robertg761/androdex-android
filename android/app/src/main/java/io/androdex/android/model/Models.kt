@@ -160,6 +160,12 @@ enum class HostAccountStatus {
     EXPIRED,
 }
 
+enum class HostAccountSnapshotOrigin {
+    BRIDGE_BOOTSTRAP,
+    BRIDGE_FALLBACK,
+    NATIVE_LIVE,
+}
+
 data class HostAccountSnapshot(
     val status: HostAccountStatus,
     val authMethod: String? = null,
@@ -172,6 +178,7 @@ data class HostAccountSnapshot(
     val bridgeVersion: String? = null,
     val bridgeLatestVersion: String? = null,
     val rateLimits: List<HostRateLimitBucket> = emptyList(),
+    val origin: HostAccountSnapshotOrigin = HostAccountSnapshotOrigin.BRIDGE_FALLBACK,
 )
 
 data class HostRateLimitBucket(
