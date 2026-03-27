@@ -171,7 +171,24 @@ data class HostAccountSnapshot(
     val expiresAtEpochMs: Long? = null,
     val bridgeVersion: String? = null,
     val bridgeLatestVersion: String? = null,
+    val rateLimits: List<HostRateLimitBucket> = emptyList(),
 )
+
+data class HostRateLimitBucket(
+    val name: String,
+    val remaining: Int? = null,
+    val limit: Int? = null,
+    val used: Int? = null,
+    val resetsAtEpochMs: Long? = null,
+)
+
+data class ThreadTokenUsage(
+    val tokensUsed: Int,
+    val tokenLimit: Int,
+) {
+    val remainingTokens: Int
+        get() = maxOf(0, tokenLimit - tokensUsed)
+}
 
 data class ThreadSummary(
     val id: String,
@@ -612,6 +629,17 @@ data class ApprovalRequest(
     val turnId: String?,
 )
 
+data class ToolUserInputRequest(
+    val idValue: Any,
+    val method: String,
+    val threadId: String?,
+    val turnId: String?,
+    val itemId: String?,
+    val title: String?,
+    val message: String?,
+    val rawPayload: String,
+)
+
 enum class ConnectionStatus {
     DISCONNECTED,
     CONNECTING,
@@ -655,6 +683,15 @@ sealed interface ClientUpdate {
 
     data class AccountStatusLoaded(
         val snapshot: HostAccountSnapshot?,
+    ) : ClientUpdate
+
+    data class TokenUsageUpdated(
+        val threadId: String?,
+        val usage: ThreadTokenUsage,
+    ) : ClientUpdate
+
+    data class SkillsChanged(
+        val cwds: List<String> = emptyList(),
     ) : ClientUpdate
 
     data class PlanUpdated(
@@ -721,7 +758,21 @@ sealed interface ClientUpdate {
         val text: String,
     ) : ClientUpdate
 
+    data class CommandExecutionUpdate(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val command: String?,
+        val status: String?,
+        val text: String,
+        val isStreaming: Boolean,
+    ) : ClientUpdate
+
     data class ApprovalRequested(val request: ApprovalRequest) : ClientUpdate
+
+    data class ToolUserInputRequested(
+        val request: ToolUserInputRequest,
+    ) : ClientUpdate
 
     data object ApprovalCleared : ClientUpdate
 

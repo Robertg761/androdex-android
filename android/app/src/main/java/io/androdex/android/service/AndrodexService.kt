@@ -22,6 +22,7 @@ import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ThreadTokenUsage
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedPairSnapshot
@@ -75,6 +76,7 @@ data class AndrodexServiceState(
     val readyThreadIds: Set<String> = emptySet(),
     val failedThreadIds: Set<String> = emptySet(),
     val latestTurnTerminalStateByThread: Map<String, TurnTerminalState> = emptyMap(),
+    val tokenUsageByThread: Map<String, ThreadTokenUsage> = emptyMap(),
     val isLoadingRuntimeConfig: Boolean = false,
     val availableModels: List<ModelOption> = emptyList(),
     val selectedModelId: String? = null,
@@ -94,6 +96,7 @@ data class AndrodexServiceState(
     val pendingNotificationOpenThreadId: String? = null,
     val pendingNotificationOpenTurnId: String? = null,
     val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
+    val skillInventoryVersion: Long = 0L,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
 ) {
@@ -764,6 +767,23 @@ class AndrodexService(
                 }
             }
 
+            is ClientUpdate.TokenUsageUpdated -> {
+                val threadId = update.threadId?.trim()?.takeIf { it.isNotEmpty() } ?: return
+                stateFlow.update {
+                    it.copy(
+                        tokenUsageByThread = it.tokenUsageByThread + (threadId to update.usage),
+                    )
+                }
+            }
+
+            is ClientUpdate.SkillsChanged -> {
+                stateFlow.update {
+                    it.copy(
+                        skillInventoryVersion = it.skillInventoryVersion + 1L,
+                    )
+                }
+            }
+
             is ClientUpdate.PlanUpdated -> {
                 val threadId = resolveThreadId(update.threadId, update.turnId, itemId = null) ?: return
                 if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
@@ -925,8 +945,34 @@ class AndrodexService(
                 }
             }
 
+            is ClientUpdate.CommandExecutionUpdate -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, update.itemId) ?: return
+                if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateThreadMessages(threadId) { messages ->
+                    upsertCommandExecutionMessage(
+                        messages = messages,
+                        threadId = threadId,
+                        turnId = update.turnId,
+                        itemId = update.itemId,
+                        command = update.command,
+                        status = update.status,
+                        text = update.text,
+                        isStreaming = update.isStreaming,
+                    )
+                }
+            }
+
             is ClientUpdate.ApprovalRequested -> {
                 stateFlow.update { it.copy(pendingApproval = update.request) }
+            }
+
+            is ClientUpdate.ToolUserInputRequested -> {
+                val summary = update.request.title
+                    ?: update.request.message
+                    ?: "The host requested structured tool input, but this Android build cannot answer it yet."
+                stateFlow.update { it.copy(errorMessage = summary) }
             }
 
             ClientUpdate.ApprovalCleared -> {
@@ -1752,6 +1798,57 @@ private fun upsertSubagentActionMessage(
     return updated
 }
 
+private fun upsertCommandExecutionMessage(
+    messages: List<ConversationMessage>,
+    threadId: String,
+    turnId: String?,
+    itemId: String?,
+    command: String?,
+    status: String?,
+    text: String,
+    isStreaming: Boolean,
+): List<ConversationMessage> {
+    val incoming = ConversationMessage(
+        id = itemId ?: UUID.randomUUID().toString(),
+        threadId = threadId,
+        role = ConversationRole.SYSTEM,
+        kind = ConversationKind.COMMAND,
+        text = text,
+        createdAtEpochMs = System.currentTimeMillis(),
+        turnId = turnId,
+        itemId = itemId,
+        isStreaming = isStreaming,
+        status = status,
+        command = command,
+    )
+    val existingIndex = messages.indexOfLast { message ->
+        message.role == ConversationRole.SYSTEM
+            && message.kind == ConversationKind.COMMAND
+            && commandMessagesRepresentSameItem(message, incoming)
+    }
+    if (existingIndex < 0) {
+        return messages + incoming
+    }
+
+    val updated = messages.toMutableList()
+    val existing = updated[existingIndex]
+    updated[existingIndex] = mergeMatchedMessage(
+        existing = existing,
+        incoming = incoming,
+        keepStreamingRows = true,
+    ).copy(
+        text = if (isStreaming && existing.isStreaming && incoming.text.length < existing.text.length) {
+            existing.text
+        } else {
+            incoming.text.ifBlank { existing.text }
+        },
+        status = incoming.status ?: existing.status,
+        command = incoming.command ?: existing.command,
+        isStreaming = isStreaming || (existing.isStreaming && incoming.text.length <= existing.text.length),
+    )
+    return updated
+}
+
 private fun mergeThreadMessages(
     existing: List<ConversationMessage>,
     incoming: List<ConversationMessage>,
@@ -1767,7 +1864,7 @@ private fun mergeThreadMessages(
     val merged = existing.toMutableList()
     incoming.forEach { incomingMessage ->
         val existingIndex = merged.indexOfFirst { existingMessage ->
-            messagesRepresentSameItem(existingMessage, incomingMessage)
+            timelineMessagesRepresentSameItem(existingMessage, incomingMessage)
         }
         if (existingIndex >= 0) {
             merged[existingIndex] = mergeMatchedMessage(
@@ -1801,10 +1898,31 @@ private fun mergeMatchedMessage(
         attachments = if (incoming.attachments.isEmpty()) existing.attachments else incoming.attachments,
         createdAtEpochMs = minOf(existing.createdAtEpochMs, incoming.createdAtEpochMs),
         isStreaming = incoming.isStreaming || shouldKeepStreaming,
+        filePath = incoming.filePath ?: existing.filePath,
+        status = incoming.status ?: existing.status,
+        diffText = incoming.diffText ?: existing.diffText,
+        command = incoming.command ?: existing.command,
         planExplanation = incoming.planExplanation ?: existing.planExplanation,
         planSteps = incoming.planSteps ?: existing.planSteps,
         subagentAction = incoming.subagentAction ?: existing.subagentAction,
     )
+}
+
+private fun timelineMessagesRepresentSameItem(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    return when {
+        existing.kind == ConversationKind.COMMAND && incoming.kind == ConversationKind.COMMAND -> {
+            commandMessagesRepresentSameItem(existing, incoming)
+        }
+
+        existing.kind == ConversationKind.SUBAGENT_ACTION && incoming.kind == ConversationKind.SUBAGENT_ACTION -> {
+            subagentMessagesRepresentSameItem(existing, incoming)
+        }
+
+        else -> messagesRepresentSameItem(existing, incoming)
+    }
 }
 
 private fun messagesRepresentSameItem(
@@ -1871,6 +1989,31 @@ private fun subagentMessagesRepresentSameItem(
     }
 
     return existing.text == incoming.text
+}
+
+private fun commandMessagesRepresentSameItem(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    val existingItemId = existing.itemId?.trim()?.takeIf { it.isNotEmpty() }
+    val incomingItemId = incoming.itemId?.trim()?.takeIf { it.isNotEmpty() }
+    if (existingItemId != null || incomingItemId != null) {
+        return existingItemId != null && existingItemId == incomingItemId
+    }
+
+    val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    if (existing.threadId != incoming.threadId || existingTurnId != incomingTurnId) {
+        return false
+    }
+
+    val existingCommand = existing.command?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    val incomingCommand = incoming.command?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    if (existingCommand != null && incomingCommand != null) {
+        return existingCommand == incomingCommand
+    }
+
+    return existing.text == incoming.text && existing.status == incoming.status
 }
 
 private fun mergeSubagentActions(existing: SubagentAction?, incoming: SubagentAction): SubagentAction {

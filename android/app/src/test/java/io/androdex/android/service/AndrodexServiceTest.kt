@@ -156,6 +156,75 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun commandExecutionUpdates_keepDistinctCommandsWhenItemIdsAreMissing() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "npm test",
+                status = "running",
+                text = "Running: npm test",
+                isStreaming = true,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "git status",
+                status = "completed",
+                text = "Completed: git status",
+                isStreaming = false,
+            )
+        )
+
+        val commands = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.COMMAND }
+        assertEquals(2, commands.size)
+        assertEquals(listOf("npm test", "git status"), commands.map { it.command })
+    }
+
+    @Test
+    fun commandExecutionUpdates_mergeSameCommandAcrossStreamingAndCompletion() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "npm test",
+                status = "running",
+                text = "Running: npm test",
+                isStreaming = true,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "npm test",
+                status = "completed",
+                text = "Completed: npm test",
+                isStreaming = false,
+            )
+        )
+
+        val command = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .single { it.kind == ConversationKind.COMMAND }
+        assertEquals("Completed: npm test", command.text)
+        assertEquals("completed", command.status)
+        assertFalse(command.isStreaming)
+    }
+
+    @Test
     fun lateReasoningDeltaAfterTurnCompletionDoesNotCreateNewThinkingRow() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -336,6 +405,60 @@ class AndrodexServiceTest {
         assertEquals("thread-retry", service.state.value.pendingNotificationOpenThreadId)
         assertNull(service.state.value.missingNotificationThreadPrompt)
         assertNull(service.state.value.selectedThreadId)
+    }
+
+    @Test
+    fun tokenUsageUpdates_storeLatestUsageByThread() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.TokenUsageUpdated(
+                threadId = "thread-1",
+                usage = io.androdex.android.model.ThreadTokenUsage(
+                    tokensUsed = 1200,
+                    tokenLimit = 32000,
+                ),
+            )
+        )
+
+        val usage = service.state.value.tokenUsageByThread["thread-1"]
+        assertEquals(1200, usage?.tokensUsed)
+        assertEquals(32000, usage?.tokenLimit)
+    }
+
+    @Test
+    fun skillsChanged_bumpsSkillInventoryVersion() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        val initialVersion = service.state.value.skillInventoryVersion
+        service.processClientUpdate(ClientUpdate.SkillsChanged(cwds = listOf("C:\\Projects\\AppA")))
+
+        assertEquals(initialVersion + 1L, service.state.value.skillInventoryVersion)
+    }
+
+    @Test
+    fun toolUserInputRequests_surfaceUnsupportedMessage() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputRequested(
+                io.androdex.android.model.ToolUserInputRequest(
+                    idValue = "request-1",
+                    method = "item/tool/requestUserInput",
+                    threadId = "thread-1",
+                    turnId = "turn-1",
+                    itemId = "item-1",
+                    title = "Pick a branch",
+                    message = "Select which branch to inspect.",
+                    rawPayload = "{}",
+                )
+            )
+        )
+
+        assertEquals("Pick a branch", service.state.value.errorMessage)
     }
 
     @Test

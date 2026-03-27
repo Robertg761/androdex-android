@@ -52,6 +52,7 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
@@ -1179,34 +1180,69 @@ class AndrodexClient(
     }
 
     private suspend fun handleServerRequest(method: String, idValue: Any, params: JSONObject?) {
-        if (
-            method == "item/commandExecution/requestApproval"
-            || method == "item/fileChange/requestApproval"
-            || method.endsWith("requestApproval")
-        ) {
-            updatesFlow.emit(
-                ClientUpdate.ApprovalRequested(
-                    ApprovalRequest(
-                        idValue = idValue,
-                        method = method,
-                        command = params?.stringOrNull("command"),
-                        reason = params?.stringOrNull("reason"),
-                        threadId = params?.stringOrNull("threadId", "thread_id"),
-                        turnId = params?.stringOrNull("turnId", "turn_id"),
+        when {
+            isApprovalRequestMethod(method) -> {
+                updatesFlow.emit(
+                    ClientUpdate.ApprovalRequested(
+                        ApprovalRequest(
+                            idValue = idValue,
+                            method = method,
+                            command = params?.stringOrNull("command"),
+                            reason = params?.stringOrNull("reason"),
+                            threadId = params?.stringOrNull("threadId", "thread_id"),
+                            turnId = params?.stringOrNull("turnId", "turn_id"),
+                        )
                     )
                 )
-            )
-            return
-        }
+            }
 
-        sendErrorResponse(idValue, -32601, "Unsupported request method: $method")
+            isToolUserInputRequestMethod(method) -> {
+                updatesFlow.emit(
+                    ClientUpdate.ToolUserInputRequested(
+                        ToolUserInputRequest(
+                            idValue = idValue,
+                            method = method,
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            itemId = extractItemId(params),
+                            title = (
+                                params?.stringOrNull("title", "label", "prompt", "question")
+                                    ?: params?.objectOrNull("input", "schema")?.stringOrNull("title", "label")
+                                ),
+                            message = (
+                                params?.stringOrNull("message", "description", "reason", "text")
+                                    ?: params?.objectOrNull("input", "schema")?.stringOrNull("description", "message")
+                                ),
+                            rawPayload = params?.toString() ?: "{}",
+                        )
+                    )
+                )
+                sendErrorResponse(
+                    idValue,
+                    -32601,
+                    "Structured tool input is not supported on this Android build yet.",
+                )
+            }
+
+            else -> sendErrorResponse(idValue, -32601, "Unsupported request method: $method")
+        }
     }
 
     private suspend fun handleNotification(method: String, params: JSONObject?) {
-        if (emitSubagentActionUpdateIfPresent(method, params)) {
+        if (handleThreadLifecycleNotification(method, params)) {
             return
         }
-        when (method) {
+        if (handleTurnLifecycleNotification(method, params)) {
+            return
+        }
+        if (handleRuntimeStatusNotification(method, params)) {
+            return
+        }
+        handleItemProtocolNotification(method, params)
+    }
+
+    private suspend fun handleThreadLifecycleNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
             "thread/started", "thread/name/updated", "thread/status/changed" -> {
                 if (method == "thread/started") {
                     updatesFlow.emit(
@@ -1227,8 +1263,15 @@ class AndrodexClient(
                     listThreads()
                 } catch (_: Throwable) {
                 }
+                true
             }
 
+            else -> false
+        }
+    }
+
+    private suspend fun handleTurnLifecycleNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
             "turn/started" -> {
                 updatesFlow.emit(
                     ClientUpdate.TurnStarted(
@@ -1236,6 +1279,7 @@ class AndrodexClient(
                         turnId = extractTurnId(params),
                     )
                 )
+                true
             }
 
             "turn/completed", "turn/failed", "error" -> {
@@ -1243,17 +1287,13 @@ class AndrodexClient(
                 val turnId = extractTurnId(params)
                 if (method == "error" && threadId.isNullOrBlank() && turnId.isNullOrBlank()) {
                     extractTurnErrorMessage(params)?.let { updatesFlow.emit(ClientUpdate.Error(it)) }
-                    return
+                    return true
                 }
                 val terminalState = when (method) {
                     "turn/failed" -> TurnTerminalState.FAILED
-                    "error" -> if (extractWillRetry(params)) {
-                        null
-                    } else {
-                        TurnTerminalState.FAILED
-                    }
+                    "error" -> if (extractWillRetry(params)) null else TurnTerminalState.FAILED
                     else -> extractTurnTerminalState(params)
-                } ?: return
+                } ?: return true
                 updatesFlow.emit(
                     ClientUpdate.TurnCompleted(
                         threadId = threadId,
@@ -1263,23 +1303,69 @@ class AndrodexClient(
                         willRetry = extractWillRetry(params),
                     )
                 )
+                true
             }
 
             "turn/plan/updated" -> {
                 val steps = extractPlanSteps(params)
-                if (steps.isEmpty()) {
-                    return
-                }
-                updatesFlow.emit(
-                    ClientUpdate.PlanUpdated(
-                        threadId = extractThreadId(params),
-                        turnId = extractTurnId(params),
-                        explanation = extractPlanExplanation(params),
-                        steps = steps,
+                if (steps.isNotEmpty()) {
+                    updatesFlow.emit(
+                        ClientUpdate.PlanUpdated(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            explanation = extractPlanExplanation(params),
+                            steps = steps,
+                        )
                     )
-                )
+                }
+                true
             }
 
+            else -> false
+        }
+    }
+
+    private suspend fun handleRuntimeStatusNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
+            "thread/tokenUsage/updated" -> {
+                decodeThreadTokenUsage(params ?: JSONObject())?.let { usage ->
+                    updatesFlow.emit(
+                        ClientUpdate.TokenUsageUpdated(
+                            threadId = extractThreadId(params),
+                            usage = usage,
+                        )
+                    )
+                }
+                true
+            }
+
+            "account/updated", "account/login/completed", "account/rateLimits/updated" -> {
+                refreshHostAccountSnapshot(extractHostAccountSnapshot(params))
+                true
+            }
+
+            "skills/changed" -> {
+                updatesFlow.emit(
+                    ClientUpdate.SkillsChanged(
+                        cwds = extractSkillChangeCwds(params),
+                    )
+                )
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private suspend fun handleItemProtocolNotification(method: String, params: JSONObject?) {
+        if (emitSubagentActionUpdateIfPresent(method, params)) {
+            return
+        }
+        extractCommandExecutionUpdate(method, params)?.let { update ->
+            updatesFlow.emit(update)
+            return
+        }
+        when (method) {
             "item/agentMessage/delta",
             "codex/event/agent_message_content_delta",
             "codex/event/agent_message_delta" -> {
@@ -1375,6 +1461,25 @@ class AndrodexClient(
             )
         )
         return true
+    }
+
+    private suspend fun refreshHostAccountSnapshot(fallbackSnapshot: HostAccountSnapshot?) {
+        val refreshedSnapshot = runCatching {
+            decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
+        }.getOrNull()
+        val mergedSnapshot = when {
+            refreshedSnapshot != null -> mergeHostAccountSnapshot(
+                base = refreshedSnapshot,
+                fallback = fallbackSnapshot,
+            )
+
+            else -> mergeHostAccountSnapshot(
+                base = hostAccountSnapshot,
+                fallback = fallbackSnapshot,
+            )
+        }
+        hostAccountSnapshot = mergedSnapshot
+        updatesFlow.emit(ClientUpdate.AccountStatusLoaded(snapshot = mergedSnapshot))
     }
 
     private suspend fun sendRequest(method: String, params: JSONObject?): JSONObject {
@@ -1713,6 +1818,44 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.let(::extractItemId)
     }
 
+    private fun extractCommandExecutionUpdate(method: String, params: JSONObject?): ClientUpdate.CommandExecutionUpdate? {
+        val normalizedMethod = normalizeItemType(method)
+        val item = params?.objectOrNull("item")
+            ?: params?.objectOrNull("msg", "event")?.optJSONObject("item")
+        val methodLooksCommandLike = normalizedMethod.contains("commandexecution")
+            || normalizedMethod.contains("commandexec")
+            || normalizedMethod.contains("terminalcommand")
+        val itemLooksCommandLike = item?.let { isCommandExecutionItemType(it.optString("type")) } == true
+        if (!methodLooksCommandLike && !itemLooksCommandLike) {
+            return null
+        }
+
+        val source = item
+            ?: params?.objectOrNull("msg", "event")
+            ?: params
+            ?: return null
+        val commandData = decodeCommandExecutionContent(source)
+        val isStreaming = when {
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || normalizedMethod == "itemcompleted"
+                || normalizedMethod == "codexeventitemcompleted"
+                || normalizedMethod == "codexeventagentmessage" -> false
+            normalizedMethod.contains("delta") || normalizedMethod.contains("updated") -> true
+            else -> !isTerminalCommandStatus(commandData.status)
+        }
+        return ClientUpdate.CommandExecutionUpdate(
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = extractItemId(params),
+            command = commandData.command,
+            status = commandData.status,
+            text = commandData.text,
+            isStreaming = isStreaming,
+        )
+    }
+
     private fun extractAssistantDeltaText(params: JSONObject?): String? {
         if (params == null) return null
         return params.stringOrNull("delta")
@@ -1831,6 +1974,105 @@ class AndrodexClient(
             isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
             else -> TurnTerminalState.COMPLETED
         }
+    }
+
+    private fun extractHostAccountSnapshot(params: JSONObject?): HostAccountSnapshot? {
+        if (params == null) {
+            return null
+        }
+        val event = params.objectOrNull("msg", "event")
+        val candidates = listOfNotNull(
+            params.objectOrNull("account", "snapshot", "result"),
+            event?.objectOrNull("account", "snapshot", "result"),
+            params.takeIf(::looksLikeHostAccountSnapshot),
+            event?.takeIf(::looksLikeHostAccountSnapshot),
+        )
+        return candidates.firstNotNullOfOrNull(::decodeHostAccountSnapshot)
+    }
+
+    private fun extractSkillChangeCwds(params: JSONObject?): List<String> {
+        if (params == null) {
+            return emptyList()
+        }
+        val event = params.objectOrNull("msg", "event")
+        val roots = params.arrayOrNull("cwds", "roots", "workspaces")
+            ?: event?.arrayOrNull("cwds", "roots", "workspaces")
+        if (roots != null) {
+            val decoded = mutableListOf<String>()
+            for (index in 0 until roots.length()) {
+                val value = roots.optString(index).trim()
+                if (value.isNotEmpty() && value !in decoded) {
+                    decoded += value
+                }
+            }
+            if (decoded.isNotEmpty()) {
+                return decoded
+            }
+        }
+        return listOfNotNull(
+            params.stringOrNull("cwd", "root", "workspace"),
+            event?.stringOrNull("cwd", "root", "workspace"),
+        ).distinct()
+    }
+
+    private fun isApprovalRequestMethod(method: String): Boolean {
+        return method == "item/commandExecution/requestApproval"
+            || method == "item/fileChange/requestApproval"
+            || method.endsWith("requestApproval")
+    }
+
+    private fun isToolUserInputRequestMethod(method: String): Boolean {
+        return normalizeItemType(method) == "itemtoolrequestuserinput"
+    }
+
+    private fun looksLikeHostAccountSnapshot(candidate: JSONObject): Boolean {
+        return listOf(
+            "status",
+            "state",
+            "email",
+            "authMethod",
+            "auth_method",
+            "planType",
+            "plan_type",
+            "loginInFlight",
+            "login_in_flight",
+            "needsReauth",
+            "needs_reauth",
+            "tokenReady",
+            "token_ready",
+            "rateLimits",
+            "rate_limits",
+            "limits",
+        ).any(candidate::has)
+    }
+
+    private fun mergeHostAccountSnapshot(
+        base: HostAccountSnapshot?,
+        fallback: HostAccountSnapshot?,
+    ): HostAccountSnapshot? {
+        if (base == null) {
+            return fallback
+        }
+        if (fallback == null) {
+            return base
+        }
+
+        return base.copy(
+            authMethod = base.authMethod ?: fallback.authMethod,
+            email = base.email ?: fallback.email,
+            planType = base.planType ?: fallback.planType,
+            expiresAtEpochMs = base.expiresAtEpochMs ?: fallback.expiresAtEpochMs,
+            bridgeVersion = base.bridgeVersion ?: fallback.bridgeVersion,
+            bridgeLatestVersion = base.bridgeLatestVersion ?: fallback.bridgeLatestVersion,
+            rateLimits = if (base.rateLimits.isNotEmpty()) base.rateLimits else fallback.rateLimits,
+        )
+    }
+
+    private fun isTerminalCommandStatus(status: String?): Boolean {
+        val normalizedStatus = status?.trim()?.lowercase(Locale.US) ?: return false
+        return isCompletedTurnStatus(normalizedStatus)
+            || isFailedTurnStatus(normalizedStatus)
+            || isStoppedTurnStatus(normalizedStatus)
     }
 
     private fun decodeThreadReadAssistantContent(item: JSONObject): String? {

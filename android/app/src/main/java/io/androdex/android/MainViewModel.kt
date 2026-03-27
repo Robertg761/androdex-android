@@ -133,6 +133,7 @@ class MainViewModel(
     private val service = AndrodexService(repository, viewModelScope)
     private val repository = repository
     private var lastConnectionStatus: ConnectionStatus = service.state.value.connectionStatus
+    private var lastSkillInventoryVersion: Long = service.state.value.skillInventoryVersion
     private var fileAutocompleteJob: Job? = null
     private var skillAutocompleteJob: Job? = null
     private val autocompleteDebounceMs = 180L
@@ -150,6 +151,12 @@ class MainViewModel(
         viewModelScope.launch {
             service.state.collect { serviceState ->
                 uiStateFlow.update { current -> applyServiceState(current, serviceState) }
+                if (serviceState.skillInventoryVersion != lastSkillInventoryVersion
+                    && uiStateFlow.value.isSkillAutocompleteVisible
+                ) {
+                    refreshComposerAutocomplete(uiStateFlow.value.composerText)
+                }
+                lastSkillInventoryVersion = serviceState.skillInventoryVersion
                 flushEligibleQueues()
                 notificationCoordinator.syncRegistration(
                     connectionStatus = serviceState.connectionStatus,

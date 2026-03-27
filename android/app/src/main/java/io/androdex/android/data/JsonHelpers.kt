@@ -22,6 +22,7 @@ import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountStatus
+import io.androdex.android.model.HostRateLimitBucket
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
@@ -29,6 +30,7 @@ import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
+import io.androdex.android.model.ThreadTokenUsage
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -276,23 +278,6 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                     )
                 }
 
-                "commandexecution" -> {
-                    val cmdStatus = itemObject.stringOrNull("status") ?: "completed"
-                    val cmdText = itemObject.stringOrNull("command", "cmd", "raw_command", "rawCommand", "message") ?: "command"
-                    messages += ConversationMessage(
-                        id = itemId ?: UUID.randomUUID().toString(),
-                        threadId = threadId,
-                        role = ConversationRole.SYSTEM,
-                        kind = ConversationKind.COMMAND,
-                        text = "${cmdStatus.replaceFirstChar(Char::uppercase)}: $cmdText",
-                        createdAtEpochMs = createdAt,
-                        turnId = turnId,
-                        itemId = itemId,
-                        status = cmdStatus,
-                        command = cmdText,
-                    )
-                }
-
                 "plan" -> {
                     val planData = decodePlanContent(itemObject)
                     messages += ConversationMessage(
@@ -310,6 +295,22 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                 }
 
                 else -> {
+                    if (isCommandExecutionItemType(itemType)) {
+                        val commandData = decodeCommandExecutionContent(itemObject)
+                        messages += ConversationMessage(
+                            id = itemId ?: UUID.randomUUID().toString(),
+                            threadId = threadId,
+                            role = ConversationRole.SYSTEM,
+                            kind = ConversationKind.COMMAND,
+                            text = commandData.text,
+                            createdAtEpochMs = createdAt,
+                            turnId = turnId,
+                            itemId = itemId,
+                            status = commandData.status,
+                            command = commandData.command,
+                        )
+                        continue
+                    }
                     if (!isSubagentActionItemType(itemType)) {
                         continue
                     }
@@ -326,6 +327,7 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                         subagentAction = action,
                     )
                 }
+
             }
         }
     }
@@ -424,7 +426,23 @@ fun decodeHostAccountSnapshot(resultObject: JSONObject): HostAccountSnapshot? {
             "bridgePublishedVersion",
             "bridge_published_version",
         ),
+        rateLimits = decodeHostRateLimitBuckets(resultObject),
     )
+}
+
+internal fun decodeHostRateLimitBuckets(resultObject: JSONObject): List<HostRateLimitBucket> {
+    val directBuckets = resultObject.arrayOrNull("rateLimits", "rate_limits", "buckets", "limits")
+    if (directBuckets != null) {
+        return decodeHostRateLimitBuckets(directBuckets)
+    }
+
+    val nestedBuckets = resultObject.objectOrNull("rateLimits", "rate_limits", "limits")
+        ?.arrayOrNull("items", "buckets", "limits")
+    if (nestedBuckets != null) {
+        return decodeHostRateLimitBuckets(nestedBuckets)
+    }
+
+    return emptyList()
 }
 
 fun decodeGitRepoSyncResult(resultObject: JSONObject): GitRepoSyncResult {
@@ -735,6 +753,28 @@ private fun decodeReasoningEffortOptions(items: JSONArray): List<ReasoningEffort
     return decoded
 }
 
+private fun decodeHostRateLimitBuckets(items: JSONArray): List<HostRateLimitBucket> {
+    val decoded = mutableListOf<HostRateLimitBucket>()
+    for (index in 0 until items.length()) {
+        val item = items.optJSONObject(index) ?: continue
+        val name = item.stringOrNull("name", "id", "bucket", "scope", "label")
+            ?: "limit-${index + 1}"
+        decoded += HostRateLimitBucket(
+            name = name,
+            remaining = item.optNumber("remaining", "remaining_tokens", "remainingRequests"),
+            limit = item.optNumber("limit", "max", "quota"),
+            used = item.optNumber("used", "consumed", "used_tokens"),
+            resetsAtEpochMs = parseTimestamp(
+                item.opt("resetsAt").takeUnless { it == null }
+                    ?: item.opt("resets_at").takeUnless { it == null }
+                    ?: item.opt("resetAt").takeUnless { it == null }
+                    ?: item.opt("reset_at").takeUnless { it == null }
+            ),
+        )
+    }
+    return decoded
+}
+
 private fun decodeHostAccountStatus(rawValue: String?): HostAccountStatus {
     return when (rawValue?.trim()?.lowercase(Locale.US)) {
         "authenticated", "logged_in", "loggedin", "connected" -> HostAccountStatus.AUTHENTICATED
@@ -757,6 +797,17 @@ private fun decodeSingleSkillMetadata(item: JSONObject): SkillMetadata? {
         scope = item.stringOrNull("scope"),
         enabled = item.optBoolean("enabled", true),
     )
+}
+
+private fun JSONObject.optNumber(vararg keys: String): Int? {
+    keys.forEach { key ->
+        val value = opt(key)
+        when (value) {
+            is Number -> return value.toInt()
+            is String -> value.trim().toIntOrNull()?.let { return it }
+        }
+    }
+    return null
 }
 
 private fun decodeIndices(items: JSONArray?): List<Int> {
@@ -865,6 +916,12 @@ internal data class DecodedPlanContent(
     val steps: List<PlanStep>?,
 )
 
+internal data class DecodedCommandExecutionContent(
+    val status: String,
+    val command: String?,
+    val text: String,
+)
+
 private fun decodeFileChangeStructured(itemObject: JSONObject): FileChangeData {
     val status = itemObject.stringOrNull("status") ?: "completed"
     val path = itemObject.stringOrNull("path", "file", "file_path", "filePath")
@@ -911,6 +968,58 @@ internal fun decodePlanContent(itemObject: JSONObject): DecodedPlanContent {
         text = explanation ?: "Plan updated",
         explanation = explanation,
         steps = null,
+    )
+}
+
+internal fun isCommandExecutionItemType(rawType: String?): Boolean {
+    val normalized = normalizeItemType(rawType)
+    return normalized == "commandexecution"
+        || normalized == "commandexec"
+        || normalized == "terminalcommand"
+        || normalized == "terminalcommandexecution"
+        || normalized.startsWith("commandexecution")
+        || normalized.startsWith("commandexec")
+}
+
+internal fun decodeCommandExecutionContent(itemObject: JSONObject): DecodedCommandExecutionContent {
+    val status = itemObject.stringOrNull("status") ?: "completed"
+    val command = itemObject.stringOrNull(
+        "command",
+        "cmd",
+        "raw_command",
+        "rawCommand",
+        "commandLine",
+        "command_line",
+    )
+    val summary = itemObject.stringOrNull("summary", "message", "text", "output", "delta")
+    val contentText = decodeItemText(itemObject).takeIf { it.isNotBlank() }
+    val text = listOfNotNull(summary, contentText)
+        .distinct()
+        .joinToString("\n\n")
+        .trim()
+        .ifBlank {
+            val commandLabel = command ?: "command"
+            "${status.replaceFirstChar(Char::uppercaseChar)}: $commandLabel"
+        }
+    return DecodedCommandExecutionContent(
+        status = status,
+        command = command ?: contentText?.takeIf { it.isNotBlank() },
+        text = text,
+    )
+}
+
+internal fun decodeThreadTokenUsage(resultObject: JSONObject): ThreadTokenUsage? {
+    val usageObject = resultObject.objectOrNull("usage") ?: resultObject
+    val tokenLimit = usageObject.optInt("tokenLimit", usageObject.optInt("token_limit", -1))
+        .takeIf { it >= 0 }
+    val tokensUsed = usageObject.optInt("tokensUsed", usageObject.optInt("tokens_used", -1))
+        .takeIf { it >= 0 }
+    if (tokenLimit == null || tokensUsed == null) {
+        return null
+    }
+    return ThreadTokenUsage(
+        tokensUsed = tokensUsed.coerceAtMost(tokenLimit),
+        tokenLimit = tokenLimit,
     )
 }
 
