@@ -136,6 +136,9 @@ class AndrodexClient(
     private var collaborationModes: Set<CollaborationModeKind> = emptySet()
     private var hostAccountSnapshot: HostAccountSnapshot? = null
     private var supportsServiceTier = true
+    private var supportsThreadCompaction = true
+    private var supportsThreadRollback = true
+    private var supportsBackgroundTerminalCleanup = true
     private var supportsThreadFork = true
 
     val updates: SharedFlow<ClientUpdate> = updatesFlow.asSharedFlow()
@@ -309,6 +312,75 @@ class AndrodexClient(
                 }
                 throw error
             }
+        }
+    }
+
+    suspend fun compactThread(threadId: String) {
+        if (!supportsThreadCompaction) {
+            throw IllegalStateException("This host bridge does not support native thread compaction yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            sendRequest(
+                "thread/compact/start",
+                JSONObject().put("threadId", threadId),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedThreadCompaction(error)) {
+                throw IllegalStateException("This host bridge does not support native thread compaction yet. Update Androdex on the host and retry.")
+            }
+            throw error
+        }
+    }
+
+    suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int = 1,
+    ): ThreadLoadResult {
+        require(numTurns >= 1) { "Rollback requires dropping at least one turn." }
+        if (!supportsThreadRollback) {
+            throw IllegalStateException("This host bridge does not support native thread rollback yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            val result = sendRequest(
+                "thread/rollback",
+                JSONObject()
+                    .put("threadId", threadId)
+                    .put("numTurns", numTurns),
+            )
+            val threadObject = result.optJSONObject("thread") ?: JSONObject()
+            return ThreadLoadResult(
+                thread = decodeThreadSummary(threadObject),
+                messages = decodeMessagesFromThreadRead(threadId, threadObject),
+                runSnapshot = decodeThreadRunSnapshot(threadObject),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedThreadRollback(error)) {
+                throw IllegalStateException("This host bridge does not support native thread rollback yet. Update Androdex on the host and retry.")
+            }
+            throw error
+        }
+    }
+
+    suspend fun cleanBackgroundTerminals(threadId: String) {
+        if (!supportsBackgroundTerminalCleanup) {
+            throw IllegalStateException("This host bridge does not support native background terminal cleanup yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            sendRequest(
+                "thread/backgroundTerminals/clean",
+                JSONObject().put("threadId", threadId),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedBackgroundTerminalCleanup(error)) {
+                throw IllegalStateException("This host bridge does not support native background terminal cleanup yet. Update Androdex on the host and retry.")
+            }
+            throw error
         }
     }
 
@@ -1802,6 +1874,9 @@ class AndrodexClient(
                 selectedAccessMode = selectedAccessMode,
                 selectedServiceTier = selectedServiceTier,
                 supportsServiceTier = supportsServiceTier,
+                supportsThreadCompaction = supportsThreadCompaction,
+                supportsThreadRollback = supportsThreadRollback,
+                supportsBackgroundTerminalCleanup = supportsBackgroundTerminalCleanup,
                 supportsThreadFork = supportsThreadFork,
                 collaborationModes = collaborationModes,
                 threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
@@ -2337,6 +2412,33 @@ class AndrodexClient(
             return false
         }
         supportsThreadFork = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadCompaction(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadCompaction(error.code, error.message)) {
+            return false
+        }
+        supportsThreadCompaction = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadRollback(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadRollback(error.code, error.message)) {
+            return false
+        }
+        supportsThreadRollback = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedBackgroundTerminalCleanup(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedBackgroundTerminalCleanup(error.code, error.message)) {
+            return false
+        }
+        supportsBackgroundTerminalCleanup = false
         emitRuntimeConfig()
         return true
     }
@@ -2985,6 +3087,48 @@ internal fun shouldRetryThreadForkWithoutOverrides(errorCode: Int, errorMessage:
 }
 
 internal fun shouldTreatAsUnsupportedThreadFork(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/fork", "thread fork"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedThreadCompaction(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/compact/start", "thread compact", "context compaction", "compaction"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedThreadRollback(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/rollback", "thread rollback", "rollback"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedBackgroundTerminalCleanup(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf(
+            "thread/backgroundterminals/clean",
+            "background terminals",
+            "background terminal",
+            "terminal cleanup",
+            "terminal clean",
+        ),
+    )
+}
+
+private fun shouldTreatAsUnsupportedThreadMethod(
+    errorCode: Int,
+    errorMessage: String?,
+    methodHints: List<String>,
+): Boolean {
     if (errorCode == -32601) {
         return true
     }
@@ -2994,14 +3138,14 @@ internal fun shouldTreatAsUnsupportedThreadFork(errorCode: Int, errorMessage: St
         || normalizedMessage.contains("unknown method")
         || normalizedMessage.contains("not implemented")
         || normalizedMessage.contains("does not support")
-    val mentionsForkSpecificUnsupported = (normalizedMessage.contains("thread/fork") || normalizedMessage.contains("thread fork"))
+    val mentionsSpecificUnsupported = methodHints.any { normalizedMessage.contains(it) }
         && (normalizedMessage.contains("unsupported") || normalizedMessage.contains("not supported"))
 
     if (errorCode != -32600 && errorCode != -32602 && errorCode != -32000) {
-        return mentionsUnsupportedMethod || mentionsForkSpecificUnsupported
+        return mentionsUnsupportedMethod || mentionsSpecificUnsupported
     }
 
-    return mentionsUnsupportedMethod || mentionsForkSpecificUnsupported
+    return mentionsUnsupportedMethod || mentionsSpecificUnsupported
 }
 
 private fun Map<String, Any?>.toJsonObject(): JSONObject {

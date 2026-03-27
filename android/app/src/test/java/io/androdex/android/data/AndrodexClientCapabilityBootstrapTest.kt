@@ -98,4 +98,34 @@ class AndrodexClientCapabilityBootstrapTest {
             )
         )
     }
+
+    @Test
+    fun shouldTreatAsUnsupportedThreadRollback_matchesMethodSpecificErrors() {
+        assertTrue(
+            shouldTreatAsUnsupportedThreadRollback(
+                errorCode = -32000,
+                errorMessage = "thread/rollback is not supported by this host",
+            )
+        )
+    }
+
+    @Test
+    fun shouldTreatAsUnsupportedBackgroundTerminalCleanup_ignoresGenericRpcFailures() {
+        assertFalse(
+            shouldTreatAsUnsupportedBackgroundTerminalCleanup(
+                errorCode = -32000,
+                errorMessage = "Temporary relay issue",
+            )
+        )
+    }
+
+    @Test
+    fun shouldTreatAsUnsupportedThreadCompaction_matchesMethodNotFound() {
+        assertTrue(
+            shouldTreatAsUnsupportedThreadCompaction(
+                errorCode = -32601,
+                errorMessage = "Method not found",
+            )
+        )
+    }
 }

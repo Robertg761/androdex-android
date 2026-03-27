@@ -239,6 +239,9 @@ fun AndrodexApp(viewModel: MainViewModel) {
                         forkThreadOpen = true
                     }
                 },
+                onCompactThread = viewModel::compactSelectedThread,
+                onRollbackThread = viewModel::rollbackSelectedThread,
+                onCleanBackgroundTerminals = viewModel::cleanSelectedThreadBackgroundTerminals,
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::interruptSelectedThread,
                 onPauseQueue = viewModel::pauseSelectedThreadQueue,

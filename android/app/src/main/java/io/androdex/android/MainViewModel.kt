@@ -106,6 +106,9 @@ data class AndrodexUiState(
     val selectedAccessMode: AccessMode = AccessMode.ON_REQUEST,
     val selectedServiceTier: ServiceTier? = null,
     val supportsServiceTier: Boolean = true,
+    val supportsThreadCompaction: Boolean = true,
+    val supportsThreadRollback: Boolean = true,
+    val supportsBackgroundTerminalCleanup: Boolean = true,
     val supportsThreadFork: Boolean = true,
     val collaborationModes: Set<CollaborationModeKind> = emptySet(),
     val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
@@ -1527,6 +1530,64 @@ class MainViewModel(
         }
     }
 
+    fun compactSelectedThread() {
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isBusy
+            || current.isSendingMessage
+            || current.isInterruptingSelectedThread
+            || current.isThreadRunning(threadId)
+            || current.messages.isEmpty()
+        ) {
+            return
+        }
+
+        runBusyAction("Starting context compaction...") {
+            service.compactThread(threadId)
+        }
+    }
+
+    fun rollbackSelectedThread() {
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isBusy
+            || current.isSendingMessage
+            || current.isInterruptingSelectedThread
+            || current.isThreadRunning(threadId)
+            || current.messages.isEmpty()
+        ) {
+            return
+        }
+
+        runBusyAction("Rolling back the last turn...") {
+            service.rollbackThread(threadId)
+            gitWorkingDirectoryForThread(threadId, uiStateFlow.value)?.let { workingDirectory ->
+                loadGitSnapshot(
+                    threadId = threadId,
+                    workingDirectory = workingDirectory,
+                    loadDiff = false,
+                    suppressErrors = true,
+                )
+            }
+        }
+    }
+
+    fun cleanSelectedThreadBackgroundTerminals() {
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isBusy
+            || current.isSendingMessage
+            || current.isInterruptingSelectedThread
+            || current.isThreadRunning(threadId)
+        ) {
+            return
+        }
+
+        runBusyAction("Cleaning background terminals...") {
+            service.cleanBackgroundTerminals(threadId)
+        }
+    }
+
     fun forkSelectedThread(preferredProjectPath: String?) {
         val current = uiStateFlow.value
         val threadId = current.selectedThreadId ?: return
@@ -2414,6 +2475,9 @@ private fun applyServiceState(
         selectedAccessMode = serviceState.selectedAccessMode,
         selectedServiceTier = serviceState.selectedServiceTier,
         supportsServiceTier = serviceState.supportsServiceTier,
+        supportsThreadCompaction = serviceState.supportsThreadCompaction,
+        supportsThreadRollback = serviceState.supportsThreadRollback,
+        supportsBackgroundTerminalCleanup = serviceState.supportsBackgroundTerminalCleanup,
         supportsThreadFork = serviceState.supportsThreadFork,
         collaborationModes = serviceState.collaborationModes,
         threadRuntimeOverridesByThread = serviceState.threadRuntimeOverridesByThread,

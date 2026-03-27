@@ -61,6 +61,7 @@ Androdex does **not** run Codex on the phone itself.
 - reconnect from a saved pairing
 - model, access mode, service-tier, and per-thread runtime controls on Android
 - native thread fork actions on Android when the host bridge/runtime supports them
+- native thread maintenance actions on Android for context compaction, rollback, and background-terminal cleanup when the host bridge/runtime supports them
 - optional bridge-side Android push registration and run-completion forwarding
 
 ## Current Status
@@ -133,8 +134,9 @@ Use this after host-side changes to make sure Windows and macOS still behave the
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
 5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
-6. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
-7. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
+6. On an idle thread with history, confirm Android thread maintenance actions can compact context, roll back the last turn, and clean background terminals when the connected host advertises support. `thread/shellCommand` is still intentionally not exposed on Android.
+7. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
+8. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands
 

@@ -384,6 +384,16 @@ class AndrodexFeatureStateTest {
                     forkedFromThreadId = "thread-1",
                 )
             ),
+            messages = listOf(
+                ConversationMessage(
+                    id = "msg-1",
+                    threadId = "thread-9",
+                    role = ConversationRole.USER,
+                    kind = ConversationKind.CHAT,
+                    text = "Explore a new path",
+                    createdAtEpochMs = 1L,
+                )
+            ),
             availableModels = listOf(
                 ModelOption(
                     id = "gpt-5.4",
@@ -421,6 +431,9 @@ class AndrodexFeatureStateTest {
         assertTrue(route.state.runtime.reasoningOptions.any { it.value == "high" && it.selected })
         assertTrue(route.state.runtime.serviceTierOptions.any { it.value == "fast" && it.selected })
         assertEquals("Runtime: High • Fast", route.state.composer.runtimeButtonLabel)
+        assertTrue(route.state.compact.isEnabled)
+        assertTrue(route.state.rollback.isEnabled)
+        assertTrue(route.state.backgroundTerminals.isEnabled)
         assertEquals(2, route.state.fork.targets.size)
         assertEquals("Current project", route.state.fork.targets.first().title)
         assertEquals("Active workspace", route.state.fork.targets.last().title)
@@ -428,6 +441,38 @@ class AndrodexFeatureStateTest {
         assertTrue(appState.settings.serviceTierOptions.any { it.value == "fast" && it.selected })
         assertTrue(appState.settings.about.projectUrl.contains("github.com"))
         assertTrue(appState.settings.bridgeStatus.serviceTierMessage.contains("available", ignoreCase = true))
+    }
+
+    @Test
+    fun threadRoute_disablesMaintenanceActionsWhenHostSupportIsMissing() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            supportsThreadCompaction = false,
+            supportsThreadRollback = false,
+            supportsBackgroundTerminalCleanup = false,
+            messages = listOf(
+                ConversationMessage(
+                    id = "msg-1",
+                    threadId = "thread-9",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Done.",
+                    createdAtEpochMs = 1L,
+                )
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.compact.isEnabled)
+        assertTrue(route.state.compact.availabilityMessage!!.contains("compaction", ignoreCase = true))
+        assertFalse(route.state.rollback.isEnabled)
+        assertTrue(route.state.rollback.availabilityMessage!!.contains("rollback", ignoreCase = true))
+        assertFalse(route.state.backgroundTerminals.isEnabled)
+        assertTrue(route.state.backgroundTerminals.availabilityMessage!!.contains("background terminal", ignoreCase = true))
     }
 
     @Test

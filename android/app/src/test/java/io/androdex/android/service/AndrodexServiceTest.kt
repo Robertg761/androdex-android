@@ -8,6 +8,7 @@ import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ExecutionContent
 import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.FuzzyFileMatch
@@ -829,6 +830,94 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun compactThread_marksThreadRunningAndCallsRepository() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+
+        service.compactThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.compactedThreadIds)
+        assertTrue(service.state.value.runningThreadIds.contains("thread-1"))
+    }
+
+    @Test
+    fun rollbackThread_replacesTimelineWithRepositoryResult() = runTest {
+        val repository = FakeRepository().apply {
+            rollbackThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", "After rollback", null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "msg-after",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Only the older turn remains",
+                        createdAtEpochMs = 2L,
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-older",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", "Before rollback", null, null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.rollbackThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1:1"), repository.rollbackRequests)
+        assertEquals(
+            listOf("Only the older turn remains"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+        assertFalse(service.state.value.readyThreadIds.contains("thread-1"))
+        assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
+    }
+
+    @Test
+    fun cleanBackgroundTerminals_refreshesThreadAfterCleanup() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+
+        service.cleanBackgroundTerminals("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.cleanedBackgroundTerminalThreadIds)
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
     fun subagentUpdates_mergeAndAdoptThreadIdentityMetadata() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -1001,9 +1090,23 @@ private class FakeRepository : AndrodexRepositoryContract {
     val steeredTurns = mutableListOf<String>()
     val steeredTurnModes = mutableListOf<CollaborationModeKind?>()
     val interruptedTurns = mutableListOf<String>()
+    val compactedThreadIds = mutableListOf<String>()
+    val rollbackRequests = mutableListOf<String>()
+    val cleanedBackgroundTerminalThreadIds = mutableListOf<String>()
     var lastToolInputRequest: ToolUserInputRequest? = null
     var lastToolInputResponse: ToolUserInputResponse? = null
     var loadThreadError: Throwable? = null
+    var rollbackThreadResult = ThreadLoadResult(
+        thread = null,
+        messages = emptyList(),
+        runSnapshot = ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = null,
+            latestTurnTerminalState = null,
+            shouldAssumeRunningFromLatestTurn = false,
+        ),
+    )
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
         loadedThreadIds += threadId
@@ -1059,6 +1162,22 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {
         interruptedTurns += "$threadId:$turnId"
+    }
+
+    override suspend fun compactThread(threadId: String) {
+        compactedThreadIds += threadId
+    }
+
+    override suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int,
+    ): ThreadLoadResult {
+        rollbackRequests += "$threadId:$numTurns"
+        return rollbackThreadResult
+    }
+
+    override suspend fun cleanBackgroundTerminals(threadId: String) {
+        cleanedBackgroundTerminalThreadIds += threadId
     }
 
     override suspend fun registerPushNotifications(

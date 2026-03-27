@@ -193,8 +193,16 @@ internal data class ThreadTimelineUiState(
     val canResumeQueue: Boolean,
     val pendingToolInputs: List<ToolUserInputCardUiState>,
     val runtime: ThreadRuntimeUiState,
+    val compact: ThreadActionUiState,
+    val rollback: ThreadActionUiState,
+    val backgroundTerminals: ThreadActionUiState,
     val fork: ThreadForkUiState,
     val composer: ComposerUiState,
+)
+
+internal data class ThreadActionUiState(
+    val isEnabled: Boolean,
+    val availabilityMessage: String?,
 )
 
 internal data class ToolUserInputCardUiState(
@@ -550,6 +558,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             )
         }
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
+    val maintenanceActionBusy = isBusy || isSendingMessage || isInterruptingSelectedThread
+    val hasThreadHistory = messages.isNotEmpty()
     val workingDirectory = selectedThread?.cwd
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -643,6 +653,49 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             && queueState?.isPaused == true,
         pendingToolInputs = pendingToolInputs,
         runtime = threadRuntime,
+        compact = ThreadActionUiState(
+            isEnabled = supportsThreadCompaction
+                && connectionStatus == ConnectionStatus.CONNECTED
+                && !maintenanceActionBusy
+                && !isThreadRunning
+                && hasThreadHistory,
+            availabilityMessage = when {
+                !supportsThreadCompaction -> "Update the host bridge to enable native thread compaction."
+                connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to compact this thread."
+                !hasThreadHistory -> "No thread history is available to compact yet."
+                isThreadRunning -> "Wait for the current run to finish before compacting this thread."
+                maintenanceActionBusy -> "Wait for the current action to finish before compacting this thread."
+                else -> null
+            },
+        ),
+        rollback = ThreadActionUiState(
+            isEnabled = supportsThreadRollback
+                && connectionStatus == ConnectionStatus.CONNECTED
+                && !maintenanceActionBusy
+                && !isThreadRunning
+                && hasThreadHistory,
+            availabilityMessage = when {
+                !supportsThreadRollback -> "Update the host bridge to enable native thread rollback."
+                connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to roll back this thread."
+                !hasThreadHistory -> "No thread history is available to roll back yet."
+                isThreadRunning -> "Wait for the current run to finish before rolling back this thread."
+                maintenanceActionBusy -> "Wait for the current action to finish before rolling back this thread."
+                else -> null
+            },
+        ),
+        backgroundTerminals = ThreadActionUiState(
+            isEnabled = supportsBackgroundTerminalCleanup
+                && connectionStatus == ConnectionStatus.CONNECTED
+                && !maintenanceActionBusy
+                && !isThreadRunning,
+            availabilityMessage = when {
+                !supportsBackgroundTerminalCleanup -> "Update the host bridge to enable background terminal cleanup."
+                connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to clean background terminals."
+                isThreadRunning -> "Wait for the current run to finish before cleaning background terminals."
+                maintenanceActionBusy -> "Wait for the current action to finish before cleaning background terminals."
+                else -> null
+            },
+        ),
         fork = ThreadForkUiState(
             isEnabled = supportsThreadFork
                 && connectionStatus == ConnectionStatus.CONNECTED

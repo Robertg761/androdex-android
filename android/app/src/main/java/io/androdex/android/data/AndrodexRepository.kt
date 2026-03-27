@@ -90,6 +90,18 @@ interface AndrodexRepositoryContract {
     suspend fun setSelectedAccessMode(accessMode: AccessMode) = Unit
     suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) = Unit
     suspend fun setThreadRuntimeOverride(threadId: String, runtimeOverride: ThreadRuntimeOverride?) = Unit
+    suspend fun compactThread(threadId: String) {
+        throw UnsupportedOperationException("Thread compaction is not available in this repository implementation.")
+    }
+    suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int = 1,
+    ): ThreadLoadResult {
+        throw UnsupportedOperationException("Thread rollback is not available in this repository implementation.")
+    }
+    suspend fun cleanBackgroundTerminals(threadId: String) {
+        throw UnsupportedOperationException("Background terminal cleanup is not available in this repository implementation.")
+    }
     suspend fun forkThread(
         threadId: String,
         preferredProjectPath: String? = null,
@@ -246,6 +258,21 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         runtimeOverride: ThreadRuntimeOverride?,
     ) {
         client.setThreadRuntimeOverride(threadId, runtimeOverride)
+    }
+
+    override suspend fun compactThread(threadId: String) {
+        client.compactThread(threadId)
+    }
+
+    override suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int,
+    ): ThreadLoadResult {
+        return client.rollbackThread(threadId, numTurns)
+    }
+
+    override suspend fun cleanBackgroundTerminals(threadId: String) {
+        client.cleanBackgroundTerminals(threadId)
     }
 
     override suspend fun forkThread(

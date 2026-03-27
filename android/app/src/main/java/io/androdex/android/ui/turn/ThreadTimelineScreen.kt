@@ -130,6 +130,9 @@ internal fun ThreadTimelineScreen(
     onRemoveComposerAttachment: (String) -> Unit,
     onOpenRuntime: () -> Unit,
     onOpenFork: () -> Unit,
+    onCompactThread: () -> Unit,
+    onRollbackThread: () -> Unit,
+    onCleanBackgroundTerminals: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -165,6 +168,8 @@ internal fun ThreadTimelineScreen(
     val listState = remember { LazyListState() }
     val coroutineScope = rememberCoroutineScope()
     var overflowMenuExpanded by remember { mutableStateOf(false) }
+    var rollbackDialogOpen by remember { mutableStateOf(false) }
+    var cleanBackgroundTerminalsDialogOpen by remember { mutableStateOf(false) }
     val showJumpToLatest by remember {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
@@ -236,6 +241,30 @@ internal fun ThreadTimelineScreen(
                                     onOpenFork()
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Compact context") },
+                                enabled = state.compact.isEnabled,
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    onCompactThread()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Roll back last turn") },
+                                enabled = state.rollback.isEnabled,
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    rollbackDialogOpen = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clean background terminals") },
+                                enabled = state.backgroundTerminals.isEnabled,
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    cleanBackgroundTerminalsDialogOpen = true
+                                },
+                            )
                         }
                     }
                 },
@@ -251,6 +280,30 @@ internal fun ThreadTimelineScreen(
             onDismiss = onDismissGitAlert,
             onAction = onHandleGitAlertAction,
         )
+        if (rollbackDialogOpen) {
+            ThreadMaintenanceDialog(
+                title = "Roll back the last turn?",
+                message = "This removes the latest turn from the thread history only. It does not revert any local file changes the agent already made.",
+                confirmLabel = "Roll Back",
+                onDismiss = { rollbackDialogOpen = false },
+                onConfirm = {
+                    rollbackDialogOpen = false
+                    onRollbackThread()
+                },
+            )
+        }
+        if (cleanBackgroundTerminalsDialogOpen) {
+            ThreadMaintenanceDialog(
+                title = "Clean background terminals?",
+                message = "This stops background terminal work still attached to this thread and refreshes the timeline state from the host.",
+                confirmLabel = "Clean",
+                onDismiss = { cleanBackgroundTerminalsDialogOpen = false },
+                onConfirm = {
+                    cleanBackgroundTerminalsDialogOpen = false
+                    onCleanBackgroundTerminals()
+                },
+            )
+        }
         GitCommitDialog(
             state = state.git.commitDialog,
             onDismiss = onDismissGitCommit,
@@ -410,6 +463,31 @@ private fun ForkedThreadBanner(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+@Composable
+private fun ThreadMaintenanceDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable

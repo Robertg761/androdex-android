@@ -90,6 +90,9 @@ data class AndrodexServiceState(
     val selectedAccessMode: AccessMode = AccessMode.ON_REQUEST,
     val selectedServiceTier: ServiceTier? = null,
     val supportsServiceTier: Boolean = true,
+    val supportsThreadCompaction: Boolean = true,
+    val supportsThreadRollback: Boolean = true,
+    val supportsBackgroundTerminalCleanup: Boolean = true,
     val supportsThreadFork: Boolean = true,
     val collaborationModes: Set<CollaborationModeKind> = emptySet(),
     val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
@@ -470,6 +473,43 @@ class AndrodexService(
         repository.setThreadRuntimeOverride(threadId, runtimeOverride)
     }
 
+    suspend fun compactThread(threadId: String) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        clearThreadOutcome(normalizedThreadId)
+        repository.compactThread(normalizedThreadId)
+        markThreadRunning(normalizedThreadId, turnId = null)
+    }
+
+    suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int = 1,
+    ) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val result = repository.rollbackThread(normalizedThreadId, numTurns)
+        stateFlow.update { current ->
+            current.copy(
+                threads = mergeRecoveredNotificationThread(current.threads, result.thread),
+                selectedThreadTitle = if (current.selectedThreadId == normalizedThreadId) {
+                    result.thread?.title ?: current.selectedThreadTitle
+                } else {
+                    current.selectedThreadTitle
+                },
+                timelineByThread = current.timelineByThread + (normalizedThreadId to result.messages),
+                readyThreadIds = current.readyThreadIds - normalizedThreadId,
+                failedThreadIds = current.failedThreadIds - normalizedThreadId,
+            )
+        }
+        syncThreadRunStateFromSnapshot(normalizedThreadId, result.runSnapshot)
+        refreshThreadsInternal()
+    }
+
+    suspend fun cleanBackgroundTerminals(threadId: String) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        repository.cleanBackgroundTerminals(normalizedThreadId)
+        loadThreadIntoState(normalizedThreadId)
+        refreshThreadsInternal()
+    }
+
     suspend fun forkThread(
         sourceThreadId: String,
         preferredProjectPath: String? = null,
@@ -790,6 +830,9 @@ class AndrodexService(
                         selectedAccessMode = update.selectedAccessMode,
                         selectedServiceTier = update.selectedServiceTier,
                         supportsServiceTier = update.supportsServiceTier,
+                        supportsThreadCompaction = update.supportsThreadCompaction,
+                        supportsThreadRollback = update.supportsThreadRollback,
+                        supportsBackgroundTerminalCleanup = update.supportsBackgroundTerminalCleanup,
                         supportsThreadFork = update.supportsThreadFork,
                         collaborationModes = update.collaborationModes,
                         threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
