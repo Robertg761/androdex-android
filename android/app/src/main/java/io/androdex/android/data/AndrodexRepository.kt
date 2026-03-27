@@ -1,6 +1,7 @@
 package io.androdex.android.data
 
 import android.content.Context
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
@@ -57,6 +58,11 @@ interface AndrodexRepositoryContract {
         attachments: List<ImageAttachment> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
+    )
+    suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String? = null,
     )
     suspend fun steerTurn(
         threadId: String,
@@ -168,6 +174,14 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         collaborationMode: CollaborationModeKind?,
     ) {
         client.startTurn(threadId, userInput, attachments, skillMentions, collaborationMode)
+    }
+
+    override suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String?,
+    ) {
+        client.startReview(threadId, target, baseBranch)
     }
 
     override suspend fun steerTurn(

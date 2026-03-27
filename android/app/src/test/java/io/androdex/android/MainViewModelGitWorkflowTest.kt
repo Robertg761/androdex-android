@@ -1,5 +1,6 @@
 package io.androdex.android
 
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
@@ -322,6 +323,12 @@ private class GitTestRepository : AndrodexRepositoryContract {
         attachments: List<ImageAttachment>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
+    ) = Unit
+
+    override suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String?,
     ) = Unit
 
     override suspend fun steerTurn(

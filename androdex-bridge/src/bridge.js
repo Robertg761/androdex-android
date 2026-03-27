@@ -15,6 +15,7 @@ const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
+const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
@@ -256,6 +257,9 @@ function startBridge() {
       return;
     }
     if (handleGitRequest(normalizedRawMessage, sendApplicationResponse)) {
+      return;
+    }
+    if (handleThreadContextRequest(normalizedRawMessage, sendApplicationResponse)) {
       return;
     }
     desktopRefresher.handleInbound(normalizedRawMessage);

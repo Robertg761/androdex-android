@@ -85,17 +85,29 @@ internal fun PairingScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text = "Connect to your PC",
+                    text = "Connect to your host",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Run androdex pair once on your host to trust this phone, then reconnect from saved pairing later. Once connected, choose or switch projects directly from Android.",
+                    text = "Trust the host once with `androdex pair`, then reconnect from saved pairing on future launches. Android stays the remote control while Codex keeps running on your PC.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
+                if (state.hasSavedPairing || state.defaultRelayUrl != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (state.hasSavedPairing) {
+                            StatusChip(label = "Saved pair")
+                        }
+                        if (state.defaultRelayUrl != null) {
+                            StatusChip(label = "Relay-ready")
+                        }
+                        StatusChip(label = "Host-local")
+                    }
+                }
                 state.defaultRelayUrl?.let { defaultRelayUrl ->
                     Spacer(modifier = Modifier.height(12.dp))
                     Surface(
@@ -115,6 +127,19 @@ internal fun PairingScreen(
             }
 
             Spacer(modifier = Modifier.height(28.dp))
+
+            state.trustedPair?.let { trustedPair ->
+                Text(
+                    text = "Trusted host",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                )
+                TrustedPairCard(state = trustedPair, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             Card(
                 shape = MaterialTheme.shapes.large,
@@ -167,11 +192,6 @@ internal fun PairingScreen(
                         }
                     }
                 }
-            }
-
-            state.trustedPair?.let { trustedPair ->
-                Spacer(modifier = Modifier.height(16.dp))
-                TrustedPairCard(state = trustedPair, modifier = Modifier.fillMaxWidth())
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -242,5 +262,20 @@ internal fun PairingScreen(
 
             Spacer(modifier = Modifier.weight(1f))
         }
+    }
+}
+
+@Composable
+private fun StatusChip(label: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        )
     }
 }

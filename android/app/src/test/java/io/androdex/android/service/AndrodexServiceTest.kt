@@ -1,5 +1,6 @@
 package io.androdex.android.service
 
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
@@ -492,6 +493,32 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun startReview_sendsReviewRpcAndAddsOptimisticTimelineRow() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.startReview("thread-1", ComposerReviewTarget.UNCOMMITTED_CHANGES)
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1:UNCOMMITTED_CHANGES:"), repository.startedTurns)
+        assertTrue(service.state.value.runningThreadIds.contains("thread-1"))
+        assertEquals(
+            "Review current changes",
+            service.state.value.timelineByThread["thread-1"].orEmpty().single().text,
+        )
+    }
+
+    @Test
     fun subagentUpdates_mergeAndAdoptThreadIdentityMetadata() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -694,6 +721,14 @@ private class FakeRepository : AndrodexRepositoryContract {
     ) {
         startedTurns += "$threadId:$userInput"
         startedTurnModes += collaborationMode
+    }
+
+    override suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String?,
+    ) {
+        startedTurns += "$threadId:${target.name}:${baseBranch.orEmpty()}"
     }
 
     override suspend fun steerTurn(

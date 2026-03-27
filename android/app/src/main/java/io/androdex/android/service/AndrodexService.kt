@@ -28,6 +28,8 @@ import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.ComposerReviewTarget
+import io.androdex.android.reviewRequestText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -335,6 +337,33 @@ class AndrodexService(
                 attachments = attachments,
                 createdAtEpochMs = System.currentTimeMillis(),
             )
+        )
+    }
+
+    suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String? = null,
+    ) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        clearThreadOutcome(normalizedThreadId)
+        repository.startReview(
+            threadId = normalizedThreadId,
+            target = target,
+            baseBranch = baseBranch,
+        )
+        markThreadRunning(normalizedThreadId, turnId = null)
+        appendMessage(
+            threadId = normalizedThreadId,
+            message = ConversationMessage(
+                id = UUID.randomUUID().toString(),
+                threadId = normalizedThreadId,
+                role = ConversationRole.USER,
+                kind = ConversationKind.CHAT,
+                text = reviewRequestText(target, baseBranch),
+                attachments = emptyList(),
+                createdAtEpochMs = System.currentTimeMillis(),
+            ),
         )
     }
 

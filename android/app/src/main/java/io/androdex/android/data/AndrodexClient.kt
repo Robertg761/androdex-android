@@ -20,6 +20,7 @@ import io.androdex.android.crypto.secureProtocolVersion
 import io.androdex.android.crypto.sha256
 import io.androdex.android.crypto.signEd25519
 import io.androdex.android.crypto.verifyEd25519
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
@@ -577,6 +578,20 @@ class AndrodexClient(
                 throw error
             }
         }
+    }
+
+    suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String? = null,
+    ) {
+        resumeThread(threadId)
+        val params = buildReviewStartParams(
+            threadId = threadId,
+            target = target,
+            baseBranch = baseBranch,
+        )
+        sendRequestWithAccessModeFallback("review/start", params)
     }
 
     suspend fun steerTurn(
@@ -2351,6 +2366,41 @@ internal fun buildTurnSteerPayloadSpec(
         reasoningEffort = reasoningEffort,
     )?.let { params["collaborationMode"] = it }
     return params
+}
+
+internal fun buildReviewStartParams(
+    threadId: String,
+    target: ComposerReviewTarget,
+    baseBranch: String? = null,
+): JSONObject {
+    return buildReviewStartPayloadSpec(
+        threadId = threadId,
+        target = target,
+        baseBranch = baseBranch,
+    ).toJsonObject()
+}
+
+internal fun buildReviewStartPayloadSpec(
+    threadId: String,
+    target: ComposerReviewTarget,
+    baseBranch: String? = null,
+): Map<String, Any?> {
+    val targetObject = linkedMapOf<String, Any?>(
+        "type" to when (target) {
+            ComposerReviewTarget.UNCOMMITTED_CHANGES -> "uncommittedChanges"
+            ComposerReviewTarget.BASE_BRANCH -> "baseBranch"
+        },
+    )
+    if (target == ComposerReviewTarget.BASE_BRANCH) {
+        val normalizedBaseBranch = baseBranch?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: throw IllegalArgumentException("Choose a base branch before starting this review.")
+        targetObject["branch"] = normalizedBaseBranch
+    }
+    return linkedMapOf(
+        "threadId" to threadId,
+        "delivery" to "inline",
+        "target" to targetObject,
+    )
 }
 
 internal fun buildCollaborationModePayload(

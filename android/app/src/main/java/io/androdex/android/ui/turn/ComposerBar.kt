@@ -39,11 +39,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ComposerSlashCommand
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.SkillMetadata
-import io.androdex.android.ui.state.ComposerSubmitMode
 import io.androdex.android.ui.state.ComposerUiState
 
 @Composable
@@ -52,6 +52,8 @@ internal fun ComposerBar(
     onTextChange: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
+    onSelectReviewTarget: (ComposerReviewTarget) -> Unit,
+    onRemoveReviewSelection: () -> Unit,
     onSelectFileAutocomplete: (FuzzyFileMatch) -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
     onSelectSkillAutocomplete: (SkillMetadata) -> Unit,
@@ -96,6 +98,20 @@ internal fun ComposerBar(
                         enabled = state.subagentsEnabled,
                         label = {
                             Text(if (state.isSubagentsEnabled) "Subagents on" else "Subagents")
+                        },
+                    )
+                    FilterChip(
+                        selected = state.isReviewModeEnabled,
+                        onClick = {
+                            if (state.isReviewModeEnabled) {
+                                onRemoveReviewSelection()
+                            } else {
+                                onSelectSlashCommand(ComposerSlashCommand.REVIEW)
+                            }
+                        },
+                        enabled = state.inputEnabled || state.isReviewModeEnabled,
+                        label = {
+                            Text(if (state.isReviewModeEnabled) "Review on" else "Review")
                         },
                     )
                     FilterChip(
@@ -147,6 +163,33 @@ internal fun ComposerBar(
                         label = "Subagents",
                         tint = Color(0xFF0F766E),
                         onRemove = { onSubagentsModeChanged(false) },
+                    )
+                }
+            }
+
+            if (state.isReviewModeEnabled) {
+                ComposerChipRow {
+                    ComposerChip(
+                        label = "Review",
+                        tint = Color(0xFFB45309),
+                        onRemove = onRemoveReviewSelection,
+                    )
+                    FilterChip(
+                        selected = state.reviewTarget == ComposerReviewTarget.UNCOMMITTED_CHANGES,
+                        onClick = { onSelectReviewTarget(ComposerReviewTarget.UNCOMMITTED_CHANGES) },
+                        enabled = true,
+                        label = { Text(ComposerReviewTarget.UNCOMMITTED_CHANGES.title) },
+                    )
+                    FilterChip(
+                        selected = state.reviewTarget == ComposerReviewTarget.BASE_BRANCH,
+                        onClick = { onSelectReviewTarget(ComposerReviewTarget.BASE_BRANCH) },
+                        enabled = !state.reviewBaseBranchLabel.isNullOrEmpty(),
+                        label = {
+                            Text(
+                                state.reviewBaseBranchLabel?.let { "Base branch ($it)" }
+                                    ?: ComposerReviewTarget.BASE_BRANCH.title
+                            )
+                        },
                     )
                 }
             }
@@ -208,26 +251,7 @@ internal fun ComposerBar(
                     onValueChange = onTextChange,
                     modifier = Modifier.weight(1f),
                     placeholder = {
-                        Text(
-                            if (state.isPlanModeEnabled && state.isSubagentsEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
-                                "Queue a delegated plan request for when this run finishes"
-                            } else if (state.isPlanModeEnabled && state.isSubagentsEnabled) {
-                                "Ask Codex to plan and delegate the work"
-                            } else if (state.isSubagentsEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
-                                "Queue a delegated follow-up for when this run finishes"
-                            } else if (state.isSubagentsEnabled) {
-                                "Ask anything... @files, \$skills, /commands"
-                            } else if (state.isPlanModeEnabled && state.submitMode == ComposerSubmitMode.QUEUE) {
-                                "Queue a plan request for when this run finishes"
-                            } else if (state.isPlanModeEnabled) {
-                                "Ask Codex to make a plan before executing"
-                            } else if (state.submitMode == ComposerSubmitMode.QUEUE) {
-                                "Queue a follow-up for when this run finishes"
-                            } else {
-                                "Ask anything... @files, \$skills, /commands"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        Text(state.placeholderText, style = MaterialTheme.typography.bodyMedium)
                     },
                     enabled = state.inputEnabled,
                     shape = RoundedCornerShape(24.dp),
@@ -270,26 +294,7 @@ internal fun ComposerBar(
                                 color = MaterialTheme.colorScheme.onPrimary,
                             )
                         } else {
-                            Text(
-                                if (state.submitMode == ComposerSubmitMode.QUEUE) {
-                                    if (state.isPlanModeEnabled && state.isSubagentsEnabled) {
-                                        if (state.queuedCount > 0) "Queue Delegate (${state.queuedCount + 1})" else "Queue Delegate"
-                                    } else if (state.isPlanModeEnabled) {
-                                        if (state.queuedCount > 0) "Queue Plan (${state.queuedCount + 1})" else "Queue Plan"
-                                    } else if (state.isSubagentsEnabled) {
-                                        if (state.queuedCount > 0) "Queue Delegate (${state.queuedCount + 1})" else "Queue Delegate"
-                                    } else {
-                                        if (state.queuedCount > 0) "Queue (${state.queuedCount + 1})" else "Queue"
-                                    }
-                                } else {
-                                    when {
-                                        state.isPlanModeEnabled && state.isSubagentsEnabled -> "Delegate"
-                                        state.isPlanModeEnabled -> "Plan"
-                                        state.isSubagentsEnabled -> "Delegate"
-                                        else -> "Send"
-                                    }
-                                }
-                            )
+                            Text(state.submitButtonLabel)
                         }
                     }
                 } else {

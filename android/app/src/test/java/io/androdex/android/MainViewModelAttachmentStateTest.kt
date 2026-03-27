@@ -1,5 +1,6 @@
 package io.androdex.android
 
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
@@ -261,6 +262,12 @@ private class AttachmentRepository : AndrodexRepositoryContract {
         startedTurnInputs += "$threadId:$userInput"
         startedTurnAttachments += attachments
     }
+
+    override suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String?,
+    ) = Unit
 
     override suspend fun steerTurn(
         threadId: String,

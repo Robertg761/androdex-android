@@ -1,5 +1,6 @@
 package io.androdex.android
 
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
@@ -37,6 +38,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -212,6 +214,91 @@ class MainViewModelComposerAutocompleteTest {
             repository.startedTurnSkillMentions,
         )
     }
+
+    @Test
+    fun reviewSlashCommand_armsInlineReviewAndAllowsTargetSwitching() = runTest(dispatcher) {
+        val repository = ComposerRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("/review")
+        viewModel.selectSlashCommand(ComposerSlashCommand.REVIEW)
+
+        val armedState = viewModel.uiState.value
+        assertEquals(
+            ComposerReviewTarget.UNCOMMITTED_CHANGES,
+            armedState.composerReviewSelectionByThread["thread-1"]?.target,
+        )
+        assertEquals("", armedState.composerText)
+
+        viewModel.updateComposerReviewTarget(ComposerReviewTarget.BASE_BRANCH)
+        val switchedState = viewModel.uiState.value
+        assertEquals(ComposerReviewTarget.BASE_BRANCH, switchedState.composerReviewSelectionByThread["thread-1"]?.target)
+        assertEquals("main", switchedState.composerReviewSelectionByThread["thread-1"]?.baseBranch)
+    }
+
+    @Test
+    fun reviewMode_clearsWhenDraftTextBecomesNonReviewContent() = runTest(dispatcher) {
+        val repository = ComposerRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.selectSlashCommand(ComposerSlashCommand.REVIEW)
+        assertNotNull(viewModel.uiState.value.composerReviewSelectionByThread["thread-1"])
+
+        viewModel.updateComposerText("Please review this")
+
+        assertFalse(viewModel.uiState.value.composerReviewSelectionByThread.containsKey("thread-1"))
+    }
+
+    @Test
+    fun sendMessage_routesReviewRequestsThroughReviewRpc() = runTest(dispatcher) {
+        val repository = ComposerRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.selectSlashCommand(ComposerSlashCommand.REVIEW)
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf("thread-1:UNCOMMITTED_CHANGES:"),
+            repository.startedReviews,
+        )
+        assertTrue(repository.startedTurns.isEmpty())
+    }
+
+    @Test
+    fun slashCommandFiltering_keepsReviewCommandVisible() {
+        assertTrue(ComposerSlashCommand.filtered("").contains(ComposerSlashCommand.REVIEW))
+    }
 }
 
 private class ComposerRepository : AndrodexRepositoryContract {
@@ -221,6 +308,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
     var skills: List<SkillMetadata> = emptyList()
     val startedTurns = mutableListOf<String>()
     val startedTurnSkillMentions = mutableListOf<List<TurnSkillMention>>()
+    val startedReviews = mutableListOf<String>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -289,6 +377,14 @@ private class ComposerRepository : AndrodexRepositoryContract {
     ) {
         startedTurns += "$threadId:$userInput"
         startedTurnSkillMentions += skillMentions
+    }
+
+    override suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String?,
+    ) {
+        startedReviews += "$threadId:${target.name}:${baseBranch.orEmpty()}"
     }
 
     override suspend fun steerTurn(

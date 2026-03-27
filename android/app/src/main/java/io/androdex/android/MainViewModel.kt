@@ -71,6 +71,7 @@ data class AndrodexUiState(
     val composerDraftsByThread: Map<String, String> = emptyMap(),
     val composerPlanModeByThread: Set<String> = emptySet(),
     val composerSubagentsByThread: Set<String> = emptySet(),
+    val composerReviewSelectionByThread: Map<String, ComposerReviewSelection> = emptyMap(),
     val composerAttachmentsByThread: Map<String, List<ComposerImageAttachment>> = emptyMap(),
     val composerMentionedFilesByThread: Map<String, List<ComposerMentionedFile>> = emptyMap(),
     val composerMentionedSkillsByThread: Map<String, List<ComposerMentionedSkill>> = emptyMap(),
@@ -207,6 +208,9 @@ class MainViewModel(
                 composerDraftsByThread = nextDrafts,
             )
         }
+        if (value.isNotBlank()) {
+            clearComposerReviewSelectionIfNeededForNonReviewContent()
+        }
         refreshComposerAutocomplete(value)
     }
 
@@ -218,6 +222,9 @@ class MainViewModel(
                 isComposerPlanMode = enabled,
             )
         }
+        if (enabled) {
+            clearComposerReviewSelectionIfNeededForNonReviewContent()
+        }
     }
 
     fun updateComposerSubagentsEnabled(enabled: Boolean) {
@@ -228,13 +235,52 @@ class MainViewModel(
                 isComposerSubagentsEnabled = enabled,
             )
         }
+        if (enabled) {
+            clearComposerReviewSelectionIfNeededForNonReviewContent()
+        }
         if (!enabled) {
             clearSlashCommandAutocomplete()
         }
     }
 
+    fun updateComposerReviewTarget(target: ComposerReviewTarget) {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            val currentReview = current.composerReviewSelectionByThread[threadId]
+            if (currentReview == null && !canArmReviewSelection(current, threadId)) {
+                return@update current
+            }
+            val nextSelection = when (target) {
+                ComposerReviewTarget.UNCOMMITTED_CHANGES -> ComposerReviewSelection(target = target)
+                ComposerReviewTarget.BASE_BRANCH -> {
+                    val branchName = currentReview?.baseBranch
+                        ?: current.gitStateForThread(threadId)?.branchTargets?.defaultBranch
+                        ?: current.gitStateForThread(threadId)?.status?.currentBranch
+                    ComposerReviewSelection(
+                        target = target,
+                        baseBranch = branchName?.trim()?.takeIf { it.isNotEmpty() },
+                    )
+                }
+            }
+            current.copy(
+                composerReviewSelectionByThread = current.composerReviewSelectionByThread + (threadId to nextSelection),
+            )
+        }
+        clearSlashCommandAutocomplete()
+    }
+
+    fun clearComposerReviewSelection() {
+        uiStateFlow.update { current ->
+            val threadId = current.selectedThreadId ?: return@update current
+            current.copy(
+                composerReviewSelectionByThread = current.composerReviewSelectionByThread - threadId,
+            )
+        }
+    }
+
     fun beginComposerAttachmentIntake(requestedCount: Int): ComposerAttachmentIntakeReservation? {
         var reservation: ComposerAttachmentIntakeReservation? = null
+        var shouldClearReviewSelection = false
         uiStateFlow.update { current ->
             val threadId = current.selectedThreadId ?: return@update current
             val existingAttachments = current.composerAttachmentsByThread[threadId].orEmpty()
@@ -250,6 +296,7 @@ class MainViewModel(
                 service.reportError("Only $MAX_COMPOSER_IMAGE_ATTACHMENTS images are allowed per message.")
             }
 
+            shouldClearReviewSelection = true
             val acceptedIds = List(intakePlan.acceptedCount) { UUID.randomUUID().toString() }
             reservation = ComposerAttachmentIntakeReservation(
                 threadId = threadId,
@@ -267,6 +314,9 @@ class MainViewModel(
                     },
                 ),
             )
+        }
+        if (shouldClearReviewSelection) {
+            clearComposerReviewSelectionIfNeededForNonReviewContent()
         }
         return reservation
     }
@@ -311,6 +361,7 @@ class MainViewModel(
     }
 
     fun selectFileAutocomplete(item: FuzzyFileMatch) {
+        clearComposerReviewSelectionIfNeededForNonReviewContent()
         uiStateFlow.update { current ->
             val threadId = current.selectedThreadId ?: return@update current
             val fullPath = item.path.trim().ifEmpty { item.fileName }
@@ -358,6 +409,7 @@ class MainViewModel(
     }
 
     fun selectSkillAutocomplete(skill: SkillMetadata) {
+        clearComposerReviewSelectionIfNeededForNonReviewContent()
         uiStateFlow.update { current ->
             val threadId = current.selectedThreadId ?: return@update current
             val normalizedSkillName = skill.name.trim()
@@ -405,6 +457,32 @@ class MainViewModel(
 
     fun selectSlashCommand(command: ComposerSlashCommand) {
         when (command) {
+            ComposerSlashCommand.REVIEW -> {
+                uiStateFlow.update { current ->
+                    val threadId = current.selectedThreadId ?: return@update current
+                    val nextText = removingTrailingSlashCommandToken(current.composerText)
+                        ?: current.composerText
+                    if (current.composerReviewSelectionByThread[threadId] != null
+                        || nextText.isNotBlank()
+                        || current.composerAttachmentsByThread[threadId].orEmpty().isNotEmpty()
+                        || current.composerMentionedFilesByThread[threadId].orEmpty().isNotEmpty()
+                        || current.composerMentionedSkillsByThread[threadId].orEmpty().isNotEmpty()
+                        || current.isComposerPlanMode
+                        || current.isComposerSubagentsEnabled
+                    ) {
+                        return@update current
+                    }
+                    current.copy(
+                        composerText = nextText,
+                        composerDraftsByThread = current.composerDraftsByThread.updatedThreadDraft(threadId, nextText),
+                        composerReviewSelectionByThread = current.composerReviewSelectionByThread + (
+                            threadId to ComposerReviewSelection(
+                                target = ComposerReviewTarget.UNCOMMITTED_CHANGES,
+                            )
+                        ),
+                    )
+                }
+            }
             ComposerSlashCommand.SUBAGENTS -> {
                 uiStateFlow.update { current ->
                     val threadId = current.selectedThreadId ?: return@update current
@@ -458,6 +536,7 @@ class MainViewModel(
             || current.composerMentionedFilesByThread[threadId].orEmpty().isNotEmpty()
             || current.composerMentionedSkillsByThread[threadId].orEmpty().isNotEmpty()
             || current.isComposerSubagentsEnabled
+            || current.composerReviewSelectionByThread[threadId] != null
         ) {
             return
         }
@@ -1090,19 +1169,20 @@ class MainViewModel(
         val current = uiStateFlow.value
         val rawInput = current.composerText
         val subagentsEnabled = current.isComposerSubagentsEnabled
-        val threadId = current.selectedThreadId
-        val composerAttachments = threadId?.let { current.composerAttachmentsByThread[it].orEmpty() }.orEmpty()
+        val threadId = current.selectedThreadId ?: return
+        val composerAttachments = current.composerAttachmentsByThread[threadId].orEmpty()
         val hasBlockingAttachmentState = composerAttachments.hasBlockingState()
         val readyAttachments = composerAttachments.readyAttachments()
-        val mentionedFiles = threadId?.let { current.composerMentionedFilesByThread[it].orEmpty() }.orEmpty()
-        val mentionedSkills = threadId?.let { current.composerMentionedSkillsByThread[it].orEmpty() }.orEmpty()
+        val mentionedFiles = current.composerMentionedFilesByThread[threadId].orEmpty()
+        val mentionedSkills = current.composerMentionedSkillsByThread[threadId].orEmpty()
+        val reviewSelection = current.composerReviewSelectionByThread[threadId]
         val payload = buildComposerPayloadText(
             text = rawInput,
             mentionedFiles = mentionedFiles,
             isSubagentsSelected = subagentsEnabled,
         )
         val skillMentions = buildTurnSkillMentions(mentionedSkills)
-        if ((payload.isEmpty() && readyAttachments.isEmpty())
+        if ((payload.isEmpty() && readyAttachments.isEmpty() && reviewSelection == null)
             || hasBlockingAttachmentState
             || current.isSendingMessage
             || current.isInterruptingSelectedThread
@@ -1116,7 +1196,61 @@ class MainViewModel(
             null
         }
 
-        if (threadId != null && current.isThreadRunning(threadId)) {
+        if (reviewSelection != null) {
+            if (current.isThreadRunning(threadId)) {
+                service.reportError("Finish the current run before starting a code review.")
+                return
+            }
+            if (current.composerText.trim().isNotEmpty()
+                || current.composerAttachmentsByThread[threadId].orEmpty().isNotEmpty()
+                || current.composerMentionedFilesByThread[threadId].orEmpty().isNotEmpty()
+                || current.composerMentionedSkillsByThread[threadId].orEmpty().isNotEmpty()
+                || current.isComposerPlanMode
+                || current.isComposerSubagentsEnabled
+            ) {
+                service.reportError("Clear text, files, skills, images, and subagents before starting a code review.")
+                return
+            }
+            uiStateFlow.update {
+                it.copy(
+                    composerText = "",
+                    composerDraftsByThread = it.composerDraftsByThread - threadId,
+                    composerReviewSelectionByThread = it.composerReviewSelectionByThread - threadId,
+                    composerAttachmentsByThread = it.composerAttachmentsByThread - threadId,
+                    composerMentionedFilesByThread = it.composerMentionedFilesByThread - threadId,
+                    composerMentionedSkillsByThread = it.composerMentionedSkillsByThread - threadId,
+                    composerSubagentsByThread = it.composerSubagentsByThread - threadId,
+                    isComposerSubagentsEnabled = false,
+                    isSendingMessage = true,
+                )
+            }
+            clearComposerAutocomplete()
+            viewModelScope.launch {
+                try {
+                    service.startReview(
+                        threadId = threadId,
+                        target = reviewSelection.target,
+                        baseBranch = reviewSelection.baseBranch,
+                    )
+                } catch (error: Throwable) {
+                    uiStateFlow.update {
+                        it.copy(
+                            composerReviewSelectionByThread = it.composerReviewSelectionByThread + (
+                                threadId to reviewSelection
+                            ),
+                            isComposerSubagentsEnabled = threadId in it.composerSubagentsByThread,
+                        )
+                    }
+                    service.reportError(error.message ?: "Failed to start code review.")
+                } finally {
+                    uiStateFlow.update { it.copy(isSendingMessage = false) }
+                    flushEligibleQueues()
+                }
+            }
+            return
+        }
+
+        if (current.isThreadRunning(threadId)) {
             val queuedDraft = QueuedTurnDraft(
                 id = UUID.randomUUID().toString(),
                 text = rawInput,
@@ -1152,15 +1286,11 @@ class MainViewModel(
         uiStateFlow.update {
             it.copy(
                 composerText = "",
-                composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread - id } ?: it.composerDraftsByThread,
-                composerSubagentsByThread = threadId?.let { id -> it.composerSubagentsByThread - id }
-                    ?: it.composerSubagentsByThread,
-                composerAttachmentsByThread = threadId?.let { id -> it.composerAttachmentsByThread - id }
-                    ?: it.composerAttachmentsByThread,
-                composerMentionedFilesByThread = threadId?.let { id -> it.composerMentionedFilesByThread - id }
-                    ?: it.composerMentionedFilesByThread,
-                composerMentionedSkillsByThread = threadId?.let { id -> it.composerMentionedSkillsByThread - id }
-                    ?: it.composerMentionedSkillsByThread,
+                composerDraftsByThread = it.composerDraftsByThread - threadId,
+                composerSubagentsByThread = it.composerSubagentsByThread - threadId,
+                composerAttachmentsByThread = it.composerAttachmentsByThread - threadId,
+                composerMentionedFilesByThread = it.composerMentionedFilesByThread - threadId,
+                composerMentionedSkillsByThread = it.composerMentionedSkillsByThread - threadId,
                 isComposerSubagentsEnabled = false,
                 isSendingMessage = true,
             )
@@ -1177,25 +1307,22 @@ class MainViewModel(
                 )
             } catch (error: Throwable) {
                 uiStateFlow.update {
-                    val nextSubagents = threadId?.let { id ->
-                        if (subagentsEnabled) it.composerSubagentsByThread + id else it.composerSubagentsByThread - id
-                    } ?: it.composerSubagentsByThread
+                    val nextSubagents = if (subagentsEnabled) {
+                        it.composerSubagentsByThread + threadId
+                    } else {
+                        it.composerSubagentsByThread - threadId
+                    }
                     it.copy(
                         composerText = rawInput,
-                        composerDraftsByThread = threadId?.let { id -> it.composerDraftsByThread + (id to rawInput) }
-                            ?: it.composerDraftsByThread,
+                        composerDraftsByThread = it.composerDraftsByThread + (threadId to rawInput),
                         composerSubagentsByThread = nextSubagents,
-                        composerAttachmentsByThread = threadId?.let { id ->
-                            it.composerAttachmentsByThread.updatedComposerAttachments(id, composerAttachments)
-                        } ?: it.composerAttachmentsByThread,
-                        composerMentionedFilesByThread = threadId?.let { id ->
-                            it.composerMentionedFilesByThread + (id to mentionedFiles)
-                        } ?: it.composerMentionedFilesByThread,
-                        composerMentionedSkillsByThread = threadId?.let { id ->
-                            it.composerMentionedSkillsByThread + (id to mentionedSkills)
-                        } ?: it.composerMentionedSkillsByThread,
-                        isComposerSubagentsEnabled = threadId?.let { id -> id in nextSubagents }
-                            ?: it.isComposerSubagentsEnabled,
+                        composerAttachmentsByThread = it.composerAttachmentsByThread.updatedComposerAttachments(
+                            threadId,
+                            composerAttachments,
+                        ),
+                        composerMentionedFilesByThread = it.composerMentionedFilesByThread + (threadId to mentionedFiles),
+                        composerMentionedSkillsByThread = it.composerMentionedSkillsByThread + (threadId to mentionedSkills),
+                        isComposerSubagentsEnabled = threadId in nextSubagents,
                     )
                 }
                 refreshComposerAutocomplete(rawInput)
@@ -2057,6 +2184,39 @@ class MainViewModel(
                 slashCommandQuery = "",
             )
         }
+    }
+
+    private fun canArmReviewSelection(
+        state: AndrodexUiState,
+        threadId: String,
+    ): Boolean {
+        return state.composerText.trim().isEmpty()
+            && state.composerAttachmentsByThread[threadId].orEmpty().isEmpty()
+            && state.composerMentionedFilesByThread[threadId].orEmpty().isEmpty()
+            && state.composerMentionedSkillsByThread[threadId].orEmpty().isEmpty()
+            && !state.isComposerPlanMode
+            && !state.isComposerSubagentsEnabled
+            && state.composerReviewSelectionByThread[threadId] == null
+    }
+
+    private fun clearComposerReviewSelectionIfNeededForNonReviewContent() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        if (uiStateFlow.value.composerReviewSelectionByThread[threadId] == null) {
+            return
+        }
+        if (uiStateFlow.value.composerText.trim().isNotEmpty()
+            || uiStateFlow.value.composerAttachmentsByThread[threadId].orEmpty().isNotEmpty()
+            || uiStateFlow.value.composerMentionedFilesByThread[threadId].orEmpty().isNotEmpty()
+            || uiStateFlow.value.composerMentionedSkillsByThread[threadId].orEmpty().isNotEmpty()
+            || uiStateFlow.value.isComposerPlanMode
+            || uiStateFlow.value.isComposerSubagentsEnabled
+        ) {
+            clearComposerReviewSelection()
+        }
+    }
+
+    private fun AndrodexUiState.gitStateForThread(threadId: String): ThreadGitState? {
+        return gitStateByThread[threadId]
     }
 
     private fun selectedComposerRoot(state: AndrodexUiState): String? {

@@ -1,8 +1,9 @@
 package io.androdex.android.data
 
+import io.androdex.android.ComposerReviewTarget
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ImageAttachment
-import io.androdex.android.model.AccessMode
 import io.androdex.android.model.TurnSkillMention
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -152,6 +153,21 @@ class AndrodexClientTurnPayloadTest {
         )
 
         assertEquals("fast", params["serviceTier"])
+    }
+
+    @Test
+    fun buildReviewStartPayload_includesInlineDeliveryAndTargetSchema() {
+        val params = buildReviewStartPayloadSpec(
+            threadId = "thread-1",
+            target = ComposerReviewTarget.BASE_BRANCH,
+            baseBranch = "main",
+        )
+
+        assertEquals("thread-1", params["threadId"])
+        assertEquals("inline", params["delivery"])
+        val target = params["target"] as Map<*, *>
+        assertEquals("baseBranch", target["type"])
+        assertEquals("main", target["branch"])
     }
 
     @Test

@@ -3,6 +3,8 @@ package io.androdex.android.ui.state
 import io.androdex.android.AppEnvironment
 import io.androdex.android.AndrodexUiState
 import io.androdex.android.ComposerSlashCommand
+import io.androdex.android.ComposerReviewSelection
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.GitActionKind
 import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
@@ -92,6 +94,7 @@ internal data class HomeScreenUiState(
 
 internal data class TrustedPairUiState(
     val title: String,
+    val statusLabel: String,
     val name: String,
     val systemName: String?,
     val detail: String?,
@@ -207,6 +210,12 @@ internal data class ComposerUiState(
     val planModeEnabled: Boolean,
     val isSubagentsEnabled: Boolean,
     val subagentsEnabled: Boolean,
+    val reviewSelection: ComposerReviewSelection?,
+    val isReviewModeEnabled: Boolean,
+    val reviewTarget: ComposerReviewTarget?,
+    val reviewBaseBranchLabel: String?,
+    val placeholderText: String,
+    val submitButtonLabel: String,
     val isSubmitting: Boolean,
     val submitEnabled: Boolean,
     val showStop: Boolean,
@@ -428,6 +437,13 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
+    val reviewSelection = composerReviewSelectionByThread[threadId]
+    val reviewBaseBranchLabel = reviewSelection?.takeIf { it.target == ComposerReviewTarget.BASE_BRANCH }
+        ?.baseBranch
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: gitStateByThread[threadId]?.branchTargets?.defaultBranch?.trim()?.takeIf { it.isNotEmpty() }
+        ?: gitStateByThread[threadId]?.status?.currentBranch?.trim()?.takeIf { it.isNotEmpty() }
     val composerAttachments = composerAttachmentsByThread[threadId].orEmpty()
     val hasBlockingAttachmentState = composerAttachments.hasBlockingState()
     val readyComposerAttachments = composerAttachments.readyAttachments()
@@ -462,12 +478,15 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         selectedThread = selectedThread,
         activeWorkspacePath = activeWorkspacePath,
     )
+    val submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND
     val sendAvailability = ComposerSendAvailability(
         isSending = isSendingMessage || isBusy || isInterruptingSelectedThread,
         isConnected = connectionStatus == ConnectionStatus.CONNECTED,
         trimmedInput = composerText.trim(),
         hasReadyImages = readyComposerAttachments.isNotEmpty(),
         hasBlockingAttachmentState = hasBlockingAttachmentState,
+        hasPlanModeSelection = isPlanModeEnabled,
+        hasReviewSelection = reviewSelection != null,
         hasSubagentsSelection = isSubagentsEnabled,
     )
     val gitState = gitStateByThread[threadId]
@@ -513,7 +532,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             && composerAttachments.isEmpty()
             && composerMentionedFilesByThread[threadId].orEmpty().isEmpty()
             && composerMentionedSkillsByThread[threadId].orEmpty().isEmpty()
-            && !isSubagentsEnabled,
+            && !isSubagentsEnabled
+            && reviewSelection == null,
         canPauseQueue = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
             && queueState?.isPaused != true,
@@ -556,13 +576,59 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             isSlashCommandAutocompleteVisible = isSlashCommandAutocompleteVisible,
             slashCommandQuery = slashCommandQuery,
             inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
-            submitMode = if (isThreadRunning) ComposerSubmitMode.QUEUE else ComposerSubmitMode.SEND,
+            submitMode = submitMode,
             isPlanModeEnabled = isPlanModeEnabled,
             planModeEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             isSubagentsEnabled = isSubagentsEnabled,
             subagentsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            reviewSelection = reviewSelection,
+            isReviewModeEnabled = reviewSelection != null,
+            reviewTarget = reviewSelection?.target,
+            reviewBaseBranchLabel = reviewBaseBranchLabel,
+            placeholderText = when {
+                reviewSelection?.target == ComposerReviewTarget.BASE_BRANCH && !reviewBaseBranchLabel.isNullOrEmpty() ->
+                    "Review against base branch $reviewBaseBranchLabel"
+                reviewSelection != null -> "Review current changes"
+                isPlanModeEnabled && isSubagentsEnabled && submitMode == ComposerSubmitMode.QUEUE ->
+                    "Queue a delegated plan request for when this run finishes"
+                isPlanModeEnabled && isSubagentsEnabled ->
+                    "Ask Codex to plan and delegate the work"
+                isSubagentsEnabled && submitMode == ComposerSubmitMode.QUEUE ->
+                    "Queue a delegated follow-up for when this run finishes"
+                isSubagentsEnabled -> "Ask anything... @files, \$skills, /commands"
+                isPlanModeEnabled && submitMode == ComposerSubmitMode.QUEUE ->
+                    "Queue a plan request for when this run finishes"
+                isPlanModeEnabled -> "Ask Codex to make a plan before executing"
+                submitMode == ComposerSubmitMode.QUEUE -> "Queue a follow-up for when this run finishes"
+                else -> "Ask anything... @files, \$skills, /commands"
+            },
+            submitButtonLabel = when {
+                reviewSelection != null -> "Review"
+                isPlanModeEnabled && isSubagentsEnabled && submitMode == ComposerSubmitMode.QUEUE -> {
+                    if (queuedDrafts.isNotEmpty()) "Queue Delegate (${queuedDrafts.size + 1})" else "Queue Delegate"
+                }
+                isPlanModeEnabled && isSubagentsEnabled -> "Delegate"
+                isPlanModeEnabled && submitMode == ComposerSubmitMode.QUEUE -> {
+                    if (queuedDrafts.isNotEmpty()) "Queue Plan (${queuedDrafts.size + 1})" else "Queue Plan"
+                }
+                isPlanModeEnabled -> "Plan"
+                isSubagentsEnabled && submitMode == ComposerSubmitMode.QUEUE -> {
+                    if (queuedDrafts.isNotEmpty()) "Queue Delegate (${queuedDrafts.size + 1})" else "Queue Delegate"
+                }
+                isSubagentsEnabled -> "Delegate"
+                submitMode == ComposerSubmitMode.QUEUE -> {
+                    if (queuedDrafts.isNotEmpty()) "Queue (${queuedDrafts.size + 1})" else "Queue"
+                }
+                else -> "Send"
+            },
             isSubmitting = isSendingMessage,
-            submitEnabled = !sendAvailability.isSendDisabled,
+            submitEnabled = if (reviewSelection?.target == ComposerReviewTarget.BASE_BRANCH
+                && reviewBaseBranchLabel.isNullOrEmpty()
+            ) {
+                false
+            } else {
+                !sendAvailability.isSendDisabled
+            },
             showStop = isThreadRunning,
             isStopping = isInterruptingSelectedThread,
             stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
@@ -810,6 +876,15 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
             ConnectionStatus.HANDSHAKING -> "Pairing Host"
             ConnectionStatus.RECONNECT_REQUIRED -> "Previous Pair"
             else -> "Saved Pair"
+        },
+        statusLabel = when (connectionStatus) {
+            ConnectionStatus.CONNECTED -> "Connected pair"
+            ConnectionStatus.CONNECTING -> "Connecting"
+            ConnectionStatus.HANDSHAKING -> "Pairing in progress"
+            ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
+            ConnectionStatus.RECONNECT_REQUIRED -> "Needs re-pair"
+            ConnectionStatus.UPDATE_REQUIRED -> "Update required"
+            ConnectionStatus.DISCONNECTED -> "Saved pair"
         },
         name = name,
         systemName = snapshot.deviceId.takeIf { it.isNotBlank() },

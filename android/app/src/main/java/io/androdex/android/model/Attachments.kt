@@ -57,13 +57,24 @@ data class ComposerSendAvailability(
     val trimmedInput: String,
     val hasReadyImages: Boolean,
     val hasBlockingAttachmentState: Boolean,
+    val hasPlanModeSelection: Boolean,
+    val hasReviewSelection: Boolean,
     val hasSubagentsSelection: Boolean,
 ) {
     val isSendDisabled: Boolean
         get() = isSending
             || !isConnected
-            || (trimmedInput.isEmpty() && !hasReadyImages && !hasSubagentsSelection)
             || hasBlockingAttachmentState
+            || when {
+                hasReviewSelection -> {
+                    trimmedInput.isNotEmpty()
+                        || hasReadyImages
+                        || hasPlanModeSelection
+                        || hasSubagentsSelection
+                }
+
+                else -> trimmedInput.isEmpty() && !hasReadyImages && !hasSubagentsSelection
+            }
 }
 
 fun List<ComposerImageAttachment>.hasBlockingState(): Boolean {

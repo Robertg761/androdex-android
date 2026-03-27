@@ -12,6 +12,11 @@ enum class ComposerSlashCommand(
     val subtitle: String,
     val commandToken: String,
 ) {
+    REVIEW(
+        title = "Review",
+        subtitle = "Start an inline code review",
+        commandToken = "/review",
+    ),
     SUBAGENTS(
         title = "Subagents",
         subtitle = "Insert a canned prompt that asks Codex to delegate work",
@@ -34,6 +39,25 @@ enum class ComposerSlashCommand(
         }
     }
 }
+
+enum class ComposerReviewTarget(
+    val title: String,
+    val subtitle: String,
+) {
+    UNCOMMITTED_CHANGES(
+        title = "Current changes",
+        subtitle = "Review uncommitted changes in the working tree",
+    ),
+    BASE_BRANCH(
+        title = "Base branch",
+        subtitle = "Review against the selected base branch",
+    ),
+}
+
+data class ComposerReviewSelection(
+    val target: ComposerReviewTarget,
+    val baseBranch: String? = null,
+)
 
 internal data class TrailingFileAutocompleteToken(
     val query: String,
@@ -347,6 +371,23 @@ internal fun applyingSubagentsSelection(text: String, isSelected: Boolean): Stri
         return subagentsCannedPrompt
     }
     return "$subagentsCannedPrompt\n\n$trimmed"
+}
+
+internal fun reviewRequestText(
+    target: ComposerReviewTarget,
+    baseBranch: String? = null,
+): String {
+    return when (target) {
+        ComposerReviewTarget.UNCOMMITTED_CHANGES -> "Review current changes"
+        ComposerReviewTarget.BASE_BRANCH -> {
+            val normalizedBaseBranch = baseBranch?.trim().orEmpty()
+            if (normalizedBaseBranch.isNotEmpty()) {
+                "Review against base branch $normalizedBaseBranch"
+            } else {
+                "Review against base branch"
+            }
+        }
+    }
 }
 
 private data class TrailingToken(

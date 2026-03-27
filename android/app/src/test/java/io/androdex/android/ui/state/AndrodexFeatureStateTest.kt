@@ -48,6 +48,7 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.reconnectEnabled)
         assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, route.state.connection.status)
         assertNotNull(route.state.trustedPair)
+        assertEquals("Retrying saved pair", route.state.trustedPair?.statusLabel)
         assertEquals("relay.example.com", route.state.trustedPair?.relayLabel)
         assertTrue(route.state.compatibilityMessage.isNullOrBlank())
     }
@@ -105,6 +106,7 @@ class AndrodexFeatureStateTest {
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
         assertNotNull(route.state.trustedPair)
+        assertEquals("Connected pair", route.state.trustedPair?.statusLabel)
         assertNotNull(route.state.projectPicker)
         assertTrue(route.state.projectPicker?.isBrowsing == true)
         assertEquals(

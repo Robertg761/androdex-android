@@ -2,12 +2,23 @@ package io.androdex.android.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -45,22 +56,32 @@ internal fun AboutAndrodexSheet(
         ) {
             Text("About Androdex", style = MaterialTheme.typography.headlineSmall)
             Text(
-                text = "Androdex keeps Codex running on the host machine while Android stays a paired remote client for threads, approvals, runtime controls, and project switching.",
+                text = "Androdex keeps Codex running on the host while Android stays a paired remote client for threads, approvals, runtime controls, and project switching.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            HeroCard(
+                icon = Icons.Outlined.Computer,
+                title = "Host-first by design",
+                body = "The bridge runs on your PC. Android stays a secure controller for pairing, threads, and recovery.",
+                chips = listOf("Host-local Codex", "Relay-compatible", "Saved pairing"),
+            )
+
             AboutSection(
-                title = "How Pairing Works",
-                body = "Run `${state.bridgeStartCommand}` on the host to print a QR. After the secure handshake, Android can reconnect from the saved trusted pair without rescanning unless trust or compatibility changes.",
+                title = "Pairing and Trust",
+                body = "Run `${state.bridgeStartCommand}` on the host to print a fresh QR code. After the secure handshake, Android can reconnect from the saved trusted pair without rescanning unless trust or compatibility changes.",
+                icon = Icons.Outlined.Shield,
             )
             AboutSection(
                 title = "Host-Local Runtime",
                 body = "Code execution, file edits, git actions, and runtime selection stay on the host. Android is controlling that session remotely over the paired bridge.",
+                icon = Icons.Outlined.Computer,
             )
             AboutSection(
                 title = "Recovery",
                 body = "If reconnect stops working, update the host package with `${state.bridgeUpdateCommand}` and scan a new QR when the host trust record changes.",
+                icon = Icons.Outlined.Info,
             )
 
             Surface(
@@ -80,14 +101,95 @@ internal fun AboutAndrodexSheet(
                 }
             }
 
-            TextButton(onClick = { uriHandler.openUri(state.projectUrl) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Open GitHub Project")
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                ) {
+                    AboutLinkButton(
+                        label = "Open GitHub Project",
+                        onClick = { uriHandler.openUri(state.projectUrl) },
+                        icon = Icons.Outlined.Link,
+                    )
+                    AboutLinkButton(
+                        label = "Open Support & Issues",
+                        onClick = { uriHandler.openUri(state.issuesUrl) },
+                        icon = Icons.Outlined.Info,
+                    )
+                    AboutLinkButton(
+                        label = "Privacy Policy",
+                        onClick = { uriHandler.openUri(state.privacyPolicyUrl) },
+                        icon = Icons.Outlined.Shield,
+                    )
+                }
             }
-            TextButton(onClick = { uriHandler.openUri(state.issuesUrl) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Open Support & Issues")
+        }
+    }
+}
+
+@Composable
+private fun HeroCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    body: String,
+    chips: List<String>,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = CircleShape,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = body,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            TextButton(onClick = { uriHandler.openUri(state.privacyPolicyUrl) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Privacy Policy")
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                chips.forEach { chip ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            text = chip,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -97,22 +199,60 @@ internal fun AboutAndrodexSheet(
 private fun AboutSection(
     title: String,
     body: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = CircleShape,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun AboutLinkButton(
+    label: String,
+    onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(label)
     }
 }
