@@ -5,6 +5,7 @@ import io.androdex.android.attachment.decodeDataUrlImageData
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesResult
 import io.androdex.android.model.GitBranchesWithStatusResult
@@ -361,6 +362,32 @@ fun decodeModelOptions(resultObject: JSONObject): List<ModelOption> {
             supportedReasoningEfforts = supportedEfforts,
             defaultReasoningEffort = defaultReasoningEffort,
         )
+    }
+    return decoded
+}
+
+fun decodeCollaborationModes(resultObject: JSONObject): Set<CollaborationModeKind> {
+    val items = resultObject.arrayOrNull(
+        "items",
+        "data",
+        "modes",
+        "collaborationModes",
+        "collaboration_modes",
+    ) ?: JSONArray()
+
+    val decoded = linkedSetOf<CollaborationModeKind>()
+    for (index in 0 until items.length()) {
+        val mode = when (val item = items.opt(index)) {
+            is JSONObject -> {
+                CollaborationModeKind.fromWireValue(
+                    item.stringOrNull("mode", "id", "name", "type")
+                )
+            }
+
+            is String -> CollaborationModeKind.fromWireValue(item)
+            else -> null
+        } ?: continue
+        decoded += mode
     }
     return decoded
 }

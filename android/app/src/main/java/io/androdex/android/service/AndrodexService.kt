@@ -83,6 +83,7 @@ data class AndrodexServiceState(
     val selectedServiceTier: ServiceTier? = null,
     val supportsServiceTier: Boolean = true,
     val supportsThreadFork: Boolean = true,
+    val collaborationModes: Set<CollaborationModeKind> = emptySet(),
     val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
     val activeWorkspacePath: String? = null,
     val recentWorkspaces: List<WorkspacePathSummary> = emptyList(),
@@ -749,6 +750,7 @@ class AndrodexService(
                         selectedServiceTier = update.selectedServiceTier,
                         supportsServiceTier = update.supportsServiceTier,
                         supportsThreadFork = update.supportsThreadFork,
+                        collaborationModes = update.collaborationModes,
                         threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
                     )
                 }

@@ -216,6 +216,30 @@ class MainViewModelComposerAutocompleteTest {
     }
 
     @Test
+    fun sendMessage_omitsPlanModeWhenRuntimeHasNotAdvertisedSupport() = runTest(dispatcher) {
+        val repository = ComposerRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerPlanMode(true)
+        viewModel.updateComposerText("Make a plan")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1:Make a plan"), repository.startedTurns)
+        assertEquals(listOf<CollaborationModeKind?>(null), repository.startedTurnModes)
+    }
+
+    @Test
     fun reviewSlashCommand_armsInlineReviewAndAllowsTargetSwitching() = runTest(dispatcher) {
         val repository = ComposerRepository()
         val viewModel = MainViewModel(repository)
@@ -335,6 +359,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
     var skills: List<SkillMetadata> = emptyList()
     val startedTurns = mutableListOf<String>()
     val startedTurnSkillMentions = mutableListOf<List<TurnSkillMention>>()
+    val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val startedReviews = mutableListOf<String>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
@@ -404,6 +429,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
     ) {
         startedTurns += "$threadId:$userInput"
         startedTurnSkillMentions += skillMentions
+        startedTurnModes += collaborationMode
     }
 
     override suspend fun startReview(

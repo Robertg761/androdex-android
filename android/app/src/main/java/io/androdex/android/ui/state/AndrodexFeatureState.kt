@@ -12,6 +12,7 @@ import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ComposerImageAttachment
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
@@ -219,7 +220,9 @@ internal data class ComposerUiState(
     val inputEnabled: Boolean,
     val submitMode: ComposerSubmitMode,
     val isPlanModeEnabled: Boolean,
+    val isPlanModeSupported: Boolean,
     val planModeEnabled: Boolean,
+    val planModeLabel: String,
     val isSubagentsEnabled: Boolean,
     val subagentsEnabled: Boolean,
     val reviewSelection: ComposerReviewSelection?,
@@ -287,6 +290,8 @@ internal data class ThreadRuntimeUiState(
     val serviceTierOptions: List<RuntimeSettingsOptionUiState>,
     val selectedServiceTierOverride: String?,
     val supportsServiceTier: Boolean,
+    val supportsPlanMode: Boolean,
+    val collaborationSummary: String,
     val accessModeLabel: String,
     val hasOverrides: Boolean,
 )
@@ -451,7 +456,9 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
     val selectedThread = threads.firstOrNull { it.id == threadId }
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
-    val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
+    val planModeSupported = CollaborationModeKind.PLAN in collaborationModes
+    val isPlanModeRequested = isComposerPlanMode || threadId in composerPlanModeByThread
+    val isPlanModeEnabled = planModeSupported && isPlanModeRequested
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
     val reviewSelection = composerReviewSelectionByThread[threadId]
     val reviewBaseBranchValue = reviewSelection
@@ -492,6 +499,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         selectedServiceTier = selectedServiceTier,
         selectedAccessMode = selectedAccessMode,
         supportsServiceTier = supportsServiceTier,
+        collaborationModes = collaborationModes,
         threadRuntimeOverride = threadRuntimeOverride,
     )
     val forkTargets = buildThreadForkTargets(
@@ -598,7 +606,13 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             submitMode = submitMode,
             isPlanModeEnabled = isPlanModeEnabled,
-            planModeEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            isPlanModeSupported = planModeSupported,
+            planModeEnabled = planModeSupported && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            planModeLabel = when {
+                !planModeSupported -> "Plan unavailable"
+                isPlanModeEnabled -> "Plan mode on"
+                else -> "Plan mode"
+            },
             isSubagentsEnabled = isSubagentsEnabled,
             subagentsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             reviewSelection = reviewSelection,
@@ -1003,6 +1017,7 @@ private fun buildThreadRuntimeUiState(
     selectedServiceTier: ServiceTier?,
     selectedAccessMode: AccessMode,
     supportsServiceTier: Boolean,
+    collaborationModes: Set<CollaborationModeKind>,
     threadRuntimeOverride: ThreadRuntimeOverride?,
 ): ThreadRuntimeUiState {
     val reasoningOptions = buildList {
@@ -1056,6 +1071,12 @@ private fun buildThreadRuntimeUiState(
         serviceTierOptions = serviceTierOptions,
         selectedServiceTierOverride = threadRuntimeOverride?.serviceTierRawValue?.takeIf { threadRuntimeOverride.overridesServiceTier },
         supportsServiceTier = supportsServiceTier,
+        supportsPlanMode = CollaborationModeKind.PLAN in collaborationModes,
+        collaborationSummary = if (CollaborationModeKind.PLAN in collaborationModes) {
+            "Plan mode is available for this host runtime."
+        } else {
+            "This host runtime has not advertised plan mode support."
+        },
         accessModeLabel = selectedAccessMode.menuTitle,
         hasOverrides = threadRuntimeOverride?.isEmpty == false,
     )

@@ -2,6 +2,7 @@ package io.androdex.android
 
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
@@ -285,6 +286,19 @@ class MainViewModelWorkspaceTest {
         val viewModel = MainViewModel(repository)
         dispatcher.scheduler.runCurrent()
         repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = emptyMap(),
+            )
+        )
         dispatcher.scheduler.runCurrent()
         repository.emit(
             ClientUpdate.ThreadsLoaded(

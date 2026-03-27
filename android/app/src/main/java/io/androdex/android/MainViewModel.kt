@@ -104,6 +104,7 @@ data class AndrodexUiState(
     val selectedServiceTier: ServiceTier? = null,
     val supportsServiceTier: Boolean = true,
     val supportsThreadFork: Boolean = true,
+    val collaborationModes: Set<CollaborationModeKind> = emptySet(),
     val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
     val activeWorkspacePath: String? = null,
     val recentWorkspaces: List<WorkspacePathSummary> = emptyList(),
@@ -217,14 +218,16 @@ class MainViewModel(
     }
 
     fun updateComposerPlanMode(enabled: Boolean) {
+        var effectiveEnabled = false
         uiStateFlow.update { current ->
             val threadId = current.selectedThreadId ?: return@update current
+            effectiveEnabled = enabled && current.supportsCollaborationMode(CollaborationModeKind.PLAN)
             current.copy(
-                composerPlanModeByThread = current.composerPlanModeByThread.updatedPlanMode(threadId, enabled),
-                isComposerPlanMode = enabled,
+                composerPlanModeByThread = current.composerPlanModeByThread.updatedPlanMode(threadId, effectiveEnabled),
+                isComposerPlanMode = effectiveEnabled,
             )
         }
-        if (enabled) {
+        if (effectiveEnabled) {
             clearComposerReviewSelectionIfNeededForNonReviewContent()
         }
     }
@@ -1208,7 +1211,9 @@ class MainViewModel(
         ) {
             return
         }
-        val collaborationMode = if (current.isComposerPlanMode) {
+        val collaborationMode = if (current.isComposerPlanMode
+            && current.supportsCollaborationMode(CollaborationModeKind.PLAN)
+        ) {
             CollaborationModeKind.PLAN
         } else {
             null
@@ -1947,7 +1952,8 @@ class MainViewModel(
                     preferredThreadId = threadId,
                     attachments = draftToSend.attachments,
                     skillMentions = buildTurnSkillMentions(draftToSend.mentionedSkills),
-                    collaborationMode = draftToSend.collaborationMode,
+                    collaborationMode = draftToSend.collaborationMode
+                        ?.takeIf { uiStateFlow.value.supportsCollaborationMode(it) },
                 )
             } catch (error: Throwable) {
                 val queueMessage = error.message ?: "Failed to send the queued follow-up."
@@ -2310,6 +2316,7 @@ private fun applyServiceState(
         selectedServiceTier = serviceState.selectedServiceTier,
         supportsServiceTier = serviceState.supportsServiceTier,
         supportsThreadFork = serviceState.supportsThreadFork,
+        collaborationModes = serviceState.collaborationModes,
         threadRuntimeOverridesByThread = serviceState.threadRuntimeOverridesByThread,
         activeWorkspacePath = serviceState.activeWorkspacePath,
         recentWorkspaces = serviceState.recentWorkspaces,
@@ -2325,6 +2332,10 @@ private fun applyServiceState(
 
 private fun AndrodexUiState.isThreadRunning(threadId: String): Boolean {
     return threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
+}
+
+private fun AndrodexUiState.supportsCollaborationMode(mode: CollaborationModeKind): Boolean {
+    return mode in collaborationModes
 }
 
 private fun ThreadQueuedDraftState.normalized(): ThreadQueuedDraftState {

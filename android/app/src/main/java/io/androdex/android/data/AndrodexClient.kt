@@ -127,6 +127,7 @@ class AndrodexClient(
     private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
     private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
     private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides()
+    private var collaborationModes: Set<CollaborationModeKind> = emptySet()
     private var hostAccountSnapshot: HostAccountSnapshot? = null
     private var supportsServiceTier = true
     private var supportsThreadFork = true
@@ -541,7 +542,7 @@ class AndrodexClient(
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
-        var effectiveCollaborationMode = collaborationMode
+        var effectiveCollaborationMode = collaborationMode?.takeIf { it in collaborationModes }
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
         var imageUrlKey = "url"
         var includesServiceTier = supportsServiceTier
@@ -606,7 +607,7 @@ class AndrodexClient(
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
-        var effectiveCollaborationMode = collaborationMode
+        var effectiveCollaborationMode = collaborationMode?.takeIf { it in collaborationModes }
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
         var imageUrlKey = "url"
         var includesServiceTier = supportsServiceTier
@@ -867,32 +868,9 @@ class AndrodexClient(
     }
 
     private suspend fun initializeSession() {
-        val clientInfo = JSONObject()
-            .put("name", "androdex_android")
-            .put("title", "Androdex Android")
-            .put("version", "0.1.0")
-
-        val modernParams = JSONObject()
-            .put("clientInfo", clientInfo)
-            .put(
-                "capabilities",
-                JSONObject().put("experimentalApi", true)
-            )
-
-        try {
-            sendRequest("initialize", modernParams)
-        } catch (error: RpcException) {
-            val lowered = error.message.lowercase(Locale.US)
-            if (
-                !lowered.contains("capabilities")
-                && !lowered.contains("experimentalapi")
-            ) {
-                throw error
-            }
-            sendRequest("initialize", JSONObject().put("clientInfo", clientInfo))
-        }
-
+        performInitializeSessionRequest { params -> sendRequest("initialize", params) }
         sendNotification("initialized", null)
+        refreshCollaborationModes()
     }
 
     private suspend fun resumeThread(threadId: String) {
@@ -1651,9 +1629,19 @@ class AndrodexClient(
                 selectedServiceTier = selectedServiceTier,
                 supportsServiceTier = supportsServiceTier,
                 supportsThreadFork = supportsThreadFork,
+                collaborationModes = collaborationModes,
                 threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
             )
         )
+    }
+
+    private suspend fun refreshCollaborationModes() {
+        collaborationModes = try {
+            decodeCollaborationModes(sendRequest("collaborationMode/list", JSONObject()))
+        } catch (_: Throwable) {
+            emptySet()
+        }
+        emitRuntimeConfig()
     }
 
     private fun emitAccountStatus() {
@@ -2434,6 +2422,34 @@ internal fun buildCollaborationModePayload(
     )?.toJsonObject()
 }
 
+internal fun buildInitializePayload(includeCapabilities: Boolean): JSONObject {
+    val clientInfo = JSONObject()
+        .put("name", "androdex_android")
+        .put("title", "Androdex Android")
+        .put("version", "0.1.0")
+    return JSONObject().put("clientInfo", clientInfo).apply {
+        if (includeCapabilities) {
+            put(
+                "capabilities",
+                JSONObject().put("experimentalApi", true)
+            )
+        }
+    }
+}
+
+internal suspend fun performInitializeSessionRequest(
+    sendInitializeRequest: suspend (JSONObject) -> Unit,
+) {
+    try {
+        sendInitializeRequest(buildInitializePayload(includeCapabilities = true))
+    } catch (error: AndrodexClient.RpcException) {
+        if (!shouldRetryInitializeWithoutCapabilities(error.message)) {
+            throw error
+        }
+        sendInitializeRequest(buildInitializePayload(includeCapabilities = false))
+    }
+}
+
 internal fun buildCollaborationModePayloadSpec(
     collaborationMode: CollaborationModeKind?,
     model: String?,
@@ -2497,6 +2513,12 @@ internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boo
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
         && !normalizedMessage.contains("experimentalapi")
+}
+
+internal fun shouldRetryInitializeWithoutCapabilities(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("capabilities")
+        || normalizedMessage.contains("experimentalapi")
 }
 
 internal fun shouldRetryWithApprovalPolicyFallback(errorMessage: String?): Boolean {

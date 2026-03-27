@@ -91,7 +91,7 @@ internal fun ComposerBar(
                         onClick = { onPlanModeChanged(!state.isPlanModeEnabled) },
                         enabled = state.planModeEnabled,
                         label = {
-                            Text(if (state.isPlanModeEnabled) "Plan mode on" else "Plan mode")
+                            Text(state.planModeLabel)
                         },
                     )
                     FilterChip(

@@ -2,6 +2,7 @@ package io.androdex.android.ui.state
 
 import io.androdex.android.AndrodexUiState
 import io.androdex.android.model.AccessMode
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ComposerImageAttachment
 import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ConnectionStatus
@@ -174,6 +175,7 @@ class AndrodexFeatureStateTest {
             ),
             selectedModelId = "gpt-5.4",
             selectedReasoningEffort = "high",
+            collaborationModes = setOf(CollaborationModeKind.PLAN),
         )
 
         val appState = state.toAppUiState(isSettingsVisible = true)
@@ -195,6 +197,26 @@ class AndrodexFeatureStateTest {
         assertTrue(appState.settings.isVisible)
         assertTrue(appState.settings.modelOptions.any { it.value == "gpt-5.4" && it.selected })
         assertTrue(appState.settings.reasoningOptions.any { it.value == "high" && it.selected })
+    }
+
+    @Test
+    fun threadRoute_disablesPlanModeWhenRuntimeHasNotAdvertisedSupport() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            composerPlanModeByThread = setOf("thread-9"),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.composer.isPlanModeEnabled)
+        assertFalse(route.state.composer.isPlanModeSupported)
+        assertFalse(route.state.composer.planModeEnabled)
+        assertEquals("Plan unavailable", route.state.composer.planModeLabel)
+        assertFalse(route.state.runtime.supportsPlanMode)
+        assertTrue(route.state.runtime.collaborationSummary.contains("not advertised", ignoreCase = true))
     }
 
     @Test

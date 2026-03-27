@@ -2,6 +2,7 @@ package io.androdex.android.model
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.UUID
 
 data class PairingPayload(
@@ -388,8 +389,17 @@ data class ThreadRuntimeOverride(
 
 enum class CollaborationModeKind(
     val wireValue: String,
+    val title: String,
 ) {
-    PLAN("plan"),
+    PLAN("plan", "Plan mode"),
+    ;
+
+    companion object {
+        fun fromWireValue(rawValue: String?): CollaborationModeKind? {
+            val normalized = rawValue?.trim()?.lowercase(Locale.US) ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
 }
 
 enum class ConversationRole {
@@ -639,6 +649,7 @@ sealed interface ClientUpdate {
         val selectedServiceTier: ServiceTier?,
         val supportsServiceTier: Boolean,
         val supportsThreadFork: Boolean,
+        val collaborationModes: Set<CollaborationModeKind>,
         val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride>,
     ) : ClientUpdate
 
