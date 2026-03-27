@@ -31,10 +31,12 @@ import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
+import io.androdex.android.model.requestId
 import java.net.URI
 import java.text.DateFormat
 import java.util.Date
@@ -179,9 +181,35 @@ internal data class ThreadTimelineUiState(
     val canRestoreQueuedDrafts: Boolean,
     val canPauseQueue: Boolean,
     val canResumeQueue: Boolean,
+    val pendingToolInputs: List<ToolUserInputCardUiState>,
     val runtime: ThreadRuntimeUiState,
     val fork: ThreadForkUiState,
     val composer: ComposerUiState,
+)
+
+internal data class ToolUserInputCardUiState(
+    val requestId: String,
+    val title: String,
+    val message: String?,
+    val questions: List<ToolUserInputQuestionUiState>,
+    val isSubmitting: Boolean,
+    val submitEnabled: Boolean,
+)
+
+internal data class ToolUserInputQuestionUiState(
+    val id: String,
+    val header: String?,
+    val question: String,
+    val answer: String,
+    val options: List<ToolUserInputOptionUiState>,
+    val allowsCustomAnswer: Boolean,
+    val isSecret: Boolean,
+)
+
+internal data class ToolUserInputOptionUiState(
+    val label: String,
+    val description: String?,
+    val isSelected: Boolean,
 )
 
 internal data class ThreadGitUiState(
@@ -476,6 +504,39 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val readyComposerAttachments = composerAttachments.readyAttachments()
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
+    val pendingToolInputs = pendingToolInputsByThread[threadId]
+        .orEmpty()
+        .values
+        .map { request ->
+            val answers = toolInputAnswersByRequest[request.requestId].orEmpty()
+            ToolUserInputCardUiState(
+                requestId = request.requestId,
+                title = request.title ?: "Questions",
+                message = request.message,
+                questions = request.questions.map { question ->
+                    val answer = answers[question.id].orEmpty()
+                    ToolUserInputQuestionUiState(
+                        id = question.id,
+                        header = question.header,
+                        question = question.question,
+                        answer = answer,
+                        options = question.options.map { option ->
+                            ToolUserInputOptionUiState(
+                                label = option.label,
+                                description = option.description,
+                                isSelected = answer == option.label,
+                            )
+                        },
+                        allowsCustomAnswer = question.allowsCustomAnswer(answer),
+                        isSecret = question.isSecret,
+                    )
+                },
+                isSubmitting = request.requestId in submittingToolInputRequestIds,
+                submitEnabled = request.questions.isNotEmpty() && request.questions.all { question ->
+                    answers[question.id]?.trim()?.isNotEmpty() == true
+                },
+            )
+        }
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
     val workingDirectory = selectedThread?.cwd
         ?.trim()
@@ -568,6 +629,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         canResumeQueue = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
             && queueState?.isPaused == true,
+        pendingToolInputs = pendingToolInputs,
         runtime = threadRuntime,
         fork = ThreadForkUiState(
             isEnabled = supportsThreadFork
@@ -1133,4 +1195,10 @@ private fun buildThreadForkTargets(
     }
 
     return targets
+}
+
+private fun ToolUserInputQuestion.allowsCustomAnswer(currentAnswer: String): Boolean {
+    return options.isEmpty()
+        || isOther
+        || (currentAnswer.isNotBlank() && options.none { option -> option.label == currentAnswer })
 }

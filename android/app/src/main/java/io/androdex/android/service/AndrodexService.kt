@@ -25,11 +25,15 @@ import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadTokenUsage
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.ToolUserInputAnswer
+import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.model.requestId
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.reviewRequestText
 import kotlinx.coroutines.CoroutineScope
@@ -99,6 +103,7 @@ data class AndrodexServiceState(
     val skillInventoryVersion: Long = 0L,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
+    val pendingToolInputsByThread: Map<String, Map<String, ToolUserInputRequest>> = emptyMap(),
 ) {
     val messages: List<ConversationMessage>
         get() = selectedThreadId?.let { timelineByThread[it] }.orEmpty()
@@ -396,6 +401,33 @@ class AndrodexService(
     suspend fun respondToApproval(accept: Boolean) {
         val request = stateFlow.value.pendingApproval ?: return
         repository.respondToApproval(request, accept)
+    }
+
+    suspend fun respondToToolUserInput(
+        threadId: String,
+        requestId: String,
+        answers: Map<String, String>,
+    ) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val normalizedRequestId = requestId.trim().takeIf { it.isNotEmpty() } ?: return
+        val request = stateFlow.value.pendingToolInputsByThread[normalizedThreadId]
+            ?.get(normalizedRequestId)
+            ?: return
+        val response = ToolUserInputResponse(
+            answers = request.questions.mapNotNull { question ->
+                val answer = answers[question.id]?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                question.id to ToolUserInputAnswer(answers = listOf(answer))
+            }.toMap()
+        )
+        repository.respondToToolUserInput(request, response)
+        stateFlow.update { current ->
+            current.copy(
+                pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequest(
+                    threadId = normalizedThreadId,
+                    requestId = normalizedRequestId,
+                )
+            )
+        }
     }
 
     suspend fun loadRuntimeConfig() {
@@ -969,10 +1001,22 @@ class AndrodexService(
             }
 
             is ClientUpdate.ToolUserInputRequested -> {
-                val summary = update.request.title
-                    ?: update.request.message
-                    ?: "The host requested structured tool input, but this Android build cannot answer it yet."
-                stateFlow.update { it.copy(errorMessage = summary) }
+                val resolvedThreadId = resolveToolInputThreadId(update.request)
+                if (resolvedThreadId == null) {
+                    val summary = update.request.title
+                        ?: update.request.message
+                        ?: "The host requested structured tool input without a thread context."
+                    stateFlow.update { it.copy(errorMessage = summary) }
+                } else {
+                    stateFlow.update { current ->
+                        val existingForThread = current.pendingToolInputsByThread[resolvedThreadId].orEmpty()
+                        current.copy(
+                            pendingToolInputsByThread = current.pendingToolInputsByThread + (
+                                resolvedThreadId to (existingForThread + (update.request.requestId to update.request))
+                            )
+                        )
+                    }
+                }
             }
 
             ClientUpdate.ApprovalCleared -> {
@@ -1195,6 +1239,12 @@ class AndrodexService(
                 latestTurnTerminalStateByThread = emptyMap(),
             )
         }
+    }
+
+    private fun resolveToolInputThreadId(request: ToolUserInputRequest): String? {
+        return resolveThreadId(request.threadId, request.turnId, request.itemId)
+            ?: stateFlow.value.selectedThreadId
+            ?: stateFlow.value.threads.singleOrNull()?.id
     }
 
     private suspend fun resolveActiveTurn(threadId: String): ActiveTurnResolution {
@@ -1612,6 +1662,18 @@ class AndrodexService(
             }
             current.copy(timelineByThread = nextTimeline)
         }
+    }
+}
+
+private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputRequest(
+    threadId: String,
+    requestId: String,
+): Map<String, Map<String, ToolUserInputRequest>> {
+    val requestsForThread = this[threadId].orEmpty() - requestId
+    return if (requestsForThread.isEmpty()) {
+        this - threadId
+    } else {
+        this + (threadId to requestsForThread)
     }
 }
 

@@ -69,6 +69,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -97,6 +99,8 @@ import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.state.ThreadGitUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
+import io.androdex.android.ui.state.ToolUserInputCardUiState
+import io.androdex.android.ui.state.ToolUserInputQuestionUiState
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -129,6 +133,8 @@ internal fun ThreadTimelineScreen(
     onResumeQueue: () -> Unit,
     onRestoreQueuedDraft: (String) -> Unit,
     onRemoveQueuedDraft: (String) -> Unit,
+    onToolInputAnswerChanged: (String, String, String) -> Unit,
+    onSubmitToolInput: (String) -> Unit,
     onRefreshGit: () -> Unit,
     onLoadGitDiff: () -> Unit,
     onOpenGitCommit: () -> Unit,
@@ -342,6 +348,14 @@ internal fun ThreadTimelineScreen(
                     onResumeQueue = onResumeQueue,
                     onRestoreDraft = onRestoreQueuedDraft,
                     onRemoveDraft = onRemoveQueuedDraft,
+                )
+            }
+
+            AnimatedVisibility(visible = state.pendingToolInputs.isNotEmpty()) {
+                PendingToolInputsCard(
+                    requests = state.pendingToolInputs,
+                    onAnswerChanged = onToolInputAnswerChanged,
+                    onSubmit = onSubmitToolInput,
                 )
             }
 
@@ -568,6 +582,164 @@ private fun QueuedDraftsCard(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PendingToolInputsCard(
+    requests: List<ToolUserInputCardUiState>,
+    onAnswerChanged: (String, String, String) -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            requests.forEachIndexed { index, request ->
+                ToolInputRequestCard(
+                    request = request,
+                    onAnswerChanged = onAnswerChanged,
+                    onSubmit = onSubmit,
+                )
+                if (index < requests.lastIndex) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolInputRequestCard(
+    request: ToolUserInputCardUiState,
+    onAnswerChanged: (String, String, String) -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = request.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            request.message?.takeIf { it.isNotBlank() }?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        request.questions.forEach { question ->
+            ToolInputQuestionCard(
+                requestId = request.requestId,
+                question = question,
+                enabled = !request.isSubmitting,
+                onAnswerChanged = onAnswerChanged,
+            )
+        }
+
+        Button(
+            onClick = { onSubmit(request.requestId) },
+            enabled = request.submitEnabled && !request.isSubmitting,
+            modifier = Modifier.align(Alignment.End),
+        ) {
+            if (request.isSubmitting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Text("Submit")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolInputQuestionCard(
+    requestId: String,
+    question: ToolUserInputQuestionUiState,
+    enabled: Boolean,
+    onAnswerChanged: (String, String, String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        question.header?.takeIf { it.isNotBlank() }?.let { header ->
+            Text(
+                text = header,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Text(
+            text = question.question,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        question.options.forEach { option ->
+            OutlinedButton(
+                onClick = { onAnswerChanged(requestId, question.id, option.label) },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = option.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (option.isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        fontWeight = if (option.isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                    option.description?.takeIf { it.isNotBlank() }?.let { description ->
+                        Text(
+                            text = description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (question.allowsCustomAnswer) {
+            OutlinedTextField(
+                value = question.answer,
+                onValueChange = { onAnswerChanged(requestId, question.id, it) },
+                enabled = enabled,
+                label = {
+                    Text(if (question.options.isEmpty()) "Answer" else "Other")
+                },
+                visualTransformation = if (question.isSecret) {
+                    PasswordVisualTransformation()
+                } else {
+                    VisualTransformation.None
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

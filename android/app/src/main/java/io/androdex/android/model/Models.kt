@@ -637,8 +637,45 @@ data class ToolUserInputRequest(
     val itemId: String?,
     val title: String?,
     val message: String?,
+    val questions: List<ToolUserInputQuestion>,
     val rawPayload: String,
 )
+
+data class ToolUserInputQuestion(
+    val id: String,
+    val header: String?,
+    val question: String,
+    val options: List<ToolUserInputOption> = emptyList(),
+    val isOther: Boolean = false,
+    val isSecret: Boolean = false,
+)
+
+data class ToolUserInputOption(
+    val label: String,
+    val description: String? = null,
+)
+
+data class ToolUserInputAnswer(
+    val answers: List<String>,
+)
+
+data class ToolUserInputResponse(
+    val answers: Map<String, ToolUserInputAnswer>,
+) {
+    fun toJson(): JSONObject {
+        val answersJson = JSONObject()
+        answers.forEach { (questionId, answer) ->
+            answersJson.put(
+                questionId,
+                JSONObject().put("answers", JSONArray(answer.answers)),
+            )
+        }
+        return JSONObject().put("answers", answersJson)
+    }
+}
+
+val ToolUserInputRequest.requestId: String
+    get() = idValue.toString()
 
 enum class ConnectionStatus {
     DISCONNECTED,

@@ -245,6 +245,8 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 onResumeQueue = viewModel::resumeSelectedThreadQueue,
                 onRestoreQueuedDraft = viewModel::restoreQueuedDraftToComposer,
                 onRemoveQueuedDraft = viewModel::removeQueuedDraft,
+                onToolInputAnswerChanged = viewModel::updateToolInputAnswer,
+                onSubmitToolInput = viewModel::submitToolInput,
                 onRefreshGit = viewModel::refreshSelectedThreadGitState,
                 onLoadGitDiff = viewModel::refreshSelectedThreadGitDiff,
                 onOpenGitCommit = viewModel::openGitCommitDialog,

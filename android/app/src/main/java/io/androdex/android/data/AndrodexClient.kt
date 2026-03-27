@@ -52,7 +52,10 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputOption
+import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
@@ -747,6 +750,13 @@ class AndrodexClient(
         updatesFlow.emit(ClientUpdate.ApprovalCleared)
     }
 
+    suspend fun respondToToolUserInput(
+        request: ToolUserInputRequest,
+        response: ToolUserInputResponse,
+    ) {
+        sendResponse(request.idValue, response.toJson())
+    }
+
     private suspend fun connect(pairing: PairingPayload) {
         connectionLifecycleMutex.withLock {
             disconnectInternal(clearSavedPairing = false)
@@ -1199,33 +1209,94 @@ class AndrodexClient(
             isToolUserInputRequestMethod(method) -> {
                 updatesFlow.emit(
                     ClientUpdate.ToolUserInputRequested(
-                        ToolUserInputRequest(
-                            idValue = idValue,
+                        decodeToolUserInputRequest(
                             method = method,
-                            threadId = extractThreadId(params),
-                            turnId = extractTurnId(params),
-                            itemId = extractItemId(params),
-                            title = (
-                                params?.stringOrNull("title", "label", "prompt", "question")
-                                    ?: params?.objectOrNull("input", "schema")?.stringOrNull("title", "label")
-                                ),
-                            message = (
-                                params?.stringOrNull("message", "description", "reason", "text")
-                                    ?: params?.objectOrNull("input", "schema")?.stringOrNull("description", "message")
-                                ),
-                            rawPayload = params?.toString() ?: "{}",
+                            idValue = idValue,
+                            params = params,
                         )
                     )
-                )
-                sendErrorResponse(
-                    idValue,
-                    -32601,
-                    "Structured tool input is not supported on this Android build yet.",
                 )
             }
 
             else -> sendErrorResponse(idValue, -32601, "Unsupported request method: $method")
         }
+    }
+
+    private fun decodeToolUserInputRequest(
+        method: String,
+        idValue: Any,
+        params: JSONObject?,
+    ): ToolUserInputRequest {
+        val candidateContainers = listOfNotNull(
+            params,
+            params?.objectOrNull("input"),
+            params?.objectOrNull("schema"),
+            params?.objectOrNull("request"),
+            params?.objectOrNull("input")?.objectOrNull("schema"),
+            params?.objectOrNull("msg", "event"),
+        )
+        val questions = candidateContainers.firstNotNullOfOrNull { container ->
+            container.arrayOrNull("questions")
+        }?.let(::decodeToolUserInputQuestions).orEmpty()
+
+        return ToolUserInputRequest(
+            idValue = idValue,
+            method = method,
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = extractItemId(params),
+            title = candidateContainers.firstNotNullOfOrNull { container ->
+                container.stringOrNull("title", "label", "prompt", "question")
+            },
+            message = candidateContainers.firstNotNullOfOrNull { container ->
+                container.stringOrNull("message", "description", "reason", "text")
+            },
+            questions = questions,
+            rawPayload = params?.toString() ?: "{}",
+        )
+    }
+
+    private fun decodeToolUserInputQuestions(questions: JSONArray): List<ToolUserInputQuestion> {
+        val decoded = mutableListOf<ToolUserInputQuestion>()
+        for (index in 0 until questions.length()) {
+            val candidate = questions.optJSONObject(index) ?: continue
+            val questionId = candidate.stringOrNull("id", "key", "name") ?: continue
+            val questionText = candidate.stringOrNull("question", "prompt", "label", "title") ?: continue
+            decoded += ToolUserInputQuestion(
+                id = questionId,
+                header = candidate.stringOrNull("header"),
+                question = questionText,
+                options = decodeToolUserInputOptions(candidate.arrayOrNull("options")),
+                isOther = candidate.booleanLikeOrFalse("isOther", "other", "allowOther"),
+                isSecret = candidate.booleanLikeOrFalse("isSecret", "secret"),
+            )
+        }
+        return decoded
+    }
+
+    private fun decodeToolUserInputOptions(options: JSONArray?): List<ToolUserInputOption> {
+        if (options == null) {
+            return emptyList()
+        }
+
+        val decoded = mutableListOf<ToolUserInputOption>()
+        for (index in 0 until options.length()) {
+            val optionObject = options.optJSONObject(index)
+            if (optionObject != null) {
+                val label = optionObject.stringOrNull("label") ?: continue
+                decoded += ToolUserInputOption(
+                    label = label,
+                    description = optionObject.stringOrNull("description"),
+                )
+                continue
+            }
+
+            val label = options.optString(index).trim()
+            if (label.isNotEmpty()) {
+                decoded += ToolUserInputOption(label = label)
+            }
+        }
+        return decoded
     }
 
     private suspend fun handleNotification(method: String, params: JSONObject?) {
@@ -1565,11 +1636,11 @@ class AndrodexClient(
         sendMessage(payload)
     }
 
-    private suspend fun sendResponse(idValue: Any, resultValue: String) {
+    private suspend fun sendResponse(idValue: Any, resultValue: Any?) {
         sendMessage(
             JSONObject()
                 .put("id", idValue)
-                .put("result", resultValue)
+                .put("result", resultValue.toJsonValue())
         )
     }
 

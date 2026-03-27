@@ -27,12 +27,15 @@ import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.ToolUserInputQuestion
+import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.model.requestId
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
 import io.androdex.android.notifications.NotificationCoordinator
@@ -116,6 +119,9 @@ data class AndrodexUiState(
     val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
+    val pendingToolInputsByThread: Map<String, Map<String, ToolUserInputRequest>> = emptyMap(),
+    val toolInputAnswersByRequest: Map<String, Map<String, String>> = emptyMap(),
+    val submittingToolInputRequestIds: Set<String> = emptySet(),
     val gitStateByThread: Map<String, ThreadGitState> = emptyMap(),
     val runningGitActionByThread: Map<String, GitActionKind> = emptyMap(),
     val gitCommitDialog: GitCommitDialogState? = null,
@@ -1382,6 +1388,67 @@ class MainViewModel(
         }
     }
 
+    fun updateToolInputAnswer(
+        requestId: String,
+        questionId: String,
+        value: String,
+    ) {
+        uiStateFlow.update { current ->
+            val normalizedRequestId = requestId.trim().takeIf { it.isNotEmpty() } ?: return@update current
+            val normalizedQuestionId = questionId.trim().takeIf { it.isNotEmpty() } ?: return@update current
+            val existingAnswers = current.toolInputAnswersByRequest[normalizedRequestId].orEmpty()
+            val nextAnswers = if (value.isBlank()) {
+                existingAnswers - normalizedQuestionId
+            } else {
+                existingAnswers + (normalizedQuestionId to value)
+            }
+            current.copy(
+                toolInputAnswersByRequest = current.toolInputAnswersByRequest.updatedToolInputAnswers(
+                    requestId = normalizedRequestId,
+                    answers = nextAnswers,
+                ),
+            )
+        }
+    }
+
+    fun submitToolInput(requestId: String) {
+        val snapshot = uiStateFlow.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val request = snapshot.pendingToolInputsByThread[threadId]?.get(requestId) ?: return
+        if (requestId in snapshot.submittingToolInputRequestIds
+            || snapshot.isBusy
+            || snapshot.isSendingMessage
+            || snapshot.isInterruptingSelectedThread
+        ) {
+            return
+        }
+
+        val answers = snapshot.toolInputAnswersByRequest[requestId].orEmpty()
+        if (!request.hasCompleteAnswerSet(answers)) {
+            service.reportError("Answer each prompt before submitting.")
+            return
+        }
+
+        uiStateFlow.update {
+            it.copy(submittingToolInputRequestIds = it.submittingToolInputRequestIds + requestId)
+        }
+        viewModelScope.launch {
+            try {
+                service.respondToToolUserInput(
+                    threadId = threadId,
+                    requestId = requestId,
+                    answers = answers,
+                )
+            } catch (error: Throwable) {
+                service.reportError(error.message ?: "Failed to submit the prompt response.")
+            } finally {
+                uiStateFlow.update {
+                    it.copy(submittingToolInputRequestIds = it.submittingToolInputRequestIds - requestId)
+                }
+            }
+        }
+    }
+
     fun respondToApproval(accept: Boolean) {
         runBusyAction("Sending approval...") {
             service.respondToApproval(accept)
@@ -2279,6 +2346,24 @@ private fun applyServiceState(
     val selectedThreadSubagents = serviceState.selectedThreadId
         ?.let { it in current.composerSubagentsByThread }
         ?: false
+    val pendingToolInputRequestIds = serviceState.pendingToolInputsByThread.values
+        .flatMap { it.keys }
+        .toSet()
+    val pendingToolInputByRequestId = serviceState.pendingToolInputsByThread.values
+        .flatMap { it.values }
+        .associateBy { it.requestId }
+    val toolInputAnswersByRequest = current.toolInputAnswersByRequest.mapNotNull { (requestId, answers) ->
+        val questionIds = pendingToolInputByRequestId[requestId]
+            ?.questions
+            ?.mapTo(mutableSetOf()) { it.id }
+            ?: return@mapNotNull null
+        val filteredAnswers = answers.filterKeys { it in questionIds }
+        if (filteredAnswers.isEmpty()) {
+            null
+        } else {
+            requestId to filteredAnswers
+        }
+    }.toMap()
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         trustedPairSnapshot = serviceState.trustedPairSnapshot,
@@ -2334,6 +2419,9 @@ private fun applyServiceState(
         missingNotificationThreadPrompt = serviceState.missingNotificationThreadPrompt,
         errorMessage = serviceState.errorMessage,
         pendingApproval = serviceState.pendingApproval,
+        pendingToolInputsByThread = serviceState.pendingToolInputsByThread,
+        toolInputAnswersByRequest = toolInputAnswersByRequest,
+        submittingToolInputRequestIds = current.submittingToolInputRequestIds.intersect(pendingToolInputRequestIds),
     )
 }
 
@@ -2377,6 +2465,17 @@ private fun Map<String, String>.updatedThreadDraft(
     }
 }
 
+private fun Map<String, Map<String, String>>.updatedToolInputAnswers(
+    requestId: String,
+    answers: Map<String, String>,
+): Map<String, Map<String, String>> {
+    return if (answers.isEmpty()) {
+        this - requestId
+    } else {
+        this + (requestId to answers)
+    }
+}
+
 private fun Map<String, List<ComposerImageAttachment>>.updatedComposerAttachments(
     threadId: String,
     attachments: List<ComposerImageAttachment>,
@@ -2385,6 +2484,15 @@ private fun Map<String, List<ComposerImageAttachment>>.updatedComposerAttachment
         this - threadId
     } else {
         this + (threadId to attachments)
+    }
+}
+
+private fun ToolUserInputRequest.hasCompleteAnswerSet(answers: Map<String, String>): Boolean {
+    if (questions.isEmpty()) {
+        return false
+    }
+    return questions.all { question ->
+        answers[question.id]?.trim()?.isNotEmpty() == true
     }
 }
 

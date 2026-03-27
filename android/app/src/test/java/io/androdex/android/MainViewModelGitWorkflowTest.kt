@@ -23,6 +23,8 @@ import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -356,6 +358,8 @@ private class GitTestRepository : AndrodexRepositoryContract {
     override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) = Unit
+
+    override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) = Unit
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState = recentState
 

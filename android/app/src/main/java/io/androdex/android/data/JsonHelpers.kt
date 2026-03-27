@@ -86,6 +86,27 @@ fun JSONObject.arrayOrNull(vararg keys: String): JSONArray? {
     return null
 }
 
+fun JSONObject.booleanLikeOrFalse(vararg keys: String): Boolean {
+    for (key in keys) {
+        val rawValue = opt(key)
+        when (rawValue) {
+            null, JSONObject.NULL -> Unit
+            is Boolean -> return rawValue
+            is Number -> return rawValue.toInt() != 0
+            is String -> {
+                val normalized = rawValue.trim().lowercase(Locale.US)
+                if (normalized in setOf("true", "1", "yes")) {
+                    return true
+                }
+                if (normalized in setOf("false", "0", "no")) {
+                    return false
+                }
+            }
+        }
+    }
+    return false
+}
+
 fun normalizeItemType(rawValue: String?): String {
     return rawValue
         ?.trim()

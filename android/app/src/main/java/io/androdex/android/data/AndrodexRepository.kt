@@ -26,6 +26,8 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -93,6 +95,7 @@ interface AndrodexRepositoryContract {
         throw UnsupportedOperationException("Thread fork is not available in this repository implementation.")
     }
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean)
+    suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse)
     suspend fun listRecentWorkspaces(): WorkspaceRecentState
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult
     suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus
@@ -250,6 +253,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         client.respondToApproval(request, accept)
+    }
+
+    override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
+        client.respondToToolUserInput(request, response)
     }
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState = client.listRecentWorkspaces()

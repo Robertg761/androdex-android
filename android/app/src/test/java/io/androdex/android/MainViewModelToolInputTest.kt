@@ -2,10 +2,10 @@ package io.androdex.android
 
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.CollaborationModeKind
-import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
@@ -20,18 +20,18 @@ import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ImageAttachment
-import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TurnSkillMention
-import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -42,13 +42,12 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-class MainViewModelAttachmentStateTest {
+class MainViewModelToolInputTest {
     private val dispatcher = StandardTestDispatcher()
 
     @Before
@@ -62,139 +61,119 @@ class MainViewModelAttachmentStateTest {
     }
 
     @Test
-    fun beginComposerAttachmentIntake_capsAtMaxAndCreatesLoadingTiles() = runTest(dispatcher) {
-        val repository = AttachmentRepository()
+    fun submitToolInput_preventsDuplicateSubmissionAndClearsAfterAcknowledgment() = runTest(dispatcher) {
+        val repository = ToolInputRepository().apply {
+            toolInputResponseGate = CompletableDeferred()
+        }
         val viewModel = MainViewModel(repository)
         dispatcher.scheduler.runCurrent()
 
         repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
         repository.emit(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = emptyMap(),
+            )
+        )
+        repository.emit(
             ClientUpdate.ThreadsLoaded(
-                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
             )
         )
         dispatcher.scheduler.runCurrent()
         viewModel.openThread("thread-1")
         dispatcher.scheduler.runCurrent()
 
-        val reservation = viewModel.beginComposerAttachmentIntake(MAX_COMPOSER_IMAGE_ATTACHMENTS + 2)
+        repository.emit(
+            ClientUpdate.ToolUserInputRequested(
+                toolInputRequest(),
+            )
+        )
         dispatcher.scheduler.runCurrent()
 
-        assertNotNull(reservation)
-        assertEquals(MAX_COMPOSER_IMAGE_ATTACHMENTS, reservation?.acceptedIds?.size)
-        assertEquals(2, reservation?.droppedCount)
-        val attachments = viewModel.uiState.value.composerAttachmentsByThread["thread-1"].orEmpty()
-        assertEquals(MAX_COMPOSER_IMAGE_ATTACHMENTS, attachments.size)
-        assertTrue(attachments.all { it.state == ComposerImageAttachmentState.Loading })
+        viewModel.updateToolInputAnswer("request-1", "branch", "main")
+        viewModel.submitToolInput("request-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.submitToolInput("request-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(1, repository.respondToToolUserInputCalls)
+        assertTrue(viewModel.uiState.value.submittingToolInputRequestIds.contains("request-1"))
+        assertEquals(1, viewModel.uiState.value.pendingToolInputsByThread["thread-1"]?.size)
+
+        repository.toolInputResponseGate?.complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.submittingToolInputRequestIds.contains("request-1"))
+        assertTrue(viewModel.uiState.value.pendingToolInputsByThread["thread-1"].isNullOrEmpty())
+        assertTrue(viewModel.uiState.value.toolInputAnswersByRequest["request-1"].isNullOrEmpty())
     }
 
     @Test
-    fun sendMessage_doesNothingWhileAttachmentStateIsBlocking() = runTest(dispatcher) {
-        val repository = AttachmentRepository()
+    fun submitToolInput_failureKeepsPromptAndDraftAnswer() = runTest(dispatcher) {
+        val repository = ToolInputRepository().apply {
+            toolInputFailure = IllegalStateException("Host unavailable")
+        }
         val viewModel = MainViewModel(repository)
         dispatcher.scheduler.runCurrent()
 
         repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
         repository.emit(
             ClientUpdate.ThreadsLoaded(
-                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
             )
         )
         dispatcher.scheduler.runCurrent()
         viewModel.openThread("thread-1")
         dispatcher.scheduler.runCurrent()
-
-        val reservation = requireNotNull(viewModel.beginComposerAttachmentIntake(1))
-        viewModel.updateComposerAttachmentState(
-            threadId = reservation.threadId,
-            attachmentId = reservation.acceptedIds.single(),
-            state = ComposerImageAttachmentState.Failed("Couldn't load"),
-        )
+        repository.emit(ClientUpdate.ToolUserInputRequested(toolInputRequest()))
         dispatcher.scheduler.runCurrent()
 
-        viewModel.sendMessage()
+        viewModel.updateToolInputAnswer("request-1", "branch", "main")
+        viewModel.submitToolInput("request-1")
         dispatcher.scheduler.runCurrent()
 
-        assertTrue(repository.startedTurnInputs.isEmpty())
-        assertEquals(1, viewModel.uiState.value.composerAttachmentsByThread["thread-1"]?.size)
-    }
-
-    @Test
-    fun queuedAttachmentDraft_restoresReadyTilesAndFlushesAttachmentPayload() = runTest(dispatcher) {
-        val repository = AttachmentRepository()
-        val viewModel = MainViewModel(repository)
-        dispatcher.scheduler.runCurrent()
-
-        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
-        repository.emit(
-            ClientUpdate.ThreadsLoaded(
-                listOf(ThreadSummary("thread-1", "Conversation", null, "C:\\Projects\\Androdex", null, null))
-            )
-        )
-        dispatcher.scheduler.runCurrent()
-        viewModel.openThread("thread-1")
-        dispatcher.scheduler.runCurrent()
-
-        val reservation = requireNotNull(viewModel.beginComposerAttachmentIntake(1))
-        val attachment = ImageAttachment(
-            id = "image-1",
-            thumbnailBase64Jpeg = "thumb",
-            payloadDataUrl = "data:image/jpeg;base64,AAAA",
-        )
-        viewModel.updateComposerAttachmentState(
-            threadId = reservation.threadId,
-            attachmentId = reservation.acceptedIds.single(),
-            state = ComposerImageAttachmentState.Ready(attachment),
-        )
-        dispatcher.scheduler.runCurrent()
-
-        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
-        dispatcher.scheduler.runCurrent()
-        viewModel.sendMessage()
-        dispatcher.scheduler.runCurrent()
-        viewModel.pauseSelectedThreadQueue()
-        dispatcher.scheduler.runCurrent()
-
-        val queuedDraft = viewModel.uiState.value.queuedDraftStateByThread["thread-1"]
-            ?.drafts
-            ?.single()
-        assertNotNull(queuedDraft)
-        assertTrue(viewModel.uiState.value.composerAttachmentsByThread["thread-1"].isNullOrEmpty())
-        assertEquals(listOf(attachment), queuedDraft?.attachments)
-
-        repository.emit(
-            ClientUpdate.TurnCompleted(
-                threadId = "thread-1",
-                turnId = "turn-1",
-                terminalState = TurnTerminalState.COMPLETED,
-            )
-        )
-        dispatcher.scheduler.runCurrent()
-
-        viewModel.restoreQueuedDraftToComposer(requireNotNull(queuedDraft).id)
-        dispatcher.scheduler.runCurrent()
-
-        val restoredAttachments = viewModel.uiState.value.composerAttachmentsByThread["thread-1"].orEmpty()
-        assertEquals(1, restoredAttachments.size)
-        assertEquals(
-            ComposerImageAttachmentState.Ready(attachment),
-            restoredAttachments.single().state,
-        )
-
-        viewModel.sendMessage()
-        dispatcher.scheduler.runCurrent()
-
-        assertEquals(listOf("thread-1:"), repository.startedTurnInputs)
-        assertEquals(listOf(listOf(attachment)), repository.startedTurnAttachments)
-        assertTrue(viewModel.uiState.value.composerAttachmentsByThread["thread-1"].isNullOrEmpty())
+        assertEquals(1, repository.respondToToolUserInputCalls)
+        assertEquals("Host unavailable", viewModel.uiState.value.errorMessage)
+        assertEquals("main", viewModel.uiState.value.toolInputAnswersByRequest["request-1"]?.get("branch"))
+        assertEquals(1, viewModel.uiState.value.pendingToolInputsByThread["thread-1"]?.size)
     }
 }
 
-private class AttachmentRepository : AndrodexRepositoryContract {
+private fun toolInputRequest(): ToolUserInputRequest {
+    return ToolUserInputRequest(
+        idValue = "request-1",
+        method = "item/tool/requestUserInput",
+        threadId = "thread-1",
+        turnId = "turn-1",
+        itemId = "item-1",
+        title = "Pick a branch",
+        message = "Select which branch to inspect.",
+        questions = listOf(
+            ToolUserInputQuestion(
+                id = "branch",
+                header = "Branch",
+                question = "Which branch should we inspect?",
+                options = emptyList(),
+            )
+        ),
+        rawPayload = "{}",
+    )
+}
+
+private class ToolInputRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>()
 
-    val startedTurnInputs = mutableListOf<String>()
-    val startedTurnAttachments = mutableListOf<List<ImageAttachment>>()
+    var toolInputFailure: Throwable? = null
+    var toolInputResponseGate: CompletableDeferred<Unit>? = null
+    var respondToToolUserInputCalls = 0
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -260,10 +239,7 @@ private class AttachmentRepository : AndrodexRepositoryContract {
         attachments: List<ImageAttachment>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
-    ) {
-        startedTurnInputs += "$threadId:$userInput"
-        startedTurnAttachments += attachments
-    }
+    ) = Unit
 
     override suspend fun startReview(
         threadId: String,
@@ -297,10 +273,14 @@ private class AttachmentRepository : AndrodexRepositoryContract {
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) = Unit
 
-    override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) = Unit
+    override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
+        respondToToolUserInputCalls += 1
+        toolInputFailure?.let { throw it }
+        toolInputResponseGate?.await()
+    }
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
-        return WorkspaceRecentState(activeCwd = "C:\\Projects\\Androdex", recentWorkspaces = emptyList())
+        return WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
     }
 
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
@@ -309,7 +289,7 @@ private class AttachmentRepository : AndrodexRepositoryContract {
             parentPath = null,
             entries = emptyList(),
             rootEntries = emptyList(),
-            activeCwd = "C:\\Projects\\Androdex",
+            activeCwd = null,
             recentWorkspaces = emptyList(),
         )
     }
@@ -343,9 +323,7 @@ private class AttachmentRepository : AndrodexRepositoryContract {
         )
     }
 
-    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult {
-        return GitRepoDiffResult(patch = "")
-    }
+    override suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult = GitRepoDiffResult("")
 
     override suspend fun gitCommit(workingDirectory: String, message: String): GitCommitResult {
         return GitCommitResult("sha", "main", message)

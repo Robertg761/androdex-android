@@ -20,6 +20,9 @@ import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.ToolUserInputQuestion
+import io.androdex.android.model.ToolUserInputOption
+import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.TrustedPairSnapshot
@@ -366,5 +369,54 @@ class AndrodexFeatureStateTest {
         assertTrue(appState.settings.serviceTierOptions.any { it.value == "fast" && it.selected })
         assertTrue(appState.settings.about.projectUrl.contains("github.com"))
         assertTrue(appState.settings.bridgeStatus.serviceTierMessage.contains("available", ignoreCase = true))
+    }
+
+    @Test
+    fun threadRoute_surfacesPendingStructuredToolInputCards() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            pendingToolInputsByThread = mapOf(
+                "thread-9" to mapOf(
+                    "request-1" to ToolUserInputRequest(
+                        idValue = "request-1",
+                        method = "item/tool/requestUserInput",
+                        threadId = "thread-9",
+                        turnId = "turn-1",
+                        itemId = "item-1",
+                        title = "Pick a branch",
+                        message = "Select which branch to inspect.",
+                        questions = listOf(
+                            ToolUserInputQuestion(
+                                id = "branch",
+                                header = "Branch",
+                                question = "Which branch should we inspect?",
+                                options = listOf(
+                                    ToolUserInputOption("main", "Use the default branch."),
+                                    ToolUserInputOption("release", "Use the release branch."),
+                                ),
+                                isOther = true,
+                            )
+                        ),
+                        rawPayload = "{}",
+                    )
+                )
+            ),
+            toolInputAnswersByRequest = mapOf(
+                "request-1" to mapOf("branch" to "release")
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertEquals(1, route.state.pendingToolInputs.size)
+        val prompt = route.state.pendingToolInputs.single()
+        assertEquals("Pick a branch", prompt.title)
+        assertTrue(prompt.submitEnabled)
+        assertEquals("release", prompt.questions.single().answer)
+        assertTrue(prompt.questions.single().options.any { it.label == "release" && it.isSelected })
+        assertTrue(prompt.questions.single().allowsCustomAnswer)
     }
 }

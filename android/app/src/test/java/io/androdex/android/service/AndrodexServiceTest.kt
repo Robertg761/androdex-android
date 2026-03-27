@@ -28,12 +28,16 @@ import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputQuestion
+import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.WorkspaceRecentState
+import io.androdex.android.model.requestId
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -439,13 +443,13 @@ class AndrodexServiceTest {
     }
 
     @Test
-    fun toolUserInputRequests_surfaceUnsupportedMessage() = runTest {
+    fun toolUserInputRequests_storePendingPromptByThread() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
 
         service.processClientUpdate(
             ClientUpdate.ToolUserInputRequested(
-                io.androdex.android.model.ToolUserInputRequest(
+                ToolUserInputRequest(
                     idValue = "request-1",
                     method = "item/tool/requestUserInput",
                     threadId = "thread-1",
@@ -453,12 +457,112 @@ class AndrodexServiceTest {
                     itemId = "item-1",
                     title = "Pick a branch",
                     message = "Select which branch to inspect.",
+                    questions = listOf(
+                        ToolUserInputQuestion(
+                            id = "branch",
+                            header = "Branch",
+                            question = "Which branch should we inspect?",
+                            options = emptyList(),
+                        )
+                    ),
                     rawPayload = "{}",
                 )
             )
         )
 
-        assertEquals("Pick a branch", service.state.value.errorMessage)
+        assertEquals(
+            listOf("request-1"),
+            service.state.value.pendingToolInputsByThread["thread-1"]?.keys?.toList(),
+        )
+    }
+
+    @Test
+    fun toolUserInputRequests_persistAcrossReconnectRecovery() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Recovered", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        repository.emit(ClientUpdate.ThreadsLoaded(listOf(ThreadSummary("thread-1", "Recovered", null, null, null, null))))
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val request = ToolUserInputRequest(
+            idValue = "request-1",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemId = "item-1",
+            title = "Pick a branch",
+            message = "Select which branch to inspect.",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch should we inspect?",
+                    options = emptyList(),
+                )
+            ),
+            rawPayload = "{}",
+        )
+
+        service.processClientUpdate(ClientUpdate.ToolUserInputRequested(request))
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.RECONNECT_REQUIRED))
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("request-1"),
+            service.state.value.pendingToolInputsByThread["thread-1"]?.keys?.toList(),
+        )
+    }
+
+    @Test
+    fun respondToToolUserInput_clearsOnlyAfterSuccessfulAcknowledgment() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val request = ToolUserInputRequest(
+            idValue = "request-1",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemId = "item-1",
+            title = "Pick a branch",
+            message = "Select which branch to inspect.",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch should we inspect?",
+                    options = emptyList(),
+                )
+            ),
+            rawPayload = "{}",
+        )
+        service.processClientUpdate(ClientUpdate.ToolUserInputRequested(request))
+
+        service.respondToToolUserInput(
+            threadId = "thread-1",
+            requestId = "request-1",
+            answers = mapOf("branch" to "main"),
+        )
+
+        assertEquals("request-1", repository.lastToolInputRequest?.requestId)
+        assertEquals(listOf("main"), repository.lastToolInputResponse?.answers?.get("branch")?.answers)
+        assertTrue(service.state.value.pendingToolInputsByThread["thread-1"].isNullOrEmpty())
     }
 
     @Test
@@ -814,6 +918,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     val steeredTurns = mutableListOf<String>()
     val steeredTurnModes = mutableListOf<CollaborationModeKind?>()
     val interruptedTurns = mutableListOf<String>()
+    var lastToolInputRequest: ToolUserInputRequest? = null
+    var lastToolInputResponse: ToolUserInputResponse? = null
     var loadThreadError: Throwable? = null
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
@@ -884,6 +990,11 @@ private class FakeRepository : AndrodexRepositoryContract {
     override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) = Unit
+
+    override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
+        lastToolInputRequest = request
+        lastToolInputResponse = response
+    }
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState = recentState
 
