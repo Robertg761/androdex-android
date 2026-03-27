@@ -430,8 +430,43 @@ enum class ConversationKind {
     THINKING,
     FILE_CHANGE,
     COMMAND,
+    EXECUTION,
     SUBAGENT_ACTION,
     PLAN,
+}
+
+enum class ExecutionKind {
+    COMMAND,
+    REVIEW,
+    COMPACTION,
+    ROLLBACK,
+    CLEANUP,
+    ACTIVITY,
+}
+
+data class ExecutionDetail(
+    val label: String,
+    val value: String,
+    val isMonospace: Boolean = false,
+)
+
+data class ExecutionContent(
+    val kind: ExecutionKind,
+    val title: String,
+    val status: String,
+    val summary: String? = null,
+    val output: String? = null,
+    val details: List<ExecutionDetail> = emptyList(),
+) {
+    val label: String
+        get() = when (kind) {
+            ExecutionKind.COMMAND -> "Command"
+            ExecutionKind.REVIEW -> "Review"
+            ExecutionKind.COMPACTION -> "Compaction"
+            ExecutionKind.ROLLBACK -> "Rollback"
+            ExecutionKind.CLEANUP -> "Cleanup"
+            ExecutionKind.ACTIVITY -> "Activity"
+        }
 }
 
 data class SubagentRef(
@@ -575,6 +610,7 @@ data class ConversationMessage(
     val status: String? = null,
     val diffText: String? = null,
     val command: String? = null,
+    val execution: ExecutionContent? = null,
     val planExplanation: String? = null,
     val planSteps: List<PlanStep>? = null,
     val subagentAction: SubagentAction? = null,
@@ -803,6 +839,16 @@ sealed interface ClientUpdate {
         val status: String?,
         val text: String,
         val isStreaming: Boolean,
+        val execution: ExecutionContent? = null,
+    ) : ClientUpdate
+
+    data class ExecutionUpdate(
+        val threadId: String?,
+        val turnId: String?,
+        val itemId: String?,
+        val text: String,
+        val isStreaming: Boolean,
+        val execution: ExecutionContent,
     ) : ClientUpdate
 
     data class ApprovalRequested(val request: ApprovalRequest) : ClientUpdate

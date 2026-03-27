@@ -1,8 +1,11 @@
 package io.androdex.android.data
 
+import io.androdex.android.model.ConversationKind
+import io.androdex.android.model.ExecutionKind
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolJsonHelpersTest {
@@ -57,5 +60,113 @@ class ProtocolJsonHelpersTest {
         assertEquals(1200, usage?.tokensUsed)
         assertEquals(32000, usage?.tokenLimit)
         assertEquals(30800, usage?.remainingTokens)
+    }
+
+    @Test
+    fun decodeCommandExecutionContent_buildsStructuredExecutionPayload() {
+        val content = decodeCommandExecutionContent(
+            JSONObject(
+                """
+                {
+                  "type": "commandExecution",
+                  "status": "running",
+                  "command": "npm test",
+                  "summary": "Running unit tests",
+                  "output": "PASS app.test.ts",
+                  "cwd": "G:\\Projects\\Androdex",
+                  "durationMs": 2100
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals("running", content.status)
+        assertEquals("npm test", content.command)
+        assertEquals(ExecutionKind.COMMAND, content.execution.kind)
+        assertEquals("npm test", content.execution.title)
+        assertEquals("Running unit tests", content.execution.summary)
+        assertEquals("PASS app.test.ts", content.execution.output)
+        assertTrue(
+            content.execution.details.any {
+                it.label == "Working directory" && it.value == "G:\\Projects\\Androdex"
+            }
+        )
+        assertTrue(
+            content.execution.details.any {
+                it.label == "Duration" && it.value == "2.1s"
+            }
+        )
+    }
+
+    @Test
+    fun decodeExecutionStyleContent_recognizesReviewItems() {
+        val content = decodeExecutionStyleContent(
+            JSONObject(
+                """
+                {
+                  "type": "reviewRequest",
+                  "status": "completed",
+                  "summary": "Reviewing current changes",
+                  "reason": "manual",
+                  "target": {
+                    "type": "uncommittedChanges"
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals("completed", content.status)
+        assertEquals(ExecutionKind.REVIEW, content.execution.kind)
+        assertEquals("Review current changes", content.execution.title)
+        assertEquals("Reviewing current changes", content.execution.summary)
+        assertTrue(
+            content.execution.details.any {
+                it.label == "Reason" && it.value == "manual"
+            }
+        )
+        assertTrue(
+            content.execution.details.any {
+                it.label == "Target" && it.value == "uncommittedChanges"
+            }
+        )
+    }
+
+    @Test
+    fun decodeMessagesFromThreadRead_preservesExecutionStyleHistoryRows() {
+        val messages = decodeMessagesFromThreadRead(
+            threadId = "thread-1",
+            threadObject = JSONObject(
+                """
+                {
+                  "updatedAt": "2026-03-27T12:00:00Z",
+                  "turns": [
+                    {
+                      "id": "turn-1",
+                      "items": [
+                        {
+                          "id": "review-1",
+                          "type": "reviewRequest",
+                          "status": "completed",
+                          "summary": "Reviewing current changes",
+                          "target": {
+                            "type": "uncommittedChanges"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals(1, messages.size)
+        val message = messages.single()
+        assertEquals(ConversationKind.EXECUTION, message.kind)
+        assertEquals("turn-1", message.turnId)
+        assertEquals("review-1", message.itemId)
+        assertEquals(ExecutionKind.REVIEW, message.execution?.kind)
+        assertEquals("Review current changes", message.execution?.title)
     }
 }

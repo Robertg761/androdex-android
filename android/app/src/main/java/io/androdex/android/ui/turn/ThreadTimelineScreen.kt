@@ -87,6 +87,9 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ExecutionContent
+import io.androdex.android.model.ExecutionDetail
+import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
@@ -1236,6 +1239,7 @@ private fun MessageBubble(message: ConversationMessage) {
         when (message.kind) {
             ConversationKind.FILE_CHANGE -> FileChangeBubble(message)
             ConversationKind.COMMAND -> CommandBubble(message)
+            ConversationKind.EXECUTION -> ExecutionBubble(message)
             ConversationKind.SUBAGENT_ACTION -> SubagentActionBubble(message)
             ConversationKind.PLAN -> PlanBubble(message)
             ConversationKind.THINKING -> ThinkingBubble(message)
@@ -1615,18 +1619,30 @@ private fun DiffView(
 
 @Composable
 private fun CommandBubble(message: ConversationMessage) {
-    val commandStatus = message.status?.lowercase() ?: "completed"
-    val isRunning = commandStatus == "running" || commandStatus == "in_progress"
-    val isFailed = commandStatus == "failed" || commandStatus == "error"
+    ExecutionBubble(message = message)
+}
+
+@Composable
+private fun ExecutionBubble(message: ConversationMessage) {
+    val execution = remember(message) { message.execution ?: fallbackExecutionContent(message) }
+    val normalizedStatus = execution.status.trim().lowercase()
+    val isRunning = normalizedStatus == "running" || normalizedStatus == "in_progress"
+    val isFailed = normalizedStatus == "failed" || normalizedStatus == "error"
     val statusColor = when {
         isRunning -> Color(0xFFFBBF24)
         isFailed -> Color(0xFFEF4444)
         else -> Color(0xFF34D399)
     }
-    val statusIcon = when {
-        isRunning -> ">"
-        isFailed -> "x"
-        else -> "$"
+    val titleStyle = if (execution.kind == ExecutionKind.COMMAND) {
+        MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+    } else {
+        MaterialTheme.typography.bodyMedium
+    }
+    val hasDetails = execution.summary?.isNotBlank() == true
+        || execution.details.isNotEmpty()
+        || execution.output?.isNotBlank() == true
+    var expanded by remember(message.id) {
+        mutableStateOf(message.isStreaming || isFailed)
     }
 
     Surface(
@@ -1634,79 +1650,187 @@ private fun CommandBubble(message: ConversationMessage) {
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = hasDetails) { expanded = !expanded }
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFF5F57)),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFFBD2E)),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF28C840)),
-                    )
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                Surface(
-                    color = statusColor.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(4.dp),
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF5F57)),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFBD2E)),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF28C840)),
+                        )
+                    }
+
+                    Surface(
+                        color = Color(0xFF313244),
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            text = execution.label.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFCDD6F4),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Surface(
+                        color = statusColor.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp),
+                    ) {
+                        Text(
+                            text = execution.status.normalizedExecutionStatusLabel(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = commandStatus.replaceFirstChar(Char::uppercase),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = statusColor,
+                        text = execution.title,
+                        style = titleStyle,
+                        color = Color(0xFFCDD6F4),
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+
+                    execution.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                        Text(
+                            text = summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFBAC2DE),
+                            maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                if (isRunning) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = statusColor,
+                        trackColor = Color(0xFF313244),
+                    )
+                } else if (hasDetails) {
+                    Text(
+                        text = if (expanded) "Hide details" else "Show details",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF94A3B8),
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Text(
-                    text = statusIcon,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = statusColor,
-                )
-                Text(
-                    text = message.command ?: message.text,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                    color = Color(0xFFCDD6F4),
-                )
+            AnimatedVisibility(visible = expanded && hasDetails) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    execution.details.forEach { detail ->
+                        ExecutionDetailRow(detail = detail)
+                    }
+                    execution.output?.takeIf { it.isNotBlank() }?.let { output ->
+                        ExecutionOutputView(output = output)
+                    }
+                }
             }
+        }
+    }
+}
 
-            if (isRunning) {
-                Spacer(modifier = Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = statusColor,
-                    trackColor = Color(0xFF313244),
+@Composable
+private fun ExecutionDetailRow(detail: ExecutionDetail) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = detail.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF94A3B8),
+            modifier = Modifier.width(120.dp),
+        )
+        Text(
+            text = detail.value,
+            style = if (detail.isMonospace) {
+                MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
+            color = Color(0xFFE2E8F0),
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ExecutionOutputView(output: String) {
+    val scrollState = rememberScrollState()
+    Surface(
+        color = Color(0xFF111827),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .horizontalScroll(scrollState)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            output.lines().forEach { line ->
+                Text(
+                    text = line.ifEmpty { " " },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                    ),
+                    color = Color(0xFFCBD5E1),
+                    softWrap = false,
                 )
             }
         }
     }
+}
+
+private fun fallbackExecutionContent(message: ConversationMessage): ExecutionContent {
+    val normalizedStatus = message.status ?: "completed"
+    return ExecutionContent(
+        kind = if (message.kind == ConversationKind.COMMAND) ExecutionKind.COMMAND else ExecutionKind.ACTIVITY,
+        title = message.command ?: message.text.lineSequence().firstOrNull()?.trim().orEmpty().ifBlank {
+            if (message.kind == ConversationKind.COMMAND) "command" else "Activity"
+        },
+        status = normalizedStatus,
+        summary = message.text.takeIf { it.isNotBlank() && it != message.command },
+        output = null,
+    )
 }
 
 @Composable
@@ -1989,6 +2113,22 @@ private fun PlanStep.isInProgress(): Boolean {
 }
 
 private fun String.normalizedPlanStatusLabel(): String {
+    return trim()
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+            token.replaceFirstChar { char ->
+                if (char.isLowerCase()) {
+                    char.titlecase()
+                } else {
+                    char.toString()
+                }
+            }
+        }
+}
+
+private fun String.normalizedExecutionStatusLabel(): String {
     return trim()
         .replace('_', ' ')
         .split(' ')

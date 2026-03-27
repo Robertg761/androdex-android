@@ -364,23 +364,36 @@ internal fun HostAccountCard(
 @Composable
 internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
     val isStreaming = messages.any { it.isStreaming }
-    val lastSystemMessage = messages.lastOrNull { it.role == ConversationRole.SYSTEM }
+    val activeSystemMessage = messages.lastOrNull {
+        it.role == ConversationRole.SYSTEM && it.isStreaming
+    } ?: messages.lastOrNull { it.role == ConversationRole.SYSTEM }
 
     val activityText = when {
-        !isStreaming && lastSystemMessage == null -> null
+        !isStreaming && activeSystemMessage == null -> null
         isStreaming -> "Agent is writing a response..."
-        lastSystemMessage?.kind == ConversationKind.FILE_CHANGE -> {
-            val fileName = lastSystemMessage.filePath
+        activeSystemMessage?.kind == ConversationKind.FILE_CHANGE -> {
+            val fileName = activeSystemMessage.filePath
                 ?.substringAfterLast('/')
                 ?.substringAfterLast('\\')
             if (fileName != null) "Edited $fileName" else "Edited files"
         }
-        lastSystemMessage?.kind == ConversationKind.COMMAND -> {
-            "Ran: ${lastSystemMessage.command?.take(40) ?: "command"}"
+        activeSystemMessage?.kind == ConversationKind.COMMAND -> {
+            val title = activeSystemMessage.execution?.title
+                ?: activeSystemMessage.command
+                ?: "command"
+            "Running: ${title.take(40)}"
         }
-        lastSystemMessage?.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
-        lastSystemMessage?.kind == ConversationKind.THINKING -> "Thinking..."
-        lastSystemMessage?.kind == ConversationKind.PLAN -> "Planning..."
+        activeSystemMessage?.kind == ConversationKind.EXECUTION -> {
+            val execution = activeSystemMessage.execution
+            when {
+                execution == null -> "Running activity..."
+                execution.title.isBlank() -> "Running ${execution.label.lowercase()}..."
+                else -> "${execution.label}: ${execution.title.take(48)}"
+            }
+        }
+        activeSystemMessage?.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
+        activeSystemMessage?.kind == ConversationKind.THINKING -> "Thinking..."
+        activeSystemMessage?.kind == ConversationKind.PLAN -> "Planning..."
         else -> null
     }
 

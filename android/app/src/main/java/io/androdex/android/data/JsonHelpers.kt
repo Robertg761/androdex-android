@@ -6,6 +6,9 @@ import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ExecutionContent
+import io.androdex.android.model.ExecutionDetail
+import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesResult
 import io.androdex.android.model.GitBranchesWithStatusResult
@@ -329,6 +332,23 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                             itemId = itemId,
                             status = commandData.status,
                             command = commandData.command,
+                            execution = commandData.execution,
+                        )
+                        continue
+                    }
+                    if (isExecutionStyleItemType(itemType)) {
+                        val executionData = decodeExecutionStyleContent(itemObject)
+                        messages += ConversationMessage(
+                            id = itemId ?: UUID.randomUUID().toString(),
+                            threadId = threadId,
+                            role = ConversationRole.SYSTEM,
+                            kind = ConversationKind.EXECUTION,
+                            text = executionData.text,
+                            createdAtEpochMs = createdAt,
+                            turnId = turnId,
+                            itemId = itemId,
+                            status = executionData.status,
+                            execution = executionData.execution,
                         )
                         continue
                     }
@@ -941,6 +961,13 @@ internal data class DecodedCommandExecutionContent(
     val status: String,
     val command: String?,
     val text: String,
+    val execution: ExecutionContent,
+)
+
+internal data class DecodedExecutionStyleContent(
+    val status: String,
+    val text: String,
+    val execution: ExecutionContent,
 )
 
 private fun decodeFileChangeStructured(itemObject: JSONObject): FileChangeData {
@@ -1002,6 +1029,10 @@ internal fun isCommandExecutionItemType(rawType: String?): Boolean {
         || normalized.startsWith("commandexec")
 }
 
+internal fun isExecutionStyleItemType(rawType: String?): Boolean {
+    return executionKindFromRawType(rawType)?.let { it != ExecutionKind.COMMAND } == true
+}
+
 internal fun decodeCommandExecutionContent(itemObject: JSONObject): DecodedCommandExecutionContent {
     val status = itemObject.stringOrNull("status") ?: "completed"
     val command = itemObject.stringOrNull(
@@ -1012,21 +1043,255 @@ internal fun decodeCommandExecutionContent(itemObject: JSONObject): DecodedComma
         "commandLine",
         "command_line",
     )
-    val summary = itemObject.stringOrNull("summary", "message", "text", "output", "delta")
-    val contentText = decodeItemText(itemObject).takeIf { it.isNotBlank() }
-    val text = listOfNotNull(summary, contentText)
-        .distinct()
-        .joinToString("\n\n")
-        .trim()
-        .ifBlank {
-            val commandLabel = command ?: "command"
-            "${status.replaceFirstChar(Char::uppercaseChar)}: $commandLabel"
+    val textPayload = decodeStructuredExecutionText(itemObject)
+    val normalizedCommand = command?.trim()?.takeIf { it.isNotEmpty() }
+        ?: textPayload.output?.trim()?.takeIf {
+            it.isNotEmpty() && !it.contains('\n')
         }
+    val execution = ExecutionContent(
+        kind = ExecutionKind.COMMAND,
+        title = normalizedCommand ?: "command",
+        status = status,
+        summary = textPayload.summary,
+        output = textPayload.output,
+        details = buildExecutionDetails(itemObject, includeCommand = false),
+    )
+    val text = buildExecutionDisplayText(
+        label = execution.label,
+        title = execution.title,
+        summary = execution.summary,
+        output = execution.output,
+        status = status,
+    )
     return DecodedCommandExecutionContent(
         status = status,
-        command = command ?: contentText?.takeIf { it.isNotBlank() },
+        command = normalizedCommand,
         text = text,
+        execution = execution,
     )
+}
+
+internal fun decodeExecutionStyleContent(itemObject: JSONObject): DecodedExecutionStyleContent {
+    val rawType = itemObject.stringOrNull("type")
+    val kind = executionKindFromRawType(rawType) ?: ExecutionKind.ACTIVITY
+    val status = itemObject.stringOrNull("status") ?: "completed"
+    val textPayload = decodeStructuredExecutionText(itemObject)
+    val title = buildExecutionTitle(
+        kind = kind,
+        rawType = rawType,
+        itemObject = itemObject,
+        fallbackSummary = textPayload.summary,
+    )
+    val execution = ExecutionContent(
+        kind = kind,
+        title = title,
+        status = status,
+        summary = textPayload.summary?.takeUnless { it.equals(title, ignoreCase = true) },
+        output = textPayload.output,
+        details = buildExecutionDetails(itemObject, includeCommand = true),
+    )
+    return DecodedExecutionStyleContent(
+        status = status,
+        text = buildExecutionDisplayText(
+            label = execution.label,
+            title = execution.title,
+            summary = execution.summary,
+            output = execution.output,
+            status = status,
+        ),
+        execution = execution,
+    )
+}
+
+private data class StructuredExecutionText(
+    val summary: String?,
+    val output: String?,
+)
+
+private fun decodeStructuredExecutionText(itemObject: JSONObject): StructuredExecutionText {
+    val summary = itemObject.stringOrNull("summary", "message")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val explicitOutput = itemObject.stringOrNull("output", "delta")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val contentText = decodeItemText(itemObject)
+        .trim()
+        .takeIf { it.isNotEmpty() }
+    val output = explicitOutput ?: when {
+        contentText == null -> itemObject.stringOrNull("output", "delta")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        summary == null -> contentText
+        contentText.equals(summary, ignoreCase = false) -> null
+        else -> contentText
+    }
+    val fallbackSummary = itemObject.stringOrNull("text")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.equals(output, ignoreCase = false) }
+    return StructuredExecutionText(
+        summary = summary ?: fallbackSummary,
+        output = output,
+    )
+}
+
+private fun buildExecutionDisplayText(
+    label: String,
+    title: String,
+    summary: String?,
+    output: String?,
+    status: String,
+): String {
+    val statusLabel = status.replace('_', ' ')
+        .trim()
+        .replaceFirstChar { char -> if (char.isLowerCase()) char.titlecase() else char.toString() }
+    return listOfNotNull(
+        "$statusLabel: $title",
+        summary?.takeIf { !it.equals(title, ignoreCase = true) },
+        output,
+    ).joinToString("\n\n")
+        .trim()
+        .ifBlank { "$label updated" }
+}
+
+private fun executionKindFromRawType(rawType: String?): ExecutionKind? {
+    val normalized = normalizeItemType(rawType)
+    return when {
+        normalized.isEmpty() -> null
+        isCommandExecutionItemType(normalized) -> ExecutionKind.COMMAND
+        normalized.contains("review") -> ExecutionKind.REVIEW
+        normalized.contains("compaction") || normalized.contains("compact") -> ExecutionKind.COMPACTION
+        normalized.contains("rollback") -> ExecutionKind.ROLLBACK
+        normalized.contains("backgroundterminal") || normalized.contains("terminalclean") || normalized.contains("clean") -> ExecutionKind.CLEANUP
+        normalized.contains("execution") || normalized.contains("activity") -> ExecutionKind.ACTIVITY
+        else -> null
+    }
+}
+
+private fun buildExecutionTitle(
+    kind: ExecutionKind,
+    rawType: String?,
+    itemObject: JSONObject,
+    fallbackSummary: String?,
+): String {
+    if (kind == ExecutionKind.REVIEW) {
+        val target = itemObject.objectOrNull("target")
+        val targetType = target?.stringOrNull("type")
+            ?: itemObject.stringOrNull("targetType", "target_type")
+        val branch = target?.stringOrNull("branch", "baseBranch", "base_branch")
+            ?: itemObject.stringOrNull("branch", "baseBranch", "base_branch")
+        return when {
+            targetType.equals("baseBranch", ignoreCase = true) && !branch.isNullOrBlank() -> "Review against $branch"
+            targetType.equals("uncommittedChanges", ignoreCase = true) -> "Review current changes"
+            !fallbackSummary.isNullOrBlank() -> fallbackSummary
+            else -> "Code review"
+        }
+    }
+
+    return itemObject.stringOrNull("title", "name")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: fallbackSummary
+        ?: when (kind) {
+            ExecutionKind.COMMAND -> "command"
+            ExecutionKind.REVIEW -> "Code review"
+            ExecutionKind.COMPACTION -> "Compact thread"
+            ExecutionKind.ROLLBACK -> "Rollback thread"
+            ExecutionKind.CLEANUP -> "Clean background terminals"
+            ExecutionKind.ACTIVITY -> humanizeExecutionType(rawType)
+        }
+}
+
+private fun buildExecutionDetails(
+    itemObject: JSONObject,
+    includeCommand: Boolean,
+): List<ExecutionDetail> {
+    val details = mutableListOf<ExecutionDetail>()
+
+    fun append(label: String, value: String?, isMonospace: Boolean = false) {
+        val normalized = value?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (details.any { it.label == label && it.value == normalized }) {
+            return
+        }
+        details += ExecutionDetail(label = label, value = normalized, isMonospace = isMonospace)
+    }
+
+    if (includeCommand) {
+        append(
+            label = "Command",
+            value = itemObject.stringOrNull(
+                "command",
+                "cmd",
+                "raw_command",
+                "rawCommand",
+                "commandLine",
+                "command_line",
+            ),
+            isMonospace = true,
+        )
+    }
+    append("Working directory", itemObject.stringOrNull("cwd", "workingDirectory", "working_directory"), true)
+    append(
+        "Exit code",
+        itemObject.stringOrNull("exitCode", "exit_code"),
+        true,
+    )
+    append("Branch", itemObject.stringOrNull("branch", "baseBranch", "base_branch"), true)
+    append("Reason", itemObject.stringOrNull("reason"))
+    append("Target", itemObject.stringOrNull("targetType", "target_type"))
+    append("Duration", decodeExecutionDuration(itemObject))
+
+    itemObject.objectOrNull("target")?.let { target ->
+        append("Target", target.stringOrNull("type"))
+        append("Branch", target.stringOrNull("branch", "baseBranch", "base_branch"), true)
+    }
+
+    return details
+}
+
+private fun decodeExecutionDuration(itemObject: JSONObject): String? {
+    val durationMs = itemObject.optLong("durationMs", itemObject.optLong("duration_ms", Long.MIN_VALUE))
+        .takeIf { it != Long.MIN_VALUE }
+    val durationSeconds = itemObject.optDouble("durationSeconds", itemObject.optDouble("duration_seconds", Double.NaN))
+        .takeIf { !it.isNaN() }
+    val totalMs = when {
+        durationMs != null -> durationMs
+        durationSeconds != null -> (durationSeconds * 1000).toLong()
+        else -> null
+    } ?: return null
+    return when {
+        totalMs >= 60_000L -> {
+            val minutes = totalMs / 60_000L
+            val seconds = (totalMs % 60_000L) / 1000L
+            "${minutes}m ${seconds}s"
+        }
+        totalMs >= 1_000L -> String.format(Locale.US, "%.1fs", totalMs / 1000.0)
+        else -> "${totalMs}ms"
+    }
+}
+
+private fun humanizeExecutionType(rawType: String?): String {
+    val value = rawType?.trim()?.takeIf { it.isNotEmpty() } ?: return "Activity"
+    val builder = StringBuilder()
+    value.forEachIndexed { index, char ->
+        when {
+            char == '_' || char == '-' || char == '/' -> builder.append(' ')
+            char.isUpperCase() && index > 0 && builder.lastOrNull()?.isWhitespace() == false -> {
+                builder.append(' ')
+                builder.append(char.lowercaseChar())
+            }
+            else -> builder.append(char.lowercaseChar())
+        }
+    }
+    return builder.toString()
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+            token.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+        }
+        .ifBlank { "Activity" }
 }
 
 internal fun decodeThreadTokenUsage(resultObject: JSONObject): ThreadTokenUsage? {

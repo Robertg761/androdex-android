@@ -8,6 +8,8 @@ import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.ExecutionContent
+import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitCheckoutResult
@@ -226,6 +228,86 @@ class AndrodexServiceTest {
         assertEquals("Completed: npm test", command.text)
         assertEquals("completed", command.status)
         assertFalse(command.isStreaming)
+    }
+
+    @Test
+    fun commandExecutionUpdates_keepDistinctSameCommandRerunsWhenItemIdsAreMissing() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "npm test",
+                status = "completed",
+                text = "Completed: npm test",
+                isStreaming = false,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "npm test",
+                status = "running",
+                text = "Running: npm test",
+                isStreaming = true,
+            )
+        )
+
+        val commands = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.COMMAND }
+        assertEquals(2, commands.size)
+        assertEquals(listOf("Completed: npm test", "Running: npm test"), commands.map { it.text })
+    }
+
+    @Test
+    fun executionUpdates_mergeStructuredRowsByItemId() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "review-1",
+                text = "Running: Review current changes",
+                isStreaming = true,
+                execution = ExecutionContent(
+                    kind = ExecutionKind.REVIEW,
+                    title = "Review current changes",
+                    status = "running",
+                    summary = "Inspecting uncommitted changes",
+                ),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "review-1",
+                text = "Completed: Review current changes",
+                isStreaming = false,
+                execution = ExecutionContent(
+                    kind = ExecutionKind.REVIEW,
+                    title = "Review current changes",
+                    status = "completed",
+                    summary = "Found two issues",
+                ),
+            )
+        )
+
+        val executions = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.EXECUTION }
+        assertEquals(1, executions.size)
+        val review = executions.single()
+        assertEquals("review-1", review.itemId)
+        assertEquals("completed", review.status)
+        assertEquals("Found two issues", review.execution?.summary)
+        assertFalse(review.isStreaming)
     }
 
     @Test

@@ -1432,7 +1432,7 @@ class AndrodexClient(
         if (emitSubagentActionUpdateIfPresent(method, params)) {
             return
         }
-        extractCommandExecutionUpdate(method, params)?.let { update ->
+        extractExecutionProtocolUpdate(method, params)?.let { update ->
             updatesFlow.emit(update)
             return
         }
@@ -1889,6 +1889,11 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.let(::extractItemId)
     }
 
+    private fun extractExecutionProtocolUpdate(method: String, params: JSONObject?): ClientUpdate? {
+        return extractCommandExecutionUpdate(method, params)
+            ?: extractExecutionStyleUpdate(method, params)
+    }
+
     private fun extractCommandExecutionUpdate(method: String, params: JSONObject?): ClientUpdate.CommandExecutionUpdate? {
         val normalizedMethod = normalizeItemType(method)
         val item = params?.objectOrNull("item")
@@ -1924,6 +1929,37 @@ class AndrodexClient(
             status = commandData.status,
             text = commandData.text,
             isStreaming = isStreaming,
+            execution = commandData.execution,
+        )
+    }
+
+    private fun extractExecutionStyleUpdate(method: String, params: JSONObject?): ClientUpdate.ExecutionUpdate? {
+        val item = params?.objectOrNull("item")
+            ?: params?.objectOrNull("msg", "event")?.optJSONObject("item")
+            ?: return null
+        if (!isExecutionStyleItemType(item.optString("type"))) {
+            return null
+        }
+
+        val normalizedMethod = normalizeItemType(method)
+        val executionData = decodeExecutionStyleContent(item)
+        val isStreaming = when {
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || normalizedMethod == "itemcompleted"
+                || normalizedMethod == "codexeventitemcompleted"
+                || normalizedMethod == "codexeventagentmessage" -> false
+            normalizedMethod.contains("delta") || normalizedMethod.contains("updated") -> true
+            else -> !isTerminalCommandStatus(executionData.status)
+        }
+        return ClientUpdate.ExecutionUpdate(
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = extractItemId(params),
+            text = executionData.text,
+            isStreaming = isStreaming,
+            execution = executionData.execution,
         )
     }
 

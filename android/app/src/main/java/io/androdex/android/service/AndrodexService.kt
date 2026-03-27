@@ -11,6 +11,7 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.ExecutionContent
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
@@ -983,14 +984,37 @@ class AndrodexService(
                     markThreadRunning(threadId, update.turnId)
                 }
                 updateThreadMessages(threadId) { messages ->
-                    upsertCommandExecutionMessage(
+                    upsertExecutionMessage(
                         messages = messages,
                         threadId = threadId,
                         turnId = update.turnId,
                         itemId = update.itemId,
+                        kind = ConversationKind.COMMAND,
                         command = update.command,
                         status = update.status,
                         text = update.text,
+                        execution = update.execution,
+                        isStreaming = update.isStreaming,
+                    )
+                }
+            }
+
+            is ClientUpdate.ExecutionUpdate -> {
+                val threadId = resolveThreadId(update.threadId, update.turnId, update.itemId) ?: return
+                if (!update.turnId.isNullOrBlank() && shouldPromoteIncomingTurnActivity(threadId, update.turnId)) {
+                    markThreadRunning(threadId, update.turnId)
+                }
+                updateThreadMessages(threadId) { messages ->
+                    upsertExecutionMessage(
+                        messages = messages,
+                        threadId = threadId,
+                        turnId = update.turnId,
+                        itemId = update.itemId,
+                        kind = ConversationKind.EXECUTION,
+                        command = null,
+                        status = update.execution.status,
+                        text = update.text,
+                        execution = update.execution,
                         isStreaming = update.isStreaming,
                     )
                 }
@@ -1860,21 +1884,23 @@ private fun upsertSubagentActionMessage(
     return updated
 }
 
-private fun upsertCommandExecutionMessage(
+private fun upsertExecutionMessage(
     messages: List<ConversationMessage>,
     threadId: String,
     turnId: String?,
     itemId: String?,
+    kind: ConversationKind,
     command: String?,
     status: String?,
     text: String,
+    execution: ExecutionContent?,
     isStreaming: Boolean,
 ): List<ConversationMessage> {
     val incoming = ConversationMessage(
         id = itemId ?: UUID.randomUUID().toString(),
         threadId = threadId,
         role = ConversationRole.SYSTEM,
-        kind = ConversationKind.COMMAND,
+        kind = kind,
         text = text,
         createdAtEpochMs = System.currentTimeMillis(),
         turnId = turnId,
@@ -1882,11 +1908,12 @@ private fun upsertCommandExecutionMessage(
         isStreaming = isStreaming,
         status = status,
         command = command,
+        execution = execution,
     )
     val existingIndex = messages.indexOfLast { message ->
         message.role == ConversationRole.SYSTEM
-            && message.kind == ConversationKind.COMMAND
-            && commandMessagesRepresentSameItem(message, incoming)
+            && message.kind == kind
+            && executionMessagesRepresentSameItem(message, incoming)
     }
     if (existingIndex < 0) {
         return messages + incoming
@@ -1906,6 +1933,7 @@ private fun upsertCommandExecutionMessage(
         },
         status = incoming.status ?: existing.status,
         command = incoming.command ?: existing.command,
+        execution = incoming.execution ?: existing.execution,
         isStreaming = isStreaming || (existing.isStreaming && incoming.text.length <= existing.text.length),
     )
     return updated
@@ -1964,6 +1992,7 @@ private fun mergeMatchedMessage(
         status = incoming.status ?: existing.status,
         diffText = incoming.diffText ?: existing.diffText,
         command = incoming.command ?: existing.command,
+        execution = incoming.execution ?: existing.execution,
         planExplanation = incoming.planExplanation ?: existing.planExplanation,
         planSteps = incoming.planSteps ?: existing.planSteps,
         subagentAction = incoming.subagentAction ?: existing.subagentAction,
@@ -1975,8 +2004,9 @@ private fun timelineMessagesRepresentSameItem(
     incoming: ConversationMessage,
 ): Boolean {
     return when {
-        existing.kind == ConversationKind.COMMAND && incoming.kind == ConversationKind.COMMAND -> {
-            commandMessagesRepresentSameItem(existing, incoming)
+        existing.kind in setOf(ConversationKind.COMMAND, ConversationKind.EXECUTION)
+            && incoming.kind in setOf(ConversationKind.COMMAND, ConversationKind.EXECUTION) -> {
+            executionMessagesRepresentSameItem(existing, incoming)
         }
 
         existing.kind == ConversationKind.SUBAGENT_ACTION && incoming.kind == ConversationKind.SUBAGENT_ACTION -> {
@@ -2053,7 +2083,7 @@ private fun subagentMessagesRepresentSameItem(
     return existing.text == incoming.text
 }
 
-private fun commandMessagesRepresentSameItem(
+private fun executionMessagesRepresentSameItem(
     existing: ConversationMessage,
     incoming: ConversationMessage,
 ): Boolean {
@@ -2065,17 +2095,53 @@ private fun commandMessagesRepresentSameItem(
 
     val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
     val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-    if (existing.threadId != incoming.threadId || existingTurnId != incomingTurnId) {
+    if (existing.threadId != incoming.threadId
+        || existingTurnId != incomingTurnId
+        || existing.kind != incoming.kind
+    ) {
         return false
     }
 
-    val existingCommand = existing.command?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
-    val incomingCommand = incoming.command?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
-    if (existingCommand != null && incomingCommand != null) {
-        return existingCommand == incomingCommand
+    val existingIdentity = executionIdentity(existing)
+    val incomingIdentity = executionIdentity(incoming)
+    if (existingIdentity != null && incomingIdentity != null) {
+        return existingIdentity == incomingIdentity
+            && existing.shouldMergeAsInFlightExecution()
     }
 
-    return existing.text == incoming.text && existing.status == incoming.status
+    return existing.text == incoming.text
+        && existing.status == incoming.status
+        && existing.shouldMergeAsInFlightExecution()
+}
+
+private fun executionIdentity(message: ConversationMessage): String? {
+    val normalizedCommand = message.command?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    if (normalizedCommand != null) {
+        return "command:$normalizedCommand"
+    }
+
+    val execution = message.execution ?: return null
+    val normalizedTitle = execution.title.trim().lowercase().takeIf { it.isNotEmpty() } ?: return null
+    return "${execution.kind.name.lowercase()}:$normalizedTitle"
+}
+
+private fun ConversationMessage.shouldMergeAsInFlightExecution(): Boolean {
+    return isStreaming || !isExecutionTerminalStatus(status ?: execution?.status)
+}
+
+private fun isExecutionTerminalStatus(status: String?): Boolean {
+    return status?.trim()?.lowercase() in setOf(
+        "completed",
+        "complete",
+        "done",
+        "success",
+        "succeeded",
+        "failed",
+        "error",
+        "stopped",
+        "cancelled",
+        "canceled",
+    )
 }
 
 private fun mergeSubagentActions(existing: SubagentAction?, incoming: SubagentAction): SubagentAction {
