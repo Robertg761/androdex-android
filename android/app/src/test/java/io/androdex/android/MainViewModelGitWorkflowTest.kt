@@ -333,6 +333,13 @@ private class GitTestRepository : AndrodexRepositoryContract {
 
     override suspend fun interruptTurn(threadId: String, turnId: String) = Unit
 
+    override suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    ) = Unit
+
     override suspend fun loadRuntimeConfig() = Unit
 
     override suspend fun setSelectedModelId(modelId: String?) = Unit

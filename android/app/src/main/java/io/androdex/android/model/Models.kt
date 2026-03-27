@@ -555,6 +555,10 @@ data class ThreadLoadResult(
     val runSnapshot: ThreadRunSnapshot,
 )
 
+data class MissingNotificationThreadPrompt(
+    val threadId: String,
+)
+
 data class PlanStep(
     val text: String,
     val status: String?,

@@ -1,14 +1,19 @@
 package io.androdex.android
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import io.androdex.android.data.AndrodexRepository
+import io.androdex.android.notifications.AndroidNotificationCoordinator
 import io.androdex.android.ui.theme.AndrodexTheme
 
 class MainActivity : ComponentActivity() {
@@ -16,11 +21,22 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val repository = AndrodexRepository(applicationContext)
                 return MainViewModel(
-                    repository = AndrodexRepository(applicationContext)
+                    repository = repository,
+                    notificationCoordinator = AndroidNotificationCoordinator(
+                        context = applicationContext,
+                        repository = repository,
+                        scope = (this@MainActivity as ComponentActivity).lifecycleScope,
+                    ),
                 ) as T
             }
         }
+    }
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.onNotificationPermissionResult(granted)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,6 +54,10 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.onAppForegrounded()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && viewModel.shouldRequestNotificationPermission()) {
+            viewModel.onNotificationPermissionPromptStarted()
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onStop() {

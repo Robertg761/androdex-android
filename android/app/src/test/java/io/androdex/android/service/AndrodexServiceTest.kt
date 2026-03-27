@@ -40,6 +40,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -246,6 +247,94 @@ class AndrodexServiceTest {
 
         assertEquals("turn-recovered", service.state.value.activeTurnIdByThread["thread-1"])
         assertTrue(service.state.value.runningThreadIds.contains("thread-1"))
+    }
+
+    @Test
+    fun notificationOpen_staysPendingUntilThreadCanBeLoaded() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadError = IllegalStateException("thread not found")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-pending", "turn-1")
+        advanceUntilIdle()
+
+        assertEquals("thread-pending", service.state.value.pendingNotificationOpenThreadId)
+        assertNull(service.state.value.selectedThreadId)
+
+        repository.loadThreadError = null
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-pending", "Pending thread", null, null, null, null),
+            messages = emptyList(),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = null,
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-pending", "Pending thread", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        advanceUntilIdle()
+
+        assertNull(service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("thread-pending", service.state.value.selectedThreadId)
+        assertNull(service.state.value.missingNotificationThreadPrompt)
+    }
+
+    @Test
+    fun notificationOpen_showsMissingThreadPromptAndFallsBackToLiveThread() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadError = IllegalStateException("thread not found")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-deleted", "Deleted", null, null, null, null),
+                    ThreadSummary("thread-live", "Live", null, null, null, null),
+                )
+            )
+        )
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-deleted", null)
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible()
+        advanceUntilIdle()
+
+        assertNull(service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("thread-live", service.state.value.selectedThreadId)
+        assertEquals("thread-deleted", service.state.value.missingNotificationThreadPrompt?.threadId)
+    }
+
+    @Test
+    fun notificationOpen_keepsPendingStateWhenRefreshFails() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadError = IllegalStateException("temporary refresh failure")
+            refreshThreadsError = IllegalStateException("refresh failed")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-retry", null)
+        advanceUntilIdle()
+
+        assertEquals("thread-retry", service.state.value.pendingNotificationOpenThreadId)
+        assertNull(service.state.value.missingNotificationThreadPrompt)
+        assertNull(service.state.value.selectedThreadId)
     }
 
     @Test
@@ -537,7 +626,12 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 
-    override suspend fun refreshThreads(): List<ThreadSummary> = emptyList()
+    var refreshThreadsError: Throwable? = null
+
+    override suspend fun refreshThreads(): List<ThreadSummary> {
+        refreshThreadsError?.let { throw it }
+        return emptyList()
+    }
 
     override suspend fun startThread(preferredProjectPath: String?): ThreadSummary {
         startedThreadCwds += preferredProjectPath
@@ -568,9 +662,11 @@ private class FakeRepository : AndrodexRepositoryContract {
     val steeredTurns = mutableListOf<String>()
     val steeredTurnModes = mutableListOf<CollaborationModeKind?>()
     val interruptedTurns = mutableListOf<String>()
+    var loadThreadError: Throwable? = null
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
         loadedThreadIds += threadId
+        loadThreadError?.let { throw it }
         return loadThreadResult
     }
 
@@ -613,6 +709,13 @@ private class FakeRepository : AndrodexRepositoryContract {
     override suspend fun interruptTurn(threadId: String, turnId: String) {
         interruptedTurns += "$threadId:$turnId"
     }
+
+    override suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    ) = Unit
 
     override suspend fun loadRuntimeConfig() = Unit
 

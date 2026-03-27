@@ -220,6 +220,10 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
 | `ANDRODEX_PUSH_SERVICE_URL` | Optional Android push service endpoint for device registration and completion notifications |
 | `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` | Maximum stored preview length used when building completion notification payloads |
+| `ANDRODEX_FCM_APPLICATION_ID` | Optional Android FCM app ID used for direct token registration in source builds |
+| `ANDRODEX_FCM_PROJECT_ID` | Optional Android FCM project ID used for direct token registration in source builds |
+| `ANDRODEX_FCM_API_KEY` | Optional Android FCM Web API key used for direct token registration in source builds |
+| `ANDRODEX_FCM_GCM_SENDER_ID` | Optional Android FCM sender ID used for direct token registration in source builds |
 
 The bridge resolves relay configuration in this order:
 
@@ -245,6 +249,8 @@ If you want completion notifications while the Android app is backgrounded or te
 - Androdex keeps this bridge-side and platform-neutral: the bridge only forwards `notifications/push/register` requests and completion events to your configured service.
 - Use Android/FCM-oriented identifiers and routing in that service. The public repo does not ship private FCM credentials, hosted endpoints, or deployment runbooks.
 - Set `ANDRODEX_PUSH_SERVICE_URL` on the host before pairing or reconnecting the phone so registration requests have a destination.
+- If you build the Android app from source and want device-token registration, provide your own FCM config through `ANDRODEX_FCM_APPLICATION_ID`, `ANDRODEX_FCM_PROJECT_ID`, `ANDRODEX_FCM_API_KEY`, and `ANDRODEX_FCM_GCM_SENDER_ID`.
+- Android now mirrors Remodex-style recovery behavior: completion taps reopen the targeted thread when it can be recovered, keep the target pending across reconnect/background restore, and show a missing-thread prompt instead of silently dropping the tap.
 - `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` only affects the bridge-side completion preview cache; it does not change Android UI rendering.
 - Apple-specific launchd or APNs host setup from Remodex is intentionally not part of Androdex.
 

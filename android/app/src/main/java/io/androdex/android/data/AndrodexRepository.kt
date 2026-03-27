@@ -65,6 +65,12 @@ interface AndrodexRepositoryContract {
         collaborationMode: CollaborationModeKind? = null,
     )
     suspend fun interruptTurn(threadId: String, turnId: String)
+    suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    )
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
     suspend fun setSelectedReasoningEffort(effort: String?)
@@ -173,6 +179,20 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {
         client.interruptTurn(threadId, turnId)
+    }
+
+    override suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    ) {
+        client.registerPushNotifications(
+            deviceToken = deviceToken,
+            alertsEnabled = alertsEnabled,
+            authorizationStatus = authorizationStatus,
+            appEnvironment = appEnvironment,
+        )
     }
 
     override suspend fun loadRuntimeConfig() {

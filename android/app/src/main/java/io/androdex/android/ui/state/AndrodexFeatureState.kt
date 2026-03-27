@@ -19,6 +19,7 @@ import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
+import io.androdex.android.model.MissingNotificationThreadPrompt
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
@@ -39,6 +40,7 @@ internal data class AndrodexAppUiState(
 
 internal data class AndrodexOverlayUiState(
     val approvalRequest: ApprovalRequest?,
+    val missingNotificationThreadPrompt: MissingNotificationThreadPrompt?,
     val errorMessage: String?,
 )
 
@@ -247,6 +249,7 @@ internal fun AndrodexUiState.toAppUiState(
     return AndrodexAppUiState(
         overlay = AndrodexOverlayUiState(
             approvalRequest = pendingApproval,
+            missingNotificationThreadPrompt = missingNotificationThreadPrompt,
             errorMessage = errorMessage,
         ),
         settings = toRuntimeSettingsUiState(isSettingsVisible),

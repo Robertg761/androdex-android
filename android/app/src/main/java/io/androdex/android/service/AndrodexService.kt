@@ -13,11 +13,13 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.MissingNotificationThreadPrompt
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
+import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
@@ -28,9 +30,12 @@ import io.androdex.android.model.WorkspacePathSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -79,6 +84,9 @@ data class AndrodexServiceState(
     val workspaceBrowserParentPath: String? = null,
     val workspaceBrowserEntries: List<WorkspaceDirectoryEntry> = emptyList(),
     val isWorkspaceBrowserLoading: Boolean = false,
+    val pendingNotificationOpenThreadId: String? = null,
+    val pendingNotificationOpenTurnId: String? = null,
+    val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
 ) {
@@ -96,6 +104,7 @@ class AndrodexService(
     private var suppressSavedReconnect = false
     private val subagentIdentityByThreadId = mutableMapOf<String, SubagentIdentityEntry>()
     private val subagentIdentityByAgentId = mutableMapOf<String, SubagentIdentityEntry>()
+    private val runCompletionEventsFlow = MutableSharedFlow<RunCompletionEvent>(extraBufferCapacity = 8)
 
     private val stateFlow = MutableStateFlow(
         AndrodexServiceState(
@@ -107,6 +116,7 @@ class AndrodexService(
     )
 
     val state: StateFlow<AndrodexServiceState> = stateFlow.asStateFlow()
+    val runCompletionEvents: SharedFlow<RunCompletionEvent> = runCompletionEventsFlow.asSharedFlow()
 
     init {
         scope.launch {
@@ -116,6 +126,10 @@ class AndrodexService(
 
     fun clearError() {
         stateFlow.update { it.copy(errorMessage = null) }
+    }
+
+    fun dismissMissingNotificationThreadPrompt() {
+        stateFlow.update { it.copy(missingNotificationThreadPrompt = null) }
     }
 
     fun reportError(message: String) {
@@ -134,6 +148,9 @@ class AndrodexService(
     fun onAppForegrounded() {
         appInForeground = true
         reconnectSavedIfAvailable()
+        scope.launch {
+            routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        }
     }
 
     fun onAppBackgrounded() {
@@ -201,6 +218,20 @@ class AndrodexService(
 
         ensureWorkspaceActivated(targetThread?.cwd)
         loadThreadIntoState(threadId)
+    }
+
+    fun handleNotificationOpen(threadId: String, turnId: String?) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        stateFlow.update {
+            it.copy(
+                pendingNotificationOpenThreadId = normalizedThreadId,
+                pendingNotificationOpenTurnId = turnId?.trim()?.takeIf { value -> value.isNotEmpty() },
+                missingNotificationThreadPrompt = null,
+            )
+        }
+        scope.launch {
+            routePendingNotificationOpenIfPossible()
+        }
     }
 
     suspend fun createThread() {
@@ -480,6 +511,40 @@ class AndrodexService(
         syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
     }
 
+    internal suspend fun routePendingNotificationOpenIfPossible(refreshIfNeeded: Boolean = true): Boolean {
+        val pendingThreadId = stateFlow.value.pendingNotificationOpenThreadId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return false
+
+        when (attemptPendingNotificationOpen(pendingThreadId)) {
+            NotificationRouteResult.Opened -> return true
+            NotificationRouteResult.Missing -> Unit
+            NotificationRouteResult.Unavailable -> Unit
+        }
+
+        if (stateFlow.value.connectionStatus != ConnectionStatus.CONNECTED) {
+            return false
+        }
+
+        if (refreshIfNeeded) {
+            val refreshed = runCatching {
+                refreshThreadsInternal()
+                true
+            }.getOrDefault(false)
+            if (!refreshed) {
+                return false
+            }
+        }
+
+        return when (attemptPendingNotificationOpen(pendingThreadId)) {
+            NotificationRouteResult.Opened -> true
+            NotificationRouteResult.Missing -> {
+                finalizeMissingNotificationThread(pendingThreadId)
+                false
+            }
+            NotificationRouteResult.Unavailable -> false
+        }
+    }
+
     private suspend fun ensureWorkspaceActivated(path: String?) {
         val normalizedPath = path?.trim()?.takeIf { it.isNotEmpty() } ?: return
         if (normalizedPath == stateFlow.value.activeWorkspacePath) {
@@ -487,6 +552,68 @@ class AndrodexService(
         }
         val status = repository.activateWorkspace(normalizedPath)
         stateFlow.update { it.copy(activeWorkspacePath = status.currentCwd ?: normalizedPath) }
+    }
+
+    private suspend fun attemptPendingNotificationOpen(threadId: String): NotificationRouteResult {
+        return runCatching { repository.loadThread(threadId) }.fold(
+            onSuccess = { result ->
+                openNotificationThread(threadId, result)
+                NotificationRouteResult.Opened
+            },
+            onFailure = { error ->
+                if (isMissingNotificationThreadError(error)) {
+                    NotificationRouteResult.Missing
+                } else {
+                    NotificationRouteResult.Unavailable
+                }
+            },
+        )
+    }
+
+    private suspend fun openNotificationThread(
+        threadId: String,
+        result: ThreadLoadResult,
+    ) {
+        ensureWorkspaceActivated(result.thread?.cwd)
+        stateFlow.update { current ->
+            val updatedThreads = mergeRecoveredNotificationThread(current.threads, result.thread)
+            current.copy(
+                threads = updatedThreads,
+                selectedThreadId = threadId,
+                selectedThreadTitle = result.thread?.title ?: current.selectedThreadTitle,
+                timelineByThread = current.timelineByThread + (
+                    threadId to mergeThreadMessages(
+                        existing = current.timelineByThread[threadId].orEmpty(),
+                        incoming = result.messages,
+                        keepStreamingRows = isThreadConsideredRunning(threadId, current),
+                    )
+                ),
+                pendingNotificationOpenThreadId = null,
+                pendingNotificationOpenTurnId = null,
+                missingNotificationThreadPrompt = null,
+                readyThreadIds = current.readyThreadIds - threadId,
+                failedThreadIds = current.failedThreadIds - threadId,
+            )
+        }
+        syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
+    }
+
+    private fun finalizeMissingNotificationThread(threadId: String) {
+        stateFlow.update { current ->
+            val fallbackThread = current.threads.firstOrNull { it.id != threadId }
+            val nextSelectedThreadId = when {
+                current.selectedThreadId == null -> fallbackThread?.id
+                current.selectedThreadId == threadId -> fallbackThread?.id
+                else -> current.selectedThreadId
+            }
+            current.copy(
+                selectedThreadId = nextSelectedThreadId,
+                selectedThreadTitle = current.threads.firstOrNull { it.id == nextSelectedThreadId }?.title,
+                pendingNotificationOpenThreadId = null,
+                pendingNotificationOpenTurnId = null,
+                missingNotificationThreadPrompt = MissingNotificationThreadPrompt(threadId),
+            )
+        }
     }
 
     internal fun processClientUpdate(update: ClientUpdate) {
@@ -507,6 +634,7 @@ class AndrodexService(
                             loadRuntimeConfig()
                             loadWorkspaceState()
                             recoverVisibleThreadState()
+                            routePendingNotificationOpenIfPossible()
                         }
                     }
 
@@ -552,6 +680,11 @@ class AndrodexService(
                     )
                 }
                 refreshSubagentMessages()
+                if (stateFlow.value.pendingNotificationOpenThreadId != null) {
+                    scope.launch {
+                        routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+                    }
+                }
             }
 
             is ClientUpdate.ThreadLoaded -> {
@@ -767,7 +900,10 @@ class AndrodexService(
                 ) {
                     return
                 }
-                resolvedThreadId?.let { markTurnCompleted(it, update.turnId, update.terminalState) }
+                resolvedThreadId?.let {
+                    markTurnCompleted(it, update.turnId, update.terminalState)
+                    emitRunCompletionEvent(it, update.turnId, update.terminalState)
+                }
                 val selectedThreadId = stateFlow.value.selectedThreadId
                 if (selectedThreadId != null && (resolvedThreadId == null || resolvedThreadId == selectedThreadId)) {
                     scope.launch {
@@ -1108,6 +1244,24 @@ class AndrodexService(
         }
     }
 
+    private fun emitRunCompletionEvent(
+        threadId: String,
+        turnId: String?,
+        terminalState: TurnTerminalState,
+    ) {
+        val threadTitle = stateFlow.value.threads.firstOrNull { it.id == threadId }?.title
+            ?: stateFlow.value.selectedThreadTitle
+            ?: "Conversation"
+        runCompletionEventsFlow.tryEmit(
+            RunCompletionEvent(
+                threadId = threadId,
+                turnId = turnId,
+                terminalState = terminalState,
+                threadTitle = threadTitle,
+            )
+        )
+    }
+
     private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
         val snapshot = stateFlow.value
         if (!appInForeground || suppressSavedReconnect || !snapshot.hasSavedPairing) {
@@ -1158,6 +1312,41 @@ class AndrodexService(
     private fun cancelSavedReconnectRetry() {
         savedReconnectRetryJob?.cancel()
         savedReconnectRetryJob = null
+    }
+
+    private fun isMissingNotificationThreadError(error: Throwable): Boolean {
+        val message = error.message?.lowercase() ?: return false
+        return message.contains("thread not found")
+            || message.contains("not found")
+            || message.contains("unknown thread")
+    }
+
+    private fun mergeRecoveredNotificationThread(
+        existing: List<ThreadSummary>,
+        recovered: ThreadSummary?,
+    ): List<ThreadSummary> {
+        val normalized = recovered ?: return existing
+        val mutable = existing.toMutableList()
+        val index = mutable.indexOfFirst { it.id == normalized.id }
+        if (index >= 0) {
+            mutable[index] = normalized
+        } else {
+            mutable.add(0, normalized)
+        }
+        return mutable
+    }
+
+    data class RunCompletionEvent(
+        val threadId: String,
+        val turnId: String?,
+        val terminalState: TurnTerminalState,
+        val threadTitle: String,
+    )
+
+    private enum class NotificationRouteResult {
+        Opened,
+        Missing,
+        Unavailable,
     }
 
     private fun updateSubagentIdentitiesFromThreads(threads: List<ThreadSummary>) {

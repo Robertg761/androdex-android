@@ -628,6 +628,23 @@ class AndrodexClient(
         )
     }
 
+    suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    ) {
+        sendRequest(
+            "notifications/push/register",
+            JSONObject()
+                .put("deviceToken", deviceToken.trim())
+                .put("alertsEnabled", alertsEnabled)
+                .put("authorizationStatus", authorizationStatus.trim())
+                .put("devicePlatform", "android")
+                .put("appEnvironment", appEnvironment.trim())
+        )
+    }
+
     suspend fun loadRuntimeConfig() {
         val result = sendRequest(
             "model/list",

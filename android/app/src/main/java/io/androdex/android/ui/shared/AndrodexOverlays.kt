@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.MissingNotificationThreadPrompt
 
 @Composable
 internal fun ApprovalDialog(
@@ -98,6 +99,31 @@ internal fun ErrorMessageDialog(
         },
         text = {
             Text(message, style = MaterialTheme.typography.bodyMedium)
+        },
+        shape = MaterialTheme.shapes.large,
+    )
+}
+
+@Composable
+internal fun MissingNotificationThreadDialog(
+    prompt: MissingNotificationThreadPrompt,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK")
+            }
+        },
+        title = {
+            Text("Conversation unavailable", style = MaterialTheme.typography.titleMedium)
+        },
+        text = {
+            Text(
+                "The notification opened thread ${prompt.threadId}, but that thread is no longer available on this host. Androdex kept your current conversation open when possible.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         },
         shape = MaterialTheme.shapes.large,
     )

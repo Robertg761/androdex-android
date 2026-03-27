@@ -21,6 +21,7 @@ import io.androdex.android.model.GitOperationException
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.MissingNotificationThreadPrompt
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
@@ -32,6 +33,9 @@ import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
+import io.androdex.android.notifications.NotificationCoordinator
+import io.androdex.android.notifications.NoopNotificationCoordinator
+import io.androdex.android.notifications.decodeNotificationOpenPayload
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import kotlinx.coroutines.Job
@@ -101,6 +105,7 @@ data class AndrodexUiState(
     val workspaceBrowserEntries: List<WorkspaceDirectoryEntry> = emptyList(),
     val isProjectPickerOpen: Boolean = false,
     val isWorkspaceBrowserLoading: Boolean = false,
+    val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
     val errorMessage: String? = null,
     val pendingApproval: ApprovalRequest? = null,
     val gitStateByThread: Map<String, ThreadGitState> = emptyMap(),
@@ -115,6 +120,7 @@ data class AndrodexUiState(
 
 class MainViewModel(
     repository: AndrodexRepositoryContract,
+    private val notificationCoordinator: NotificationCoordinator = NoopNotificationCoordinator,
 ) : ViewModel() {
     private val service = AndrodexService(repository, viewModelScope)
     private val repository = repository
@@ -137,6 +143,10 @@ class MainViewModel(
             service.state.collect { serviceState ->
                 uiStateFlow.update { current -> applyServiceState(current, serviceState) }
                 flushEligibleQueues()
+                notificationCoordinator.syncRegistration(
+                    connectionStatus = serviceState.connectionStatus,
+                    hasSavedPairing = serviceState.hasSavedPairing,
+                )
                 if (lastConnectionStatus != ConnectionStatus.CONNECTED
                     && serviceState.connectionStatus == ConnectionStatus.CONNECTED
                 ) {
@@ -145,9 +155,26 @@ class MainViewModel(
                 lastConnectionStatus = serviceState.connectionStatus
             }
         }
+        viewModelScope.launch {
+            service.runCompletionEvents.collect { event ->
+                notificationCoordinator.notifyRunCompletion(
+                    threadId = event.threadId,
+                    turnId = event.turnId,
+                    title = event.threadTitle,
+                    terminalState = event.terminalState,
+                )
+            }
+        }
     }
 
     fun consumeIntent(intent: Intent?) {
+        val extras = intent?.extras?.keySet().orEmpty().associateWith { key ->
+            intent?.extras?.getString(key)
+        }
+        decodeNotificationOpenPayload(extras)?.let { payload ->
+            service.handleNotificationOpen(payload.threadId, payload.turnId)
+            return
+        }
         val sharedText = intent?.getStringExtra(Intent.EXTRA_TEXT)?.trim()
         val deepLinkText = intent?.data?.extractPairingPayload()
         val payload = sharedText?.takeIf { it.isNotEmpty() }
@@ -922,6 +949,10 @@ class MainViewModel(
         service.clearError()
     }
 
+    fun dismissMissingNotificationThreadPrompt() {
+        service.dismissMissingNotificationThreadPrompt()
+    }
+
     fun connectWithCurrentPairingInput() {
         val payload = uiStateFlow.value.pairingInput.trim()
         if (payload.isEmpty()) {
@@ -948,12 +979,26 @@ class MainViewModel(
     }
 
     fun onAppForegrounded() {
+        notificationCoordinator.onAppForegrounded()
         service.onAppForegrounded()
         reconnectSavedIfAvailable()
     }
 
     fun onAppBackgrounded() {
+        notificationCoordinator.onAppBackgrounded()
         service.onAppBackgrounded()
+    }
+
+    fun shouldRequestNotificationPermission(): Boolean {
+        return notificationCoordinator.shouldRequestPermission(uiStateFlow.value.hasSavedPairing)
+    }
+
+    fun onNotificationPermissionPromptStarted() {
+        notificationCoordinator.onPermissionPromptStarted()
+    }
+
+    fun onNotificationPermissionResult(granted: Boolean) {
+        notificationCoordinator.onPermissionResult(granted)
     }
 
     fun disconnect(clearSavedPairing: Boolean = false) {
@@ -2077,6 +2122,7 @@ private fun applyServiceState(
         workspaceBrowserParentPath = serviceState.workspaceBrowserParentPath,
         workspaceBrowserEntries = serviceState.workspaceBrowserEntries,
         isWorkspaceBrowserLoading = serviceState.isWorkspaceBrowserLoading,
+        missingNotificationThreadPrompt = serviceState.missingNotificationThreadPrompt,
         errorMessage = serviceState.errorMessage,
         pendingApproval = serviceState.pendingApproval,
     )

@@ -23,6 +23,7 @@ import io.androdex.android.ui.pairing.PairingScreen
 import io.androdex.android.ui.settings.RuntimeSettingsSheet
 import io.androdex.android.ui.shared.ApprovalDialog
 import io.androdex.android.ui.shared.ErrorMessageDialog
+import io.androdex.android.ui.shared.MissingNotificationThreadDialog
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.toAppUiState
 import io.androdex.android.ui.turn.ForkThreadSheet
@@ -108,6 +109,13 @@ fun AndrodexApp(viewModel: MainViewModel) {
         ErrorMessageDialog(
             message = message,
             onDismiss = viewModel::clearError,
+        )
+    }
+
+    appState.overlay.missingNotificationThreadPrompt?.let { prompt ->
+        MissingNotificationThreadDialog(
+            prompt = prompt,
+            onDismiss = viewModel::dismissMissingNotificationThreadPrompt,
         )
     }
 
