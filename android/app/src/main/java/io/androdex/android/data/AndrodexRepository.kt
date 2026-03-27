@@ -25,6 +25,7 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -35,6 +36,7 @@ interface AndrodexRepositoryContract {
     val updates: SharedFlow<ClientUpdate>
     fun hasSavedPairing(): Boolean
     fun currentFingerprint(): String?
+    fun currentTrustedPairSnapshot(): TrustedPairSnapshot?
     fun startupNotice(): String?
     suspend fun connectWithPairingPayload(rawPayload: String)
     suspend fun reconnectSaved()
@@ -117,6 +119,8 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     override fun hasSavedPairing(): Boolean = client.hasSavedPairing()
 
     override fun currentFingerprint(): String? = client.currentFingerprint()
+
+    override fun currentTrustedPairSnapshot(): TrustedPairSnapshot? = client.currentTrustedPairSnapshot()
 
     override fun startupNotice(): String? = persistence.takeStartupNotice()
 

@@ -40,7 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.shared.BridgeStatusCard
 import io.androdex.android.ui.shared.StatusCapsule
+import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.sidebar.ThreadListPane
 import io.androdex.android.ui.state.HomeScreenUiState
 
@@ -150,6 +152,18 @@ internal fun HomeScreen(
             )
 
             BusyIndicator(state = state.busy)
+
+            state.trustedPair?.let {
+                TrustedPairCard(
+                    state = it,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            BridgeStatusCard(
+                state = state.bridgeStatus,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
 
             ActiveWorkspaceBanner(
                 activeWorkspacePath = state.activeWorkspacePath,

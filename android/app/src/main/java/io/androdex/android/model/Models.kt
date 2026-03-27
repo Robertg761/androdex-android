@@ -143,6 +143,13 @@ data class TrustedMacRegistry(
     }
 }
 
+data class TrustedPairSnapshot(
+    val deviceId: String,
+    val relayUrl: String?,
+    val fingerprint: String?,
+    val lastPairedAtEpochMs: Long?,
+)
+
 data class ThreadSummary(
     val id: String,
     val title: String,

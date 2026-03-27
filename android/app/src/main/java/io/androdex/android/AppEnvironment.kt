@@ -41,4 +41,12 @@ object AppEnvironment {
 
     val hasFcmConfiguration: Boolean
         get() = fcmConfiguration != null
+
+    const val projectUrl: String = "https://github.com/Robertg761/androdex"
+    const val issuesUrl: String = "https://github.com/Robertg761/androdex/issues"
+    const val privacyPolicyUrl: String = "https://github.com/Robertg761/androdex/blob/main/Docs/PRIVACY_POLICY.md"
+    const val bridgeUpdateCommand: String = "npm install -g androdex@latest"
+    const val bridgeStartCommand: String = "androdex pair"
+    val appVersionLabel: String
+        get() = BuildConfig.VERSION_NAME
 }

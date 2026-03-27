@@ -268,6 +268,8 @@ private class GitTestRepository : AndrodexRepositoryContract {
 
     override fun currentFingerprint(): String? = null
 
+    override fun currentTrustedPairSnapshot() = null
+
     override fun startupNotice(): String? = null
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit

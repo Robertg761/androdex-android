@@ -49,6 +49,7 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.TrustedMacRecord
@@ -139,6 +140,17 @@ class AndrodexClient(
         val pairing = savedPairingPayload ?: return null
         val trusted = trustedMacRegistry.records[pairing.macDeviceId]
         return fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey)
+    }
+
+    fun currentTrustedPairSnapshot(): TrustedPairSnapshot? {
+        val pairing = savedPairingPayload ?: return null
+        val trusted = trustedMacRegistry.records[pairing.macDeviceId]
+        return TrustedPairSnapshot(
+            deviceId = pairing.macDeviceId,
+            relayUrl = pairing.relay,
+            fingerprint = fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey),
+            lastPairedAtEpochMs = trusted?.lastPairedAtEpochMs,
+        )
     }
 
     suspend fun connectWithPairingPayload(rawPayload: String) {

@@ -19,6 +19,7 @@ import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
+import io.androdex.android.model.TrustedPairSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,6 +31,12 @@ class AndrodexFeatureStateTest {
     fun pairingRoute_usesReconnectPresentationForSavedPairingRecovery() {
         val state = AndrodexUiState(
             hasSavedPairing = true,
+            trustedPairSnapshot = TrustedPairSnapshot(
+                deviceId = "host-1234",
+                relayUrl = "wss://relay.example.com/socket",
+                fingerprint = "ABCD1234EFGH5678",
+                lastPairedAtEpochMs = 1_000L,
+            ),
             connectionStatus = ConnectionStatus.RETRYING_SAVED_PAIRING,
             connectionDetail = "Waiting for host",
         )
@@ -40,12 +47,21 @@ class AndrodexFeatureStateTest {
         assertEquals("Retrying Saved Pairing...", route.state.reconnectButtonLabel)
         assertFalse(route.state.reconnectEnabled)
         assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, route.state.connection.status)
+        assertNotNull(route.state.trustedPair)
+        assertEquals("relay.example.com", route.state.trustedPair?.relayLabel)
+        assertTrue(route.state.compatibilityMessage.isNullOrBlank())
     }
 
     @Test
     fun homeRoute_formatsThreadListAndProjectPickerState() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,
+            trustedPairSnapshot = TrustedPairSnapshot(
+                deviceId = "host-1234",
+                relayUrl = "wss://relay.example.com/socket",
+                fingerprint = "ABCD1234EFGH5678",
+                lastPairedAtEpochMs = 1_000L,
+            ),
             activeWorkspacePath = "C:\\Projects\\Androdex",
             runningThreadIds = setOf("thread-1"),
             threads = listOf(
@@ -87,6 +103,8 @@ class AndrodexFeatureStateTest {
         assertEquals("30m ago", route.state.threadList.threads.single().updatedLabel)
         assertEquals("Androdex", route.state.threadList.threads.single().projectName)
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
+        assertEquals("Bridge Ready", route.state.bridgeStatus.title)
+        assertNotNull(route.state.trustedPair)
         assertNotNull(route.state.projectPicker)
         assertTrue(route.state.projectPicker?.isBrowsing == true)
         assertEquals(
@@ -311,5 +329,7 @@ class AndrodexFeatureStateTest {
         assertEquals("Active workspace", route.state.fork.targets.last().title)
         assertTrue(appState.settings.accessModeOptions.any { it.value == "full-access" && it.selected })
         assertTrue(appState.settings.serviceTierOptions.any { it.value == "fast" && it.selected })
+        assertTrue(appState.settings.about.projectUrl.contains("github.com"))
+        assertTrue(appState.settings.bridgeStatus.serviceTierMessage.contains("available", ignoreCase = true))
     }
 }

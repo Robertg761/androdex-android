@@ -1,5 +1,6 @@
 package io.androdex.android.ui.state
 
+import io.androdex.android.AppEnvironment
 import io.androdex.android.AndrodexUiState
 import io.androdex.android.ComposerSlashCommand
 import io.androdex.android.GitActionKind
@@ -26,8 +27,10 @@ import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
+import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -66,19 +69,42 @@ internal data class BusyUiState(
 internal data class PairingScreenUiState(
     val pairingInput: String,
     val hasSavedPairing: Boolean,
+    val trustedPair: TrustedPairUiState?,
     val defaultRelayUrl: String?,
     val isBusy: Boolean,
     val reconnectButtonLabel: String,
     val reconnectEnabled: Boolean,
+    val recoveryTitle: String,
+    val recoveryMessage: String,
+    val compatibilityMessage: String?,
     val connection: ConnectionBannerUiState,
 )
 
 internal data class HomeScreenUiState(
     val connection: ConnectionBannerUiState,
     val busy: BusyUiState,
+    val trustedPair: TrustedPairUiState?,
+    val bridgeStatus: BridgeStatusUiState,
     val activeWorkspacePath: String?,
     val threadList: ThreadListPaneUiState,
     val projectPicker: ProjectPickerUiState?,
+)
+
+internal data class TrustedPairUiState(
+    val title: String,
+    val name: String,
+    val systemName: String?,
+    val detail: String?,
+    val relayLabel: String?,
+    val fingerprint: String?,
+)
+
+internal data class BridgeStatusUiState(
+    val title: String,
+    val summary: String,
+    val serviceTierMessage: String,
+    val threadForkMessage: String,
+    val updateCommand: String,
 )
 
 internal data class ThreadListPaneUiState(
@@ -206,11 +232,23 @@ internal enum class ThreadRunBadgeUiState {
 internal data class RuntimeSettingsUiState(
     val isVisible: Boolean,
     val isLoading: Boolean,
+    val trustedPair: TrustedPairUiState?,
+    val bridgeStatus: BridgeStatusUiState,
+    val about: AboutUiState,
     val modelOptions: List<RuntimeSettingsOptionUiState>,
     val reasoningOptions: List<RuntimeSettingsOptionUiState>,
     val serviceTierOptions: List<RuntimeSettingsOptionUiState>,
     val accessModeOptions: List<RuntimeSettingsOptionUiState>,
     val serviceTierSupported: Boolean,
+)
+
+internal data class AboutUiState(
+    val appVersionLabel: String,
+    val projectUrl: String,
+    val issuesUrl: String,
+    val privacyPolicyUrl: String,
+    val bridgeStartCommand: String,
+    val bridgeUpdateCommand: String,
 )
 
 internal data class RuntimeSettingsOptionUiState(
@@ -293,10 +331,14 @@ private fun AndrodexUiState.toPairingScreenUiState(): PairingScreenUiState {
     return PairingScreenUiState(
         pairingInput = pairingInput,
         hasSavedPairing = hasSavedPairing,
+        trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
         defaultRelayUrl = defaultRelayUrl,
         isBusy = isBusy,
         reconnectButtonLabel = reconnectButtonLabel(),
         reconnectEnabled = !isBusy && connectionStatus != ConnectionStatus.RETRYING_SAVED_PAIRING,
+        recoveryTitle = pairingRecoveryTitle(),
+        recoveryMessage = pairingRecoveryMessage(),
+        compatibilityMessage = compatibilityMessage(),
         connection = toConnectionBannerUiState(),
     )
 }
@@ -305,6 +347,8 @@ private fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long): HomeScreenUiS
     return HomeScreenUiState(
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),
+        trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        bridgeStatus = toBridgeStatusUiState(),
         activeWorkspacePath = activeWorkspacePath,
         threadList = toThreadListPaneUiState(nowEpochMs),
         projectPicker = toProjectPickerUiState(),
@@ -616,6 +660,16 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
     return RuntimeSettingsUiState(
         isVisible = isVisible,
         isLoading = isLoadingRuntimeConfig,
+        trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        bridgeStatus = toBridgeStatusUiState(),
+        about = AboutUiState(
+            appVersionLabel = AppEnvironment.appVersionLabel,
+            projectUrl = AppEnvironment.projectUrl,
+            issuesUrl = AppEnvironment.issuesUrl,
+            privacyPolicyUrl = AppEnvironment.privacyPolicyUrl,
+            bridgeStartCommand = AppEnvironment.bridgeStartCommand,
+            bridgeUpdateCommand = AppEnvironment.bridgeUpdateCommand,
+        ),
         modelOptions = modelOptions,
         reasoningOptions = reasoningOptions,
         serviceTierOptions = serviceTierOptions,
@@ -655,6 +709,120 @@ private fun AndrodexUiState.reconnectButtonLabel(): String {
         ConnectionStatus.UPDATE_REQUIRED -> "Reconnect After Updating"
         else -> "Reconnect Saved Pairing"
     }
+}
+
+private fun AndrodexUiState.pairingRecoveryTitle(): String {
+    return when {
+        hasSavedPairing -> "Saved Pair Recovery"
+        else -> "First Pairing"
+    }
+}
+
+private fun AndrodexUiState.pairingRecoveryMessage(): String {
+    return when (connectionStatus) {
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> {
+            "This phone still trusts the host. Keep Androdex running on the PC and we'll retry automatically in the foreground."
+        }
+        ConnectionStatus.RECONNECT_REQUIRED -> {
+            "The previous trusted pair needs attention. Try reconnecting from the saved pair first, then scan a fresh QR code if the host trust changed."
+        }
+        ConnectionStatus.UPDATE_REQUIRED -> {
+            "The Android app and host bridge are out of sync. Update the host package or app, then retry the saved pair or scan a fresh QR code."
+        }
+        else -> {
+            "Run `${AppEnvironment.bridgeStartCommand}` on the host to show a fresh QR, or reconnect later from the saved trusted pair."
+        }
+    }
+}
+
+private fun AndrodexUiState.compatibilityMessage(): String? {
+    return when {
+        connectionStatus == ConnectionStatus.UPDATE_REQUIRED -> {
+            "Update command: ${AppEnvironment.bridgeUpdateCommand}"
+        }
+        !supportsServiceTier || !supportsThreadFork -> {
+            "This host bridge is missing some newer Android features. Updating the npm package keeps runtime controls and fork behavior aligned."
+        }
+        else -> null
+    }
+}
+
+private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
+    val title = when (connectionStatus) {
+        ConnectionStatus.CONNECTED -> "Bridge Ready"
+        ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Connecting To Host"
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting For Host"
+        ConnectionStatus.RECONNECT_REQUIRED -> "Pair Needs Repair"
+        ConnectionStatus.UPDATE_REQUIRED -> "Update Needed"
+        ConnectionStatus.DISCONNECTED -> "Host Not Connected"
+    }
+    val summary = when (connectionStatus) {
+        ConnectionStatus.CONNECTED -> "Codex stays on the host machine. Android is acting as the paired remote control for threads, projects, approvals, and runtime changes."
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still present. Automatic reconnect stays available while the host or relay comes back."
+        ConnectionStatus.RECONNECT_REQUIRED -> "The previous trusted pair is no longer enough on its own. Use saved reconnect or scan a fresh QR from the host."
+        ConnectionStatus.UPDATE_REQUIRED -> "The host bridge and Android build are speaking different compatibility levels. Update the older side, then reconnect."
+        else -> "Pair this phone with a host bridge, then manage local Codex workspaces and runs from Android."
+    }
+    return BridgeStatusUiState(
+        title = title,
+        summary = summary,
+        serviceTierMessage = if (supportsServiceTier) {
+            "Runtime speed tiers are available from Android."
+        } else {
+            "Runtime speed tiers are unavailable on this host bridge build."
+        },
+        threadForkMessage = if (supportsThreadFork) {
+            "Native thread fork handoff is available."
+        } else {
+            "Native thread fork handoff needs a newer host bridge."
+        },
+        updateCommand = AppEnvironment.bridgeUpdateCommand,
+    )
+}
+
+private fun TrustedPairSnapshot?.toTrustedPairUiState(
+    connectionStatus: ConnectionStatus,
+): TrustedPairUiState? {
+    val snapshot = this ?: return null
+    val shortFingerprint = snapshot.fingerprint
+        ?.takeLast(12)
+        ?.takeIf { it.isNotBlank() }
+    val name = shortFingerprint?.let { "Host $it" } ?: "Trusted Host"
+    val detailParts = buildList {
+        add(
+            when (connectionStatus) {
+                ConnectionStatus.CONNECTED -> "Connected"
+                ConnectionStatus.CONNECTING -> "Connecting"
+                ConnectionStatus.HANDSHAKING -> "Pairing"
+                ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
+                ConnectionStatus.RECONNECT_REQUIRED -> "Needs re-pair"
+                ConnectionStatus.UPDATE_REQUIRED -> "Update required"
+                ConnectionStatus.DISCONNECTED -> "Saved pair available"
+            }
+        )
+        snapshot.lastPairedAtEpochMs
+            ?.takeIf { it > 0 }
+            ?.let { "Last paired ${relativeTimeLabel(it)}" }
+    }
+    return TrustedPairUiState(
+        title = when (connectionStatus) {
+            ConnectionStatus.CONNECTED -> "Connected Pair"
+            ConnectionStatus.HANDSHAKING -> "Pairing Host"
+            ConnectionStatus.RECONNECT_REQUIRED -> "Previous Pair"
+            else -> "Saved Pair"
+        },
+        name = name,
+        systemName = snapshot.deviceId.takeIf { it.isNotBlank() },
+        detail = detailParts.joinToString(" • ").takeIf { it.isNotBlank() },
+        relayLabel = snapshot.relayUrl?.let(::compactRelayLabel),
+        fingerprint = snapshot.fingerprint,
+    )
+}
+
+private fun compactRelayLabel(rawUrl: String): String {
+    return runCatching {
+        URI(rawUrl).host?.takeIf { it.isNotBlank() } ?: rawUrl
+    }.getOrDefault(rawUrl)
 }
 
 private fun resolveSelectedModel(

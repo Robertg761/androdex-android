@@ -29,6 +29,7 @@ import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.hasBlockingState
@@ -38,6 +39,8 @@ import io.androdex.android.notifications.NoopNotificationCoordinator
 import io.androdex.android.notifications.decodeNotificationOpenPayload
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
+import io.androdex.android.ui.pairing.PairingPayloadValidationResult
+import io.androdex.android.ui.pairing.validatePairingPayload
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +53,7 @@ import java.util.UUID
 data class AndrodexUiState(
     val pairingInput: String = "",
     val hasSavedPairing: Boolean = false,
+    val trustedPairSnapshot: TrustedPairSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -958,6 +962,17 @@ class MainViewModel(
         if (payload.isEmpty()) {
             service.reportError("Paste or scan the pairing payload first.")
             return
+        }
+        when (val validation = validatePairingPayload(payload)) {
+            is PairingPayloadValidationResult.Error -> {
+                service.reportError(validation.message)
+                return
+            }
+            is PairingPayloadValidationResult.UpdateRequired -> {
+                service.reportError(validation.message)
+                return
+            }
+            is PairingPayloadValidationResult.Success -> Unit
         }
 
         runBusyAction {
@@ -2075,6 +2090,7 @@ private fun applyServiceState(
         ?: false
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
+        trustedPairSnapshot = serviceState.trustedPairSnapshot,
         defaultRelayUrl = serviceState.defaultRelayUrl,
         connectionStatus = serviceState.connectionStatus,
         connectionDetail = serviceState.connectionDetail,

@@ -23,6 +23,7 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
@@ -55,6 +56,7 @@ private data class SubagentIdentityEntry(
 
 data class AndrodexServiceState(
     val hasSavedPairing: Boolean = false,
+    val trustedPairSnapshot: TrustedPairSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -109,6 +111,7 @@ class AndrodexService(
     private val stateFlow = MutableStateFlow(
         AndrodexServiceState(
             hasSavedPairing = repository.hasSavedPairing(),
+            trustedPairSnapshot = repository.currentTrustedPairSnapshot(),
             defaultRelayUrl = AppEnvironment.defaultRelayUrl.takeIf { it.isNotEmpty() },
             secureFingerprint = repository.currentFingerprint(),
             errorMessage = repository.startupNotice(),
@@ -661,6 +664,7 @@ class AndrodexService(
                 stateFlow.update {
                     it.copy(
                         hasSavedPairing = update.hasSavedPairing,
+                        trustedPairSnapshot = repository.currentTrustedPairSnapshot(),
                         secureFingerprint = update.fingerprint,
                     )
                 }

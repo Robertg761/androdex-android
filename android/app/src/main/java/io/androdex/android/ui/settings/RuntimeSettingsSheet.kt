@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,15 +21,22 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.androdex.android.ui.shared.BridgeStatusCard
+import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.RuntimeSettingsOptionUiState
 import io.androdex.android.ui.state.RuntimeSettingsUiState
 
@@ -45,6 +53,14 @@ internal fun RuntimeSettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
+    var aboutOpen by remember { mutableStateOf(false) }
+
+    if (aboutOpen) {
+        AboutAndrodexSheet(
+            state = state.about,
+            onDismiss = { aboutOpen = false },
+        )
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -74,6 +90,7 @@ internal fun RuntimeSettingsSheet(
                 .verticalScroll(scrollState)
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -81,7 +98,7 @@ internal fun RuntimeSettingsSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Runtime Settings",
+                    text = "Settings",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 TextButton(onClick = onReload) {
@@ -93,77 +110,119 @@ internal fun RuntimeSettingsSheet(
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 4.dp),
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Choose the model and reasoning effort for new turns.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-            SectionHeader("Model")
-            Spacer(modifier = Modifier.height(8.dp))
-
-            state.modelOptions.forEach { option ->
-                SettingsOptionRow(
-                    state = option,
-                    onClick = { onSelectModel(option.value) },
-                )
+            state.trustedPair?.let {
+                TrustedPairCard(state = it)
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(16.dp))
+            BridgeStatusCard(state = state.bridgeStatus)
 
-            SectionHeader("Reasoning")
-            Spacer(modifier = Modifier.height(8.dp))
+            SettingsSection(
+                title = "Runtime Defaults",
+                summary = "Choose the default model, reasoning effort, service tier, and access level for new turns on the host.",
+            ) {
+                SectionHeader("Model")
+                Spacer(modifier = Modifier.height(8.dp))
+                state.modelOptions.forEach { option ->
+                    SettingsOptionRow(state = option, onClick = { onSelectModel(option.value) })
+                }
 
-            state.reasoningOptions.forEach { option ->
-                SettingsOptionRow(
-                    state = option,
-                    onClick = { onSelectReasoning(option.value) },
-                )
-            }
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(16.dp))
 
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(16.dp))
+                SectionHeader("Reasoning")
+                Spacer(modifier = Modifier.height(8.dp))
+                state.reasoningOptions.forEach { option ->
+                    SettingsOptionRow(state = option, onClick = { onSelectReasoning(option.value) })
+                }
 
-            SectionHeader("Speed")
-            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(16.dp))
 
-            if (state.serviceTierSupported) {
-                state.serviceTierOptions.forEach { option ->
-                    SettingsOptionRow(
-                        state = option,
-                        onClick = { onSelectServiceTier(option.value) },
+                SectionHeader("Speed")
+                Spacer(modifier = Modifier.height(8.dp))
+                if (state.serviceTierSupported) {
+                    state.serviceTierOptions.forEach { option ->
+                        SettingsOptionRow(state = option, onClick = { onSelectServiceTier(option.value) })
+                    }
+                } else {
+                    Text(
+                        text = "This host bridge does not expose service-tier controls yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            } else {
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                SectionHeader("Access")
+                Spacer(modifier = Modifier.height(8.dp))
+                state.accessModeOptions.forEach { option ->
+                    SettingsOptionRow(state = option, onClick = { onSelectAccessMode(option.value) })
+                }
+            }
+
+            SettingsSection(
+                title = "Compatibility",
+                summary = "Keep Android and the host bridge in sync so reconnect, runtime controls, and newer thread actions stay reliable.",
+            ) {
                 Text(
-                    text = "This host bridge does not expose service-tier controls yet.",
+                    text = "Host update command",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = state.bridgeStatus.updateCommand,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            SectionHeader("Access")
-            Spacer(modifier = Modifier.height(8.dp))
-
-            state.accessModeOptions.forEach { option ->
-                SettingsOptionRow(
-                    state = option,
-                    onClick = { onSelectAccessMode(option.value) },
-                )
+            SettingsSection(
+                title = "About",
+                summary = "Host-local runtime, secure pairing, and recovery notes for Androdex.",
+            ) {
+                TextButton(
+                    onClick = { aboutOpen = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("How Androdex Works")
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSection(
+    title: String,
+    summary: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            content()
         }
     }
 }

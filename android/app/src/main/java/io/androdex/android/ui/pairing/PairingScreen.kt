@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.shared.StatusCapsule
+import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.PairingScreenUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -164,6 +165,43 @@ internal fun PairingScreen(
                         ) {
                             Text("Connect")
                         }
+                    }
+                }
+            }
+
+            state.trustedPair?.let { trustedPair ->
+                Spacer(modifier = Modifier.height(16.dp))
+                TrustedPairCard(state = trustedPair, modifier = Modifier.fillMaxWidth())
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = state.recoveryTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = state.recoveryMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    state.compatibilityMessage?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
             }
