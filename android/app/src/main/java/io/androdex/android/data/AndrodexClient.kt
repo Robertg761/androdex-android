@@ -58,6 +58,7 @@ import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.TrustedMacRecord
@@ -543,45 +544,42 @@ class AndrodexClient(
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
-        var effectiveCollaborationMode = collaborationMode?.takeIf { it in collaborationModes }
-        var includeStructuredSkillItems = skillMentions.isNotEmpty()
-        var imageUrlKey = "url"
-        var includesServiceTier = supportsServiceTier
+        var compatibility = TurnRequestCompatibilityState(
+            includeStructuredFileItems = fileMentions.isNotEmpty(),
+            includeStructuredSkillItems = skillMentions.isNotEmpty(),
+            collaborationMode = collaborationMode?.takeIf { it in collaborationModes },
+            includesServiceTier = supportsServiceTier,
+        )
         while (true) {
             val params = buildTurnStartParams(
                 threadId = threadId,
                 userInput = userInput,
                 attachments = attachments,
+                fileMentions = fileMentions,
                 skillMentions = skillMentions,
-                imageUrlKey = imageUrlKey,
-                includeStructuredSkillItems = includeStructuredSkillItems,
+                imageUrlKey = compatibility.imageUrlKey,
+                includeStructuredFileItems = compatibility.includeStructuredFileItems,
+                includeStructuredSkillItems = compatibility.includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForThread(threadId),
-                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
-                collaborationMode = effectiveCollaborationMode,
+                serviceTier = if (compatibility.includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                collaborationMode = compatibility.collaborationMode,
             )
             try {
                 sendRequestWithAccessModeFallback("turn/start", params)
                 return
             } catch (error: RpcException) {
-                if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
-                    imageUrlKey = "image_url"
+                compatibility.nextRetryState(error.message)?.let { nextCompatibility ->
+                    compatibility = nextCompatibility
                     continue
                 }
-                if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
-                    includeStructuredSkillItems = false
-                    continue
-                }
-                if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
-                    effectiveCollaborationMode = null
-                    continue
-                }
-                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
-                    includesServiceTier = false
+                if (consumeUnsupportedServiceTier(error, compatibility.includesServiceTier)) {
+                    compatibility = compatibility.copy(includesServiceTier = false)
                     continue
                 }
                 throw error
@@ -608,46 +606,43 @@ class AndrodexClient(
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
         resumeThread(threadId)
-        var effectiveCollaborationMode = collaborationMode?.takeIf { it in collaborationModes }
-        var includeStructuredSkillItems = skillMentions.isNotEmpty()
-        var imageUrlKey = "url"
-        var includesServiceTier = supportsServiceTier
+        var compatibility = TurnRequestCompatibilityState(
+            includeStructuredFileItems = fileMentions.isNotEmpty(),
+            includeStructuredSkillItems = skillMentions.isNotEmpty(),
+            collaborationMode = collaborationMode?.takeIf { it in collaborationModes },
+            includesServiceTier = supportsServiceTier,
+        )
         while (true) {
             val params = buildTurnSteerParams(
                 threadId = threadId,
                 expectedTurnId = expectedTurnId,
                 userInput = userInput,
                 attachments = attachments,
+                fileMentions = fileMentions,
                 skillMentions = skillMentions,
-                imageUrlKey = imageUrlKey,
-                includeStructuredSkillItems = includeStructuredSkillItems,
+                imageUrlKey = compatibility.imageUrlKey,
+                includeStructuredFileItems = compatibility.includeStructuredFileItems,
+                includeStructuredSkillItems = compatibility.includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
                 reasoningEffort = selectedReasoningEffortForThread(threadId),
-                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
-                collaborationMode = effectiveCollaborationMode,
+                serviceTier = if (compatibility.includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                collaborationMode = compatibility.collaborationMode,
             )
             try {
                 sendRequestWithAccessModeFallback("turn/steer", params)
                 return
             } catch (error: RpcException) {
-                if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
-                    imageUrlKey = "image_url"
+                compatibility.nextRetryState(error.message)?.let { nextCompatibility ->
+                    compatibility = nextCompatibility
                     continue
                 }
-                if (includeStructuredSkillItems && shouldRetryTurnWithoutSkillItems(error.message)) {
-                    includeStructuredSkillItems = false
-                    continue
-                }
-                if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
-                    effectiveCollaborationMode = null
-                    continue
-                }
-                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
-                    includesServiceTier = false
+                if (consumeUnsupportedServiceTier(error, compatibility.includesServiceTier)) {
+                    compatibility = compatibility.copy(includesServiceTier = false)
                     continue
                 }
                 throw error
@@ -1993,9 +1988,7 @@ class AndrodexClient(
             params,
         )
         candidateItems.forEach { candidate ->
-            if (isSubagentActionItemType(candidate.optString("type"))) {
-                return decodeSubagentActionItem(candidate)
-            }
+            decodeSubagentActionItem(candidate.toRawMap())?.let { return it }
         }
         return null
     }
@@ -2471,8 +2464,10 @@ internal fun connectionUpdateForSocketClose(
 internal fun buildTurnInputPayloadSpec(
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
 ): List<Map<String, Any?>> {
     val payload = mutableListOf<Map<String, Any?>>()
@@ -2493,6 +2488,21 @@ internal fun buildTurnInputPayloadSpec(
             "type" to "text",
             "text" to trimmedInput,
         )
+    }
+
+    if (includeStructuredFileItems) {
+        fileMentions.forEach { mention ->
+            val normalizedPath = mention.path.trim()
+            if (normalizedPath.isEmpty()) {
+                return@forEach
+            }
+            val item = linkedMapOf<String, Any?>(
+                "type" to "file",
+                "path" to normalizedPath,
+            )
+            mention.name?.trim()?.takeIf { it.isNotEmpty() }?.let { item["name"] = it }
+            payload += item
+        }
     }
 
     if (includeStructuredSkillItems) {
@@ -2516,15 +2526,19 @@ internal fun buildTurnInputPayloadSpec(
 internal fun buildTurnInputPayload(
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
 ): JSONArray {
     return buildTurnInputPayloadSpec(
         userInput = userInput,
         attachments = attachments,
+        fileMentions = fileMentions,
         skillMentions = skillMentions,
         imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
         includeStructuredSkillItems = includeStructuredSkillItems,
     ).toJsonArray()
 }
@@ -2601,8 +2615,10 @@ internal fun buildTurnStartParams(
     threadId: String,
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -2613,8 +2629,10 @@ internal fun buildTurnStartParams(
         threadId = threadId,
         userInput = userInput,
         attachments = attachments,
+        fileMentions = fileMentions,
         skillMentions = skillMentions,
         imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
         includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
@@ -2627,8 +2645,10 @@ internal fun buildTurnStartPayloadSpec(
     threadId: String,
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -2640,8 +2660,10 @@ internal fun buildTurnStartPayloadSpec(
         "input" to buildTurnInputPayloadSpec(
             userInput = userInput,
             attachments = attachments,
+            fileMentions = fileMentions,
             skillMentions = skillMentions,
             imageUrlKey = imageUrlKey,
+            includeStructuredFileItems = includeStructuredFileItems,
             includeStructuredSkillItems = includeStructuredSkillItems,
         ),
     )
@@ -2661,8 +2683,10 @@ internal fun buildTurnSteerParams(
     expectedTurnId: String,
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -2674,8 +2698,10 @@ internal fun buildTurnSteerParams(
         expectedTurnId = expectedTurnId,
         userInput = userInput,
         attachments = attachments,
+        fileMentions = fileMentions,
         skillMentions = skillMentions,
         imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
         includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
@@ -2689,8 +2715,10 @@ internal fun buildTurnSteerPayloadSpec(
     expectedTurnId: String,
     userInput: String,
     attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
     skillMentions: List<TurnSkillMention> = emptyList(),
     imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
@@ -2703,8 +2731,10 @@ internal fun buildTurnSteerPayloadSpec(
         "input" to buildTurnInputPayloadSpec(
             userInput = userInput,
             attachments = attachments,
+            fileMentions = fileMentions,
             skillMentions = skillMentions,
             imageUrlKey = imageUrlKey,
+            includeStructuredFileItems = includeStructuredFileItems,
             includeStructuredSkillItems = includeStructuredSkillItems,
         ),
     )
@@ -2852,12 +2882,6 @@ internal enum class AccessModeSandboxMode {
     MINIMAL,
 }
 
-internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boolean {
-    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
-        && !normalizedMessage.contains("experimentalapi")
-}
-
 internal fun shouldRetryInitializeWithoutCapabilities(errorMessage: String?): Boolean {
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return normalizedMessage.contains("capabilities")
@@ -2912,32 +2936,6 @@ internal fun shouldFallbackFromSandboxPolicy(errorMessage: String?): Boolean {
         || normalizedMessage.contains("unrecognized field")
         || normalizedMessage.contains("failed to parse")
         || normalizedMessage.contains("unsupported")
-}
-
-internal fun shouldRetryTurnWithImageUrlField(errorMessage: String?): Boolean {
-    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    if (!normalizedMessage.contains("image_url")) {
-        return false
-    }
-    return normalizedMessage.contains("missing")
-        || normalizedMessage.contains("unknown")
-        || normalizedMessage.contains("invalid")
-        || normalizedMessage.contains("expected")
-        || normalizedMessage.contains("field")
-}
-
-internal fun shouldRetryTurnWithoutSkillItems(errorMessage: String?): Boolean {
-    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    if (!normalizedMessage.contains("skill")) {
-        return false
-    }
-    return normalizedMessage.contains("unknown")
-        || normalizedMessage.contains("unsupported")
-        || normalizedMessage.contains("invalid")
-        || normalizedMessage.contains("expected")
-        || normalizedMessage.contains("unrecognized")
-        || normalizedMessage.contains("type")
-        || normalizedMessage.contains("field")
 }
 
 private fun shouldRetrySkillsListWithCwdFallback(errorMessage: String?): Boolean {

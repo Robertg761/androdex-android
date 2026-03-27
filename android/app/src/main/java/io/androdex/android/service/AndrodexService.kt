@@ -30,6 +30,7 @@ import io.androdex.android.model.ToolUserInputAnswer
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
@@ -270,6 +271,7 @@ class AndrodexService(
         input: String,
         preferredThreadId: String? = stateFlow.value.selectedThreadId,
         attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
@@ -302,6 +304,7 @@ class AndrodexService(
                             expectedTurnId = resolution.turnId,
                             userInput = trimmedInput,
                             attachments = attachments,
+                            fileMentions = fileMentions,
                             skillMentions = skillMentions,
                             collaborationMode = collaborationMode,
                         )
@@ -319,6 +322,7 @@ class AndrodexService(
                             threadId = threadId,
                             userInput = trimmedInput,
                             attachments = attachments,
+                            fileMentions = fileMentions,
                             skillMentions = skillMentions,
                             collaborationMode = collaborationMode,
                         )
@@ -332,6 +336,7 @@ class AndrodexService(
                     threadId = threadId,
                     userInput = trimmedInput,
                     attachments = attachments,
+                    fileMentions = fileMentions,
                     skillMentions = skillMentions,
                     collaborationMode = collaborationMode,
                 )

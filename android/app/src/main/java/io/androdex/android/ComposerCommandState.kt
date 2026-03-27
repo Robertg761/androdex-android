@@ -2,6 +2,7 @@ package io.androdex.android
 
 import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnSkillMention
 
 internal const val subagentsCannedPrompt =
@@ -320,6 +321,21 @@ internal fun buildTurnSkillMentions(mentionedSkills: List<ComposerMentionedSkill
                 id = normalizedName,
                 name = normalizedName,
                 path = mention.path?.trim()?.takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+}
+
+internal fun buildTurnFileMentions(mentionedFiles: List<ComposerMentionedFile>): List<TurnFileMention> {
+    val seenPaths = linkedSetOf<String>()
+    return mentionedFiles.mapNotNull { mention ->
+        val normalizedPath = mention.path.trim()
+        if (normalizedPath.isEmpty() || !seenPaths.add(normalizedPath)) {
+            null
+        } else {
+            TurnFileMention(
+                path = normalizedPath,
+                name = mention.fileName.trim().takeIf { it.isNotEmpty() },
             )
         }
     }

@@ -513,7 +513,9 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val hasBlockingAttachmentState = composerAttachments.hasBlockingState()
     val readyComposerAttachments = composerAttachments.readyAttachments()
     val queueState = queuedDraftStateByThread[threadId]
-    val queuedDrafts = queueState?.drafts.orEmpty()
+    val queuedDrafts = queueState?.drafts.orEmpty().map { draft ->
+        draft.copy(collaborationMode = draft.collaborationMode?.takeIf { it in collaborationModes })
+    }
     val pendingToolInputs = pendingToolInputsByThread[threadId]
         .orEmpty()
         .values

@@ -4,6 +4,7 @@ import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ImageAttachment
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnSkillMention
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -77,6 +78,29 @@ class AndrodexClientTurnPayloadTest {
             "C:\\Users\\rober\\.codex\\skills\\frontend-design\\SKILL.md",
             payload[1]["path"],
         )
+    }
+
+    @Test
+    fun buildTurnInputPayload_includesStructuredFileItemsWhenRequested() {
+        val payload = buildTurnInputPayloadSpec(
+            userInput = "Inspect @MainViewModel.kt",
+            fileMentions = listOf(
+                TurnFileMention(
+                    path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
+                    name = "MainViewModel.kt",
+                )
+            ),
+        )
+
+        assertEquals(2, payload.size)
+        assertEquals("text", payload[0]["type"])
+        assertEquals("Inspect @MainViewModel.kt", payload[0]["text"])
+        assertEquals("file", payload[1]["type"])
+        assertEquals(
+            "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
+            payload[1]["path"],
+        )
+        assertEquals("MainViewModel.kt", payload[1]["name"])
     }
 
     @Test

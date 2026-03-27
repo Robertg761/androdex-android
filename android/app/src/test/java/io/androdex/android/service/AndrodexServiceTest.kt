@@ -33,6 +33,7 @@ import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -1027,6 +1028,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
@@ -1047,6 +1049,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {

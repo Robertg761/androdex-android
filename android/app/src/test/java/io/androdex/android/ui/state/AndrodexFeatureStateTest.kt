@@ -254,6 +254,34 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun threadRoute_clearsQueuedDraftPlanModeWhenRuntimeSupportDisappears() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            queuedDraftStateByThread = mapOf(
+                "thread-9" to ThreadQueuedDraftState(
+                    drafts = listOf(
+                        QueuedTurnDraft(
+                            id = "queued-1",
+                            text = "Plan the cleanup",
+                            createdAtEpochMs = 1L,
+                            collaborationMode = CollaborationModeKind.PLAN,
+                        )
+                    )
+                )
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertEquals(1, route.state.queuedDrafts.size)
+        assertEquals(null, route.state.queuedDrafts.single().collaborationMode)
+        assertFalse(route.state.composer.isPlanModeSupported)
+    }
+
+    @Test
     fun threadRoute_allowsSendForSubagentsOnlyComposerState() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,

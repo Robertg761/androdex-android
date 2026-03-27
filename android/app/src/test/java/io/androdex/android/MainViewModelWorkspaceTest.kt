@@ -28,6 +28,7 @@ import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -42,6 +43,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -330,6 +332,72 @@ class MainViewModelWorkspaceTest {
     }
 
     @Test
+    fun runtimeRefresh_clearsUnsupportedPlanSelectionsAndQueuedDraftModes() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = emptyMap(),
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerPlanMode(true)
+        viewModel.updateComposerText("Plan the cleanup")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        val queuedDraftId = requireNotNull(
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.single()
+        ).id
+        assertTrue(viewModel.uiState.value.isComposerPlanMode)
+
+        repository.emit(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        val normalizedDraft = viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.single()
+        assertEquals(null, normalizedDraft?.collaborationMode)
+        assertFalse(viewModel.uiState.value.isComposerPlanMode)
+
+        viewModel.restoreQueuedDraftToComposer(queuedDraftId)
+
+        assertEquals("Plan the cleanup", viewModel.uiState.value.composerText)
+        assertFalse(viewModel.uiState.value.isComposerPlanMode)
+    }
+
+    @Test
     fun failedQueueFlush_pausesAndPreservesOrderingUntilResume() = runTest(dispatcher) {
         val repository = FakeRepository().apply {
             startTurnFailures += IllegalStateException("Host unavailable")
@@ -479,6 +547,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
@@ -502,6 +571,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit

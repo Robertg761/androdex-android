@@ -1,5 +1,6 @@
 package io.androdex.android.data
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -67,5 +68,59 @@ class SubagentJsonHelpersTest {
         assertNotNull(action)
         assertTrue(action?.receiverAgents?.isNotEmpty() == true)
         assertEquals("Scout", action?.receiverAgents?.single()?.nickname)
+    }
+
+    @Test
+    fun decodeSubagentActionItem_readsNestedCollaborationPayload() {
+        val action = decodeSubagentActionItem(
+            mapOf(
+                "type" to "message",
+                "collaboration" to mapOf(
+                    "receiverThreadId" to "thread-child",
+                    "newAgentNickname" to "Scout",
+                    "receiverAgentRole" to "explorer",
+                    "prompt" to "Inspect the failing tests",
+                ),
+            )
+        )
+
+        assertNotNull(action)
+        assertEquals("thread-child", action?.receiverThreadIds?.single())
+        assertEquals("Scout", action?.receiverAgents?.single()?.nickname)
+    }
+
+    @Test
+    fun decodeMessagesFromThreadRead_rendersStructuredFileAndSkillMentions() {
+        val messages = decodeMessagesFromThreadRead(
+            threadId = "thread-1",
+            threadObject = JSONObject(
+                """
+                {
+                  "turns": [
+                    {
+                      "id": "turn-1",
+                      "items": [
+                        {
+                          "id": "item-1",
+                          "type": "user_message",
+                          "content": [
+                            { "type": "text", "text": "Inspect these inputs" },
+                            { "type": "file", "path": "android/app/src/main/java/io/androdex/android/MainViewModel.kt" },
+                            { "type": "skill", "name": "frontend-design" }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+            ),
+        )
+
+        assertEquals(1, messages.size)
+        assertEquals(
+            "Inspect these inputs\n@android/app/src/main/java/io/androdex/android/MainViewModel.kt\n\$frontend-design",
+            messages.single().text,
+        )
     }
 }

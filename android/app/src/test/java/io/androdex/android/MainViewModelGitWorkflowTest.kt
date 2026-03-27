@@ -25,6 +25,7 @@ import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -323,6 +324,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit
@@ -338,6 +340,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit

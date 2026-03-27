@@ -26,6 +26,7 @@ import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
 import io.androdex.android.model.TrustedPairSnapshot
@@ -58,6 +59,7 @@ interface AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     )
@@ -71,6 +73,7 @@ interface AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     )
@@ -173,10 +176,11 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
-        client.startTurn(threadId, userInput, attachments, skillMentions, collaborationMode)
+        client.startTurn(threadId, userInput, attachments, fileMentions, skillMentions, collaborationMode)
     }
 
     override suspend fun startReview(
@@ -192,10 +196,11 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
-        client.steerTurn(threadId, expectedTurnId, userInput, attachments, skillMentions, collaborationMode)
+        client.steerTurn(threadId, expectedTurnId, userInput, attachments, fileMentions, skillMentions, collaborationMode)
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {

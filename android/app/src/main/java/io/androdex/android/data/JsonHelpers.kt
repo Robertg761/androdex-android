@@ -352,9 +352,6 @@ fun decodeMessagesFromThreadRead(threadId: String, threadObject: JSONObject): Li
                         )
                         continue
                     }
-                    if (!isSubagentActionItemType(itemType)) {
-                        continue
-                    }
                     val action = decodeSubagentActionItem(itemObject) ?: continue
                     messages += ConversationMessage(
                         id = itemId ?: UUID.randomUUID().toString(),
@@ -876,6 +873,20 @@ private fun decodeItemText(itemObject: JSONObject): String {
                     value.stringOrNull("text", "delta")?.let(parts::add)
                 }
 
+                "file", "inputfile", "filepath" -> {
+                    val filePath = value.stringOrNull("path", "file", "file_path", "filePath", "name")
+                    if (!filePath.isNullOrBlank()) {
+                        parts += "@$filePath"
+                    }
+                }
+
+                "mention" -> {
+                    val mentionPath = value.stringOrNull("path", "name")
+                    if (!mentionPath.isNullOrBlank()) {
+                        parts += "@$mentionPath"
+                    }
+                }
+
                 "skill" -> {
                     val skill = value.stringOrNull("id", "name")
                     if (!skill.isNullOrBlank()) {
@@ -1375,6 +1386,22 @@ internal fun decodeSubagentActionSpec(values: Map<String, Any?>): SubagentAction
     )
 }
 
+internal fun decodeSubagentActionItem(itemObject: Map<String, Any?>): SubagentAction? {
+    val normalizedType = normalizeItemType(itemObject["type"]?.toString())
+    if (isSubagentActionItemType(normalizedType)) {
+        return decodeSubagentActionSpec(itemObject)
+    }
+
+    itemObject["collaboration"]
+        ?.let { it as? Map<*, *> }
+        ?.entries
+        ?.associate { (key, value) -> key.toString() to value }
+        ?.let(::decodeSubagentActionSpec)
+        ?.let { return it }
+
+    return decodeSubagentActionSpec(itemObject)
+}
+
 private fun decodeSubagentReceiverThreadIds(itemObject: Map<String, Any?>): List<String> {
     val plural = itemObject.listOrNull("receiverThreadIds", "receiver_thread_ids", "threadIds", "thread_ids")
     if (plural != null) {
@@ -1650,7 +1677,7 @@ private fun Map<String, Any?>.listOrNull(vararg keys: String): List<Any?>? {
     return null
 }
 
-private fun JSONObject.toRawMap(): Map<String, Any?> {
+internal fun JSONObject.toRawMap(): Map<String, Any?> {
     val result = linkedMapOf<String, Any?>()
     val keys = keys()
     while (keys.hasNext()) {

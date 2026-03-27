@@ -296,6 +296,11 @@ data class TurnSkillMention(
     val path: String? = null,
 )
 
+data class TurnFileMention(
+    val path: String,
+    val name: String? = null,
+)
+
 data class ComposerMentionedFile(
     val id: String = UUID.randomUUID().toString(),
     val fileName: String,

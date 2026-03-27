@@ -25,6 +25,7 @@ import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -206,6 +207,17 @@ class MainViewModelComposerAutocompleteTest {
         assertEquals(
             listOf(
                 listOf(
+                    TurnFileMention(
+                        path = "android/app/src/main/java/io/androdex/android/MainViewModel.kt",
+                        name = "MainViewModel.kt",
+                    )
+                )
+            ),
+            repository.startedTurnFileMentions,
+        )
+        assertEquals(
+            listOf(
+                listOf(
                     TurnSkillMention(
                         id = "frontend-design",
                         name = "frontend-design",
@@ -360,6 +372,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
     var fuzzyMatches: List<FuzzyFileMatch> = emptyList()
     var skills: List<SkillMetadata> = emptyList()
     val startedTurns = mutableListOf<String>()
+    val startedTurnFileMentions = mutableListOf<List<TurnFileMention>>()
     val startedTurnSkillMentions = mutableListOf<List<TurnSkillMention>>()
     val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val startedReviews = mutableListOf<String>()
@@ -426,10 +439,12 @@ private class ComposerRepository : AndrodexRepositoryContract {
         threadId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) {
         startedTurns += "$threadId:$userInput"
+        startedTurnFileMentions += fileMentions
         startedTurnSkillMentions += skillMentions
         startedTurnModes += collaborationMode
     }
@@ -447,6 +462,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
         expectedTurnId: String,
         userInput: String,
         attachments: List<ImageAttachment>,
+        fileMentions: List<TurnFileMention>,
         skillMentions: List<TurnSkillMention>,
         collaborationMode: CollaborationModeKind?,
     ) = Unit

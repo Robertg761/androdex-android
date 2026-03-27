@@ -584,9 +584,10 @@ class MainViewModel(
         val draft = queueState.drafts[draftIndex]
         val nextDrafts = queueState.drafts.toMutableList().apply { removeAt(draftIndex) }
         uiStateFlow.update { state ->
+            val restoredCollaborationMode = draft.collaborationMode.normalizedFor(state.collaborationModes)
             val nextPlanModes = state.composerPlanModeByThread.updatedPlanMode(
                 threadId = threadId,
-                enabled = draft.collaborationMode == CollaborationModeKind.PLAN,
+                enabled = restoredCollaborationMode == CollaborationModeKind.PLAN,
             )
             val nextSubagents = state.composerSubagentsByThread.updatedPlanMode(
                 threadId = threadId,
@@ -1209,6 +1210,7 @@ class MainViewModel(
         val readyAttachments = composerAttachments.readyAttachments()
         val mentionedFiles = current.composerMentionedFilesByThread[threadId].orEmpty()
         val mentionedSkills = current.composerMentionedSkillsByThread[threadId].orEmpty()
+        val fileMentions = buildTurnFileMentions(mentionedFiles)
         val reviewSelection = current.composerReviewSelectionByThread[threadId]
         val payload = buildComposerPayloadText(
             text = rawInput,
@@ -1338,6 +1340,7 @@ class MainViewModel(
                     input = payload,
                     preferredThreadId = threadId,
                     attachments = readyAttachments,
+                    fileMentions = fileMentions,
                     skillMentions = skillMentions,
                     collaborationMode = collaborationMode,
                 )
@@ -2017,17 +2020,18 @@ class MainViewModel(
 
         viewModelScope.launch {
             try {
+                val normalizedDraft = draftToSend.normalizedFor(uiStateFlow.value.collaborationModes)
                 service.sendMessage(
                     input = buildComposerPayloadText(
-                        text = draftToSend.text,
-                        mentionedFiles = draftToSend.mentionedFiles,
-                        isSubagentsSelected = draftToSend.subagentsSelectionEnabled,
+                        text = normalizedDraft.text,
+                        mentionedFiles = normalizedDraft.mentionedFiles,
+                        isSubagentsSelected = normalizedDraft.subagentsSelectionEnabled,
                     ),
                     preferredThreadId = threadId,
-                    attachments = draftToSend.attachments,
-                    skillMentions = buildTurnSkillMentions(draftToSend.mentionedSkills),
-                    collaborationMode = draftToSend.collaborationMode
-                        ?.takeIf { uiStateFlow.value.supportsCollaborationMode(it) },
+                    attachments = normalizedDraft.attachments,
+                    fileMentions = buildTurnFileMentions(normalizedDraft.mentionedFiles),
+                    skillMentions = buildTurnSkillMentions(normalizedDraft.mentionedSkills),
+                    collaborationMode = normalizedDraft.collaborationMode,
                 )
             } catch (error: Throwable) {
                 val queueMessage = error.message ?: "Failed to send the queued follow-up."
@@ -2038,7 +2042,7 @@ class MainViewModel(
                         queuedDraftStateByThread = current.queuedDraftStateByThread.updatedQueueEntry(
                             threadId = threadId,
                             queueState = queueState.copy(
-                                drafts = listOf(draftToSend) + queueState.drafts,
+                                drafts = listOf(draftToSend.normalizedFor(current.collaborationModes)) + queueState.drafts,
                                 pauseState = QueuePauseState.PAUSED,
                                 pauseMessage = queueMessage,
                             ).normalized(),
@@ -2337,11 +2341,13 @@ private fun applyServiceState(
     serviceState: AndrodexServiceState,
 ): AndrodexUiState {
     val selectedThreadId = serviceState.selectedThreadId
+    val normalizedComposerPlanModes = current.composerPlanModeByThread.normalizedFor(serviceState.collaborationModes)
+    val normalizedQueuedDraftState = current.queuedDraftStateByThread.normalizedFor(serviceState.collaborationModes)
     val selectedThreadComposerText = serviceState.selectedThreadId
         ?.let { current.composerDraftsByThread[it] }
         .orEmpty()
     val selectedThreadPlanMode = serviceState.selectedThreadId
-        ?.let { it in current.composerPlanModeByThread }
+        ?.let { it in normalizedComposerPlanModes }
         ?: false
     val selectedThreadSubagents = serviceState.selectedThreadId
         ?.let { it in current.composerSubagentsByThread }
@@ -2396,10 +2402,11 @@ private fun applyServiceState(
         composerSlashCommandItems = if (selectedThreadId == null) emptyList() else current.composerSlashCommandItems,
         isSlashCommandAutocompleteVisible = selectedThreadId != null && current.isSlashCommandAutocompleteVisible,
         slashCommandQuery = if (selectedThreadId == null) "" else current.slashCommandQuery,
-        composerPlanModeByThread = current.composerPlanModeByThread,
+        composerPlanModeByThread = normalizedComposerPlanModes,
         composerSubagentsByThread = current.composerSubagentsByThread,
         isComposerPlanMode = selectedThreadPlanMode,
         isComposerSubagentsEnabled = selectedThreadSubagents,
+        queuedDraftStateByThread = normalizedQueuedDraftState,
         isLoadingRuntimeConfig = serviceState.isLoadingRuntimeConfig,
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,
@@ -2433,6 +2440,23 @@ private fun AndrodexUiState.supportsCollaborationMode(mode: CollaborationModeKin
     return mode in collaborationModes
 }
 
+private fun CollaborationModeKind?.normalizedFor(
+    collaborationModes: Set<CollaborationModeKind>,
+): CollaborationModeKind? {
+    return this?.takeIf { it in collaborationModes }
+}
+
+private fun QueuedTurnDraft.normalizedFor(
+    collaborationModes: Set<CollaborationModeKind>,
+): QueuedTurnDraft {
+    val normalizedMode = collaborationMode.normalizedFor(collaborationModes)
+    return if (normalizedMode == collaborationMode) {
+        this
+    } else {
+        copy(collaborationMode = normalizedMode)
+    }
+}
+
 private fun ThreadQueuedDraftState.normalized(): ThreadQueuedDraftState {
     return if (drafts.isEmpty()) {
         ThreadQueuedDraftState()
@@ -2452,6 +2476,21 @@ private fun Map<String, ThreadQueuedDraftState>.updatedQueueEntry(
     } else {
         this + (threadId to queueState)
     }
+}
+
+private fun Set<String>.normalizedFor(collaborationModes: Set<CollaborationModeKind>): Set<String> {
+    return if (CollaborationModeKind.PLAN in collaborationModes) this else emptySet()
+}
+
+private fun Map<String, ThreadQueuedDraftState>.normalizedFor(
+    collaborationModes: Set<CollaborationModeKind>,
+): Map<String, ThreadQueuedDraftState> {
+    return entries.mapNotNull { (threadId, queueState) ->
+        val normalizedQueueState = queueState.copy(
+            drafts = queueState.drafts.map { it.normalizedFor(collaborationModes) },
+        ).normalized()
+        normalizedQueueState.takeIf { it.drafts.isNotEmpty() }?.let { threadId to it }
+    }.toMap()
 }
 
 private fun Map<String, String>.updatedThreadDraft(
