@@ -145,6 +145,12 @@ internal fun decodeThreadSummarySpec(values: Map<String, Any?>): ThreadSummary? 
         cwd = cwd,
         createdAtEpochMs = createdAt,
         updatedAtEpochMs = updatedAt,
+        forkedFromThreadId = values.stringOrNull(
+            "forkedFromThreadId",
+            "forked_from_thread_id",
+            "forkedFromId",
+            "forked_from_id",
+        ),
         parentThreadId = values.stringOrNull("parentThreadId", "parent_thread_id"),
         agentId = values.stringOrNull("agentId", "agent_id"),
         agentNickname = values.stringOrNull("agentNickname", "agent_nickname"),

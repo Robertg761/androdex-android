@@ -32,10 +32,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -114,6 +118,8 @@ internal fun ThreadTimelineScreen(
     onAddCamera: () -> Unit,
     onAddGallery: () -> Unit,
     onRemoveComposerAttachment: (String) -> Unit,
+    onOpenRuntime: () -> Unit,
+    onOpenFork: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPauseQueue: () -> Unit,
@@ -146,6 +152,7 @@ internal fun ThreadTimelineScreen(
     BackHandler(onBack = onBack)
     val listState = remember { LazyListState() }
     val coroutineScope = rememberCoroutineScope()
+    var overflowMenuExpanded by remember { mutableStateOf(false) }
     val showJumpToLatest by remember {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
@@ -184,8 +191,40 @@ internal fun ThreadTimelineScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onOpenRuntime,
+                        enabled = state.composer.runtimeButtonEnabled,
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = "Runtime")
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                    Box {
+                        IconButton(onClick = { overflowMenuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(
+                            expanded = overflowMenuExpanded,
+                            onDismissRequest = { overflowMenuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Runtime overrides") },
+                                enabled = state.composer.runtimeButtonEnabled,
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    onOpenRuntime()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Fork thread") },
+                                enabled = state.fork.isEnabled,
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    onOpenFork()
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -232,6 +271,11 @@ internal fun ThreadTimelineScreen(
         ) {
             BusyIndicator(state = state.busy)
             AgentActivityBanner(messages = state.messages)
+            if (state.isForkedThread) {
+                ForkedThreadBanner(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
             GitStatusCard(
                 state = state.git,
                 onRefreshGit = onRefreshGit,
@@ -311,8 +355,35 @@ internal fun ThreadTimelineScreen(
                 onAddCamera = onAddCamera,
                 onAddGallery = onAddGallery,
                 onRemoveAttachment = onRemoveComposerAttachment,
+                onOpenRuntime = onOpenRuntime,
                 onSend = onSend,
                 onStop = onStop,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ForkedThreadBanner(modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "Forked thread",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "This conversation branched from an earlier thread so you can explore a different direction without losing the original.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
     }

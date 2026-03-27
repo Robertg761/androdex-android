@@ -150,6 +150,7 @@ data class ThreadSummary(
     val cwd: String?,
     val createdAtEpochMs: Long?,
     val updatedAtEpochMs: Long?,
+    val forkedFromThreadId: String? = null,
     val parentThreadId: String? = null,
     val agentId: String? = null,
     val agentNickname: String? = null,
@@ -270,6 +271,90 @@ data class ModelOption(
 ) {
     val stableIdentifier: String
         get() = id.ifBlank { model }
+}
+
+enum class AccessMode(
+    val wireValue: String,
+) {
+    ON_REQUEST("on-request"),
+    FULL_ACCESS("full-access");
+
+    val displayName: String
+        get() = when (this) {
+            ON_REQUEST -> "Ask"
+            FULL_ACCESS -> "Full"
+        }
+
+    val menuTitle: String
+        get() = when (this) {
+            ON_REQUEST -> "On-Request"
+            FULL_ACCESS -> "Full Access"
+        }
+
+    val approvalPolicyCandidates: List<String>
+        get() = when (this) {
+            ON_REQUEST -> listOf("on-request", "onRequest")
+            FULL_ACCESS -> listOf("never")
+        }
+
+    val sandboxLegacyValue: String
+        get() = when (this) {
+            ON_REQUEST -> "workspace-write"
+            FULL_ACCESS -> "danger-full-access"
+        }
+
+    companion object {
+        fun fromWireValue(value: String?): AccessMode? {
+            val normalized = value?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
+}
+
+enum class ServiceTier(
+    val wireValue: String,
+) {
+    FAST("fast");
+
+    val displayName: String
+        get() = when (this) {
+            FAST -> "Fast"
+        }
+
+    val description: String
+        get() = when (this) {
+            FAST -> "Lower latency using the bridge/runtime fast tier."
+        }
+
+    companion object {
+        fun fromWireValue(value: String?): ServiceTier? {
+            val normalized = value?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
+}
+
+data class ThreadRuntimeOverride(
+    val reasoningEffort: String? = null,
+    val serviceTierRawValue: String? = null,
+    val overridesReasoning: Boolean = false,
+    val overridesServiceTier: Boolean = false,
+) {
+    val serviceTier: ServiceTier?
+        get() = ServiceTier.fromWireValue(serviceTierRawValue)
+
+    val isEmpty: Boolean
+        get() = !overridesReasoning && !overridesServiceTier
+
+    fun normalized(): ThreadRuntimeOverride? {
+        val normalizedReasoning = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedServiceTier = serviceTierRawValue?.trim()?.takeIf { it.isNotEmpty() }
+        val normalized = copy(
+            reasoningEffort = normalizedReasoning,
+            serviceTierRawValue = normalizedServiceTier,
+        )
+        return normalized.takeUnless { it.isEmpty }
+    }
 }
 
 enum class CollaborationModeKind(
@@ -517,6 +602,11 @@ sealed interface ClientUpdate {
         val models: List<ModelOption>,
         val selectedModelId: String?,
         val selectedReasoningEffort: String?,
+        val selectedAccessMode: AccessMode,
+        val selectedServiceTier: ServiceTier?,
+        val supportsServiceTier: Boolean,
+        val supportsThreadFork: Boolean,
+        val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride>,
     ) : ClientUpdate
 
     data class PlanUpdated(

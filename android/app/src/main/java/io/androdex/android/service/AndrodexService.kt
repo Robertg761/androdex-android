@@ -2,6 +2,7 @@ package io.androdex.android.service
 
 import io.androdex.android.AppEnvironment
 import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.attachmentSignature
 import io.androdex.android.model.CollaborationModeKind
@@ -13,11 +14,13 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadRunSnapshot
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
@@ -65,6 +68,11 @@ data class AndrodexServiceState(
     val availableModels: List<ModelOption> = emptyList(),
     val selectedModelId: String? = null,
     val selectedReasoningEffort: String? = null,
+    val selectedAccessMode: AccessMode = AccessMode.ON_REQUEST,
+    val selectedServiceTier: ServiceTier? = null,
+    val supportsServiceTier: Boolean = true,
+    val supportsThreadFork: Boolean = true,
+    val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
     val activeWorkspacePath: String? = null,
     val recentWorkspaces: List<WorkspacePathSummary> = emptyList(),
     val workspaceBrowserPath: String? = null,
@@ -340,6 +348,43 @@ class AndrodexService(
         repository.setSelectedReasoningEffort(effort)
     }
 
+    suspend fun selectAccessMode(accessMode: AccessMode) {
+        repository.setSelectedAccessMode(accessMode)
+    }
+
+    suspend fun selectServiceTier(serviceTier: ServiceTier?) {
+        repository.setSelectedServiceTier(serviceTier)
+    }
+
+    suspend fun setThreadRuntimeOverride(
+        threadId: String,
+        runtimeOverride: ThreadRuntimeOverride?,
+    ) {
+        repository.setThreadRuntimeOverride(threadId, runtimeOverride)
+    }
+
+    suspend fun forkThread(
+        sourceThreadId: String,
+        preferredProjectPath: String? = null,
+    ) {
+        val sourceThread = stateFlow.value.threads.firstOrNull { it.id == sourceThreadId }
+        val forkedThread = repository.forkThread(
+            threadId = sourceThreadId,
+            preferredProjectPath = preferredProjectPath,
+            preferredModel = sourceThread?.model,
+        )
+        stateFlow.update { current ->
+            current.copy(
+                selectedThreadId = forkedThread.id,
+                selectedThreadTitle = forkedThread.title,
+                timelineByThread = current.timelineByThread + (forkedThread.id to current.timelineByThread[forkedThread.id].orEmpty()),
+            )
+        }
+        refreshThreadsInternal()
+        loadWorkspaceState()
+        loadThreadIntoState(forkedThread.id)
+    }
+
     suspend fun loadWorkspaceState() {
         val recent = repository.listRecentWorkspaces()
         stateFlow.update {
@@ -532,6 +577,11 @@ class AndrodexService(
                         availableModels = update.models,
                         selectedModelId = update.selectedModelId,
                         selectedReasoningEffort = update.selectedReasoningEffort,
+                        selectedAccessMode = update.selectedAccessMode,
+                        selectedServiceTier = update.selectedServiceTier,
+                        supportsServiceTier = update.supportsServiceTier,
+                        supportsThreadFork = update.supportsThreadFork,
+                        threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
                     )
                 }
             }

@@ -58,7 +58,8 @@ Androdex does **not** run Codex on the phone itself.
 - Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
 - reconnect from a saved pairing
-- model and reasoning controls on Android
+- model, access mode, service-tier, and per-thread runtime controls on Android
+- native thread fork actions on Android when the host bridge/runtime supports them
 - optional bridge-side Android push registration and run-completion forwarding
 
 ## Current Status

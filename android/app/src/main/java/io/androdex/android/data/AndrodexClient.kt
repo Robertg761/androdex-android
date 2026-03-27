@@ -21,6 +21,7 @@ import io.androdex.android.crypto.sha256
 import io.androdex.android.crypto.signEd25519
 import io.androdex.android.crypto.verifyEd25519
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
@@ -42,9 +43,11 @@ import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRunSnapshot
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
@@ -117,6 +120,11 @@ class AndrodexClient(
     private var availableModels: List<ModelOption> = emptyList()
     private var selectedModelId: String? = persistence.loadSelectedModelId()
     private var selectedReasoningEffort: String? = persistence.loadSelectedReasoningEffort()
+    private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
+    private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
+    private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides()
+    private var supportsServiceTier = true
+    private var supportsThreadFork = true
 
     val updates: SharedFlow<ClientUpdate> = updatesFlow.asSharedFlow()
 
@@ -199,13 +207,86 @@ class AndrodexClient(
     }
 
     suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary {
-        val params = JSONObject()
-        runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
-        preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params.put("cwd", it) }
-        val result = sendRequest("thread/start", params)
-        val thread = decodeThreadSummary(result.optJSONObject("thread") ?: JSONObject())
-            ?: throw IllegalStateException("thread/start response did not include a thread.")
-        return thread
+        var includesServiceTier = supportsServiceTier
+        while (true) {
+            val params = buildThreadStartParams(
+                preferredProjectPath = preferredProjectPath,
+                model = runtimeModelIdentifierForTurn(),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread() else null,
+            )
+            val result = try {
+                sendRequestWithAccessModeFallback("thread/start", params)
+            } catch (error: RpcException) {
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
+                    continue
+                }
+                throw error
+            }
+            val thread = decodeThreadSummary(result.optJSONObject("thread") ?: JSONObject())
+                ?: throw IllegalStateException("thread/start response did not include a thread.")
+            return thread
+        }
+    }
+
+    suspend fun forkThread(
+        threadId: String,
+        preferredProjectPath: String? = null,
+        preferredModel: String? = null,
+    ): ThreadSummary {
+        if (!supportsThreadFork) {
+            throw IllegalStateException("This host bridge does not support native thread forks yet. Update Androdex on the host and retry.")
+        }
+
+        var includesServiceTier = supportsServiceTier
+        var includesSandbox = true
+        var usesMinimalForkParams = false
+        while (true) {
+            val params = buildThreadForkParams(
+                sourceThreadId = threadId,
+                preferredProjectPath = preferredProjectPath,
+                model = preferredModel ?: runtimeModelIdentifierForTurn(),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                includeSandbox = includesSandbox,
+                usesMinimalForkParams = usesMinimalForkParams,
+                accessMode = selectedAccessMode,
+            )
+            try {
+                val result = sendRequestWithApprovalPolicyFallback(
+                    method = "thread/fork",
+                    baseParams = params,
+                    context = if (includesSandbox) "sandbox" else "minimal",
+                )
+                val threadObject = result.optJSONObject("thread") ?: JSONObject()
+                val decoded = decodeThreadSummary(threadObject)
+                    ?: throw IllegalStateException("thread/fork response did not include a thread.")
+                val patched = decoded.copy(
+                    cwd = decoded.cwd ?: preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() },
+                    forkedFromThreadId = decoded.forkedFromThreadId ?: threadId,
+                )
+                inheritThreadRuntimeOverrides(fromThreadId = threadId, toThreadId = patched.id)
+                return patched
+            } catch (error: RpcException) {
+                if (consumeUnsupportedThreadFork(error)) {
+                    throw IllegalStateException("This host bridge does not support native thread forks yet. Update Androdex on the host and retry.")
+                }
+                if (consumeUnsupportedThreadForkOverrides(error, usesMinimalForkParams)) {
+                    includesServiceTier = false
+                    includesSandbox = false
+                    usesMinimalForkParams = true
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
+                    continue
+                }
+                if (includesSandbox && shouldFallbackFromSandboxPolicy(error.message)) {
+                    includesSandbox = false
+                    continue
+                }
+                throw error
+            }
+        }
     }
 
     suspend fun listRecentWorkspaces(): WorkspaceRecentState {
@@ -447,6 +528,7 @@ class AndrodexClient(
         var effectiveCollaborationMode = collaborationMode
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
         var imageUrlKey = "url"
+        var includesServiceTier = supportsServiceTier
         while (true) {
             val params = buildTurnStartParams(
                 threadId = threadId,
@@ -456,11 +538,12 @@ class AndrodexClient(
                 imageUrlKey = imageUrlKey,
                 includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
-                reasoningEffort = selectedReasoningEffortForSelectedModel(),
+                reasoningEffort = selectedReasoningEffortForThread(threadId),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
                 collaborationMode = effectiveCollaborationMode,
             )
             try {
-                sendRequest("turn/start", params)
+                sendRequestWithAccessModeFallback("turn/start", params)
                 return
             } catch (error: RpcException) {
                 if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
@@ -473,6 +556,10 @@ class AndrodexClient(
                 }
                 if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
                     effectiveCollaborationMode = null
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
                     continue
                 }
                 throw error
@@ -492,6 +579,7 @@ class AndrodexClient(
         var effectiveCollaborationMode = collaborationMode
         var includeStructuredSkillItems = skillMentions.isNotEmpty()
         var imageUrlKey = "url"
+        var includesServiceTier = supportsServiceTier
         while (true) {
             val params = buildTurnSteerParams(
                 threadId = threadId,
@@ -502,11 +590,12 @@ class AndrodexClient(
                 imageUrlKey = imageUrlKey,
                 includeStructuredSkillItems = includeStructuredSkillItems,
                 model = runtimeModelIdentifierForTurn(),
-                reasoningEffort = selectedReasoningEffortForSelectedModel(),
+                reasoningEffort = selectedReasoningEffortForThread(threadId),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
                 collaborationMode = effectiveCollaborationMode,
             )
             try {
-                sendRequest("turn/steer", params)
+                sendRequestWithAccessModeFallback("turn/steer", params)
                 return
             } catch (error: RpcException) {
                 if (imageUrlKey == "url" && shouldRetryTurnWithImageUrlField(error.message)) {
@@ -519,6 +608,10 @@ class AndrodexClient(
                 }
                 if (effectiveCollaborationMode != null && shouldRetryTurnWithoutCollaborationMode(error.message)) {
                     effectiveCollaborationMode = null
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
                     continue
                 }
                 throw error
@@ -562,6 +655,33 @@ class AndrodexClient(
         selectedReasoningEffort = effort?.trim()?.takeIf { it.isNotEmpty() }
         normalizeRuntimeSelectionsAfterModelsUpdate()
         persistence.saveSelectedReasoningEffort(selectedReasoningEffortForSelectedModel())
+        emitRuntimeConfig()
+    }
+
+    suspend fun setSelectedAccessMode(accessMode: AccessMode) {
+        selectedAccessMode = accessMode
+        persistence.saveSelectedAccessMode(accessMode)
+        emitRuntimeConfig()
+    }
+
+    suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) {
+        selectedServiceTier = serviceTier
+        persistence.saveSelectedServiceTier(serviceTier)
+        emitRuntimeConfig()
+    }
+
+    suspend fun setThreadRuntimeOverride(
+        threadId: String,
+        runtimeOverride: ThreadRuntimeOverride?,
+    ) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val normalizedOverride = runtimeOverride?.normalized()
+        if (normalizedOverride == null) {
+            threadRuntimeOverridesByThread = threadRuntimeOverridesByThread - normalizedThreadId
+        } else {
+            threadRuntimeOverridesByThread = threadRuntimeOverridesByThread + (normalizedThreadId to normalizedOverride)
+        }
+        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
         emitRuntimeConfig()
     }
 
@@ -1248,6 +1368,57 @@ class AndrodexClient(
         return response.optJSONObject("result") ?: JSONObject()
     }
 
+    private suspend fun sendRequestWithApprovalPolicyFallback(
+        method: String,
+        baseParams: JSONObject,
+        context: String,
+    ): JSONObject {
+        var lastError: RpcException? = null
+        val policies = selectedAccessMode.approvalPolicyCandidates
+        for ((index, policy) in policies.withIndex()) {
+            val params = clonedJson(baseParams).put("approvalPolicy", policy)
+            try {
+                return sendRequest(method, params)
+            } catch (error: RpcException) {
+                lastError = error
+                if (index < policies.lastIndex && shouldRetryWithApprovalPolicyFallback(error.message)) {
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?: IllegalStateException("$method $context failed without a response.")
+    }
+
+    private suspend fun sendRequestWithAccessModeFallback(
+        method: String,
+        baseParams: JSONObject,
+    ): JSONObject {
+        var sandboxMode = AccessModeSandboxMode.SANDBOX_POLICY
+        while (true) {
+            val params = applyAccessModeParams(baseParams, selectedAccessMode, sandboxMode)
+            try {
+                return sendRequestWithApprovalPolicyFallback(
+                    method = method,
+                    baseParams = params,
+                    context = sandboxMode.name.lowercase(Locale.US),
+                )
+            } catch (error: RpcException) {
+                sandboxMode = when {
+                    sandboxMode == AccessModeSandboxMode.SANDBOX_POLICY && shouldFallbackFromSandboxPolicy(error.message) -> {
+                        AccessModeSandboxMode.LEGACY_SANDBOX
+                    }
+
+                    sandboxMode == AccessModeSandboxMode.LEGACY_SANDBOX && shouldFallbackFromSandboxPolicy(error.message) -> {
+                        AccessModeSandboxMode.MINIMAL
+                    }
+
+                    else -> throw error
+                }
+            }
+        }
+    }
+
     private suspend fun sendNotification(method: String, params: JSONObject?) {
         val payload = JSONObject().put("method", method)
         if (params != null) {
@@ -1421,6 +1592,11 @@ class AndrodexClient(
                 models = availableModels,
                 selectedModelId = selectedModelOption()?.stableIdentifier ?: selectedModelId,
                 selectedReasoningEffort = selectedReasoningEffortForSelectedModel(),
+                selectedAccessMode = selectedAccessMode,
+                selectedServiceTier = selectedServiceTier,
+                supportsServiceTier = supportsServiceTier,
+                supportsThreadFork = supportsThreadFork,
+                threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
             )
         )
     }
@@ -1679,6 +1855,29 @@ class AndrodexClient(
         return selectedModelOption()?.model ?: fallbackModel()?.model
     }
 
+    private fun threadRuntimeOverrideFor(threadId: String?): ThreadRuntimeOverride? {
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return threadRuntimeOverridesByThread[normalizedThreadId]
+    }
+
+    private fun selectedReasoningEffortForThread(threadId: String?): String? {
+        val model = selectedModelOption() ?: fallbackModel() ?: return null
+        val supported = model.supportedReasoningEfforts.map { it.reasoningEffort }.toSet()
+        if (supported.isEmpty()) {
+            return null
+        }
+
+        val threadOverride = threadRuntimeOverrideFor(threadId)
+        val overriddenReasoning = threadOverride?.reasoningEffort
+            ?.trim()
+            ?.takeIf { threadOverride.overridesReasoning && it.isNotEmpty() && supported.contains(it) }
+        if (overriddenReasoning != null) {
+            return overriddenReasoning
+        }
+
+        return selectedReasoningEffortForSelectedModel()
+    }
+
     private fun selectedReasoningEffortForSelectedModel(): String? {
         val model = selectedModelOption() ?: fallbackModel() ?: return null
         val supported = model.supportedReasoningEfforts.map { it.reasoningEffort }.toSet()
@@ -1692,6 +1891,67 @@ class AndrodexClient(
             supported.contains("medium") -> "medium"
             else -> model.supportedReasoningEfforts.firstOrNull()?.reasoningEffort
         }
+    }
+
+    private fun runtimeServiceTierForThread(threadId: String? = null): String? {
+        if (!supportsServiceTier) {
+            return null
+        }
+
+        val threadOverride = threadRuntimeOverrideFor(threadId)
+        if (threadOverride?.overridesServiceTier == true) {
+            return threadOverride.serviceTier?.wireValue
+        }
+
+        return selectedServiceTier?.wireValue
+    }
+
+    private fun inheritThreadRuntimeOverrides(
+        fromThreadId: String,
+        toThreadId: String,
+    ) {
+        val normalizedSourceThreadId = fromThreadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val normalizedDestinationThreadId = toThreadId.trim().takeIf { it.isNotEmpty() } ?: return
+        if (normalizedSourceThreadId == normalizedDestinationThreadId) {
+            return
+        }
+
+        val sourceOverride = threadRuntimeOverridesByThread[normalizedSourceThreadId]?.normalized()
+        threadRuntimeOverridesByThread = if (sourceOverride == null) {
+            threadRuntimeOverridesByThread - normalizedDestinationThreadId
+        } else {
+            threadRuntimeOverridesByThread + (normalizedDestinationThreadId to sourceOverride)
+        }
+        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
+        emitRuntimeConfig()
+    }
+
+    private fun consumeUnsupportedServiceTier(
+        error: RpcException,
+        includesServiceTier: Boolean,
+    ): Boolean {
+        if (!includesServiceTier || !shouldRetryWithoutServiceTier(error.code, error.message)) {
+            return false
+        }
+        supportsServiceTier = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadForkOverrides(
+        error: RpcException,
+        usesMinimalForkParams: Boolean,
+    ): Boolean {
+        return !usesMinimalForkParams && shouldRetryThreadForkWithoutOverrides(error.code, error.message)
+    }
+
+    private fun consumeUnsupportedThreadFork(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadFork(error.code, error.message)) {
+            return false
+        }
+        supportsThreadFork = false
+        emitRuntimeConfig()
+        return true
     }
 
     private suspend fun isCurrentSocket(candidate: WebSocket): Boolean {
@@ -1875,6 +2135,74 @@ internal fun buildTurnInputPayload(
     ).toJsonArray()
 }
 
+internal fun buildThreadStartParams(
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+): JSONObject {
+    return buildThreadStartPayloadSpec(
+        preferredProjectPath = preferredProjectPath,
+        model = model,
+        serviceTier = serviceTier,
+    ).toJsonObject()
+}
+
+internal fun buildThreadStartPayloadSpec(
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>()
+    preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params["cwd"] = it }
+    model?.trim()?.takeIf { it.isNotEmpty() }?.let { params["model"] = it }
+    serviceTier?.trim()?.takeIf { it.isNotEmpty() }?.let { params["serviceTier"] = it }
+    return params
+}
+
+internal fun buildThreadForkParams(
+    sourceThreadId: String,
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+    includeSandbox: Boolean = true,
+    usesMinimalForkParams: Boolean = false,
+    accessMode: AccessMode = AccessMode.ON_REQUEST,
+): JSONObject {
+    return buildThreadForkPayloadSpec(
+        sourceThreadId = sourceThreadId,
+        preferredProjectPath = preferredProjectPath,
+        model = model,
+        serviceTier = serviceTier,
+        includeSandbox = includeSandbox,
+        usesMinimalForkParams = usesMinimalForkParams,
+        accessMode = accessMode,
+    ).toJsonObject()
+}
+
+internal fun buildThreadForkPayloadSpec(
+    sourceThreadId: String,
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+    includeSandbox: Boolean = true,
+    usesMinimalForkParams: Boolean = false,
+    accessMode: AccessMode = AccessMode.ON_REQUEST,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to sourceThreadId,
+    )
+    if (usesMinimalForkParams) {
+        return params
+    }
+    preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params["cwd"] = it }
+    model?.trim()?.takeIf { it.isNotEmpty() }?.let { params["model"] = it }
+    serviceTier?.trim()?.takeIf { it.isNotEmpty() }?.let { params["serviceTier"] = it }
+    if (includeSandbox) {
+        params["sandbox"] = accessMode.sandboxLegacyValue
+    }
+    return params
+}
+
 internal fun buildTurnStartParams(
     threadId: String,
     userInput: String,
@@ -1884,6 +2212,7 @@ internal fun buildTurnStartParams(
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
+    serviceTier: String?,
     collaborationMode: CollaborationModeKind?,
 ): JSONObject {
     return buildTurnStartPayloadSpec(
@@ -1895,6 +2224,7 @@ internal fun buildTurnStartParams(
         includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
+        serviceTier = serviceTier,
         collaborationMode = collaborationMode,
     ).toJsonObject()
 }
@@ -1908,6 +2238,7 @@ internal fun buildTurnStartPayloadSpec(
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
+    serviceTier: String?,
     collaborationMode: CollaborationModeKind?,
 ): Map<String, Any?> {
     val params = linkedMapOf<String, Any?>(
@@ -1922,6 +2253,7 @@ internal fun buildTurnStartPayloadSpec(
     )
     model?.let { params["model"] = it }
     reasoningEffort?.let { params["effort"] = it }
+    serviceTier?.let { params["serviceTier"] = it }
     buildCollaborationModePayloadSpec(
         collaborationMode = collaborationMode,
         model = model,
@@ -1940,6 +2272,7 @@ internal fun buildTurnSteerParams(
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
+    serviceTier: String?,
     collaborationMode: CollaborationModeKind?,
 ): JSONObject {
     return buildTurnSteerPayloadSpec(
@@ -1952,6 +2285,7 @@ internal fun buildTurnSteerParams(
         includeStructuredSkillItems = includeStructuredSkillItems,
         model = model,
         reasoningEffort = reasoningEffort,
+        serviceTier = serviceTier,
         collaborationMode = collaborationMode,
     ).toJsonObject()
 }
@@ -1966,6 +2300,7 @@ internal fun buildTurnSteerPayloadSpec(
     includeStructuredSkillItems: Boolean = true,
     model: String?,
     reasoningEffort: String?,
+    serviceTier: String?,
     collaborationMode: CollaborationModeKind?,
 ): Map<String, Any?> {
     val params = linkedMapOf<String, Any?>(
@@ -1980,6 +2315,7 @@ internal fun buildTurnSteerPayloadSpec(
         ),
     )
     reasoningEffort?.let { params["effort"] = it }
+    serviceTier?.let { params["serviceTier"] = it }
     buildCollaborationModePayloadSpec(
         collaborationMode = collaborationMode,
         model = model,
@@ -2020,10 +2356,75 @@ internal fun buildCollaborationModePayloadSpec(
     )
 }
 
+internal fun applyAccessModeParams(
+    baseParams: JSONObject,
+    accessMode: AccessMode,
+    sandboxMode: AccessModeSandboxMode,
+): JSONObject {
+    val params = clonedJson(baseParams)
+    when (sandboxMode) {
+        AccessModeSandboxMode.SANDBOX_POLICY -> {
+            params.put("sandboxPolicy", buildSandboxPolicyPayloadSpec(accessMode).toJsonObject())
+        }
+
+        AccessModeSandboxMode.LEGACY_SANDBOX -> {
+            params.put("sandbox", accessMode.sandboxLegacyValue)
+        }
+
+        AccessModeSandboxMode.MINIMAL -> Unit
+    }
+    return params
+}
+
+internal fun buildSandboxPolicyPayloadSpec(accessMode: AccessMode): Map<String, Any?> {
+    return when (accessMode) {
+        AccessMode.ON_REQUEST -> linkedMapOf(
+            "type" to "workspaceWrite",
+            "networkAccess" to true,
+        )
+
+        AccessMode.FULL_ACCESS -> linkedMapOf(
+            "type" to "dangerFullAccess",
+        )
+    }
+}
+
+internal enum class AccessModeSandboxMode {
+    SANDBOX_POLICY,
+    LEGACY_SANDBOX,
+    MINIMAL,
+}
+
 internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boolean {
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
     return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
         && !normalizedMessage.contains("experimentalapi")
+}
+
+internal fun shouldRetryWithApprovalPolicyFallback(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("approval")
+        || normalizedMessage.contains("unknown variant")
+        || normalizedMessage.contains("expected one of")
+        || normalizedMessage.contains("onrequest")
+        || normalizedMessage.contains("on-request")
+}
+
+internal fun shouldFallbackFromSandboxPolicy(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    if (normalizedMessage.contains("thread not found") || normalizedMessage.contains("unknown thread")) {
+        return false
+    }
+    if (!(normalizedMessage.contains("sandbox") || normalizedMessage.contains("sandboxpolicy"))) {
+        return false
+    }
+    return normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
 }
 
 internal fun shouldRetryTurnWithImageUrlField(errorMessage: String?): Boolean {
@@ -2062,12 +2463,72 @@ private fun shouldRetrySkillsListWithCwdFallback(errorMessage: String?): Boolean
         || normalizedMessage.contains("param"))
 }
 
+internal fun shouldRetryWithoutServiceTier(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode != -32600 && errorCode != -32602) {
+        return false
+    }
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("servicetier")
+        || normalizedMessage.contains("service tier")
+        || normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+}
+
+internal fun shouldRetryThreadForkWithoutOverrides(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode != -32600 && errorCode != -32602 && errorCode != -32000) {
+        return false
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsUnknownField = normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+    val mentionsInvalidNamedField = (normalizedMessage.contains("invalid param") || normalizedMessage.contains("invalid params"))
+        && (normalizedMessage.contains("field") || normalizedMessage.contains("parameter") || normalizedMessage.contains("param"))
+    val mentionsForkOverride = normalizedMessage.contains("cwd")
+        || normalizedMessage.contains("modelprovider")
+        || normalizedMessage.contains("model provider")
+        || normalizedMessage.contains("model")
+        || normalizedMessage.contains("sandbox")
+        || normalizedMessage.contains("servicetier")
+        || normalizedMessage.contains("service tier")
+
+    return (mentionsUnknownField || mentionsInvalidNamedField) && mentionsForkOverride
+}
+
+internal fun shouldTreatAsUnsupportedThreadFork(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode == -32601) {
+        return true
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsUnsupportedMethod = normalizedMessage.contains("method not found")
+        || normalizedMessage.contains("unknown method")
+        || normalizedMessage.contains("not implemented")
+        || normalizedMessage.contains("does not support")
+    val mentionsForkSpecificUnsupported = (normalizedMessage.contains("thread/fork") || normalizedMessage.contains("thread fork"))
+        && (normalizedMessage.contains("unsupported") || normalizedMessage.contains("not supported"))
+
+    if (errorCode != -32600 && errorCode != -32602 && errorCode != -32000) {
+        return mentionsUnsupportedMethod || mentionsForkSpecificUnsupported
+    }
+
+    return mentionsUnsupportedMethod || mentionsForkSpecificUnsupported
+}
+
 private fun Map<String, Any?>.toJsonObject(): JSONObject {
     val jsonObject = JSONObject()
     entries.forEach { (key, value) ->
         jsonObject.put(key, value.toJsonValue())
     }
     return jsonObject
+}
+
+private fun clonedJson(value: JSONObject): JSONObject {
+    return JSONObject(value.toString())
 }
 
 private fun List<*>.toJsonArray(): JSONArray {

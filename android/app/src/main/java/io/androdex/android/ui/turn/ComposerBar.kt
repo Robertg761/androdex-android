@@ -60,6 +60,7 @@ internal fun ComposerBar(
     onAddCamera: () -> Unit,
     onAddGallery: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
+    onOpenRuntime: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -77,21 +78,42 @@ internal fun ComposerBar(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Start,
             ) {
-                FilterChip(
-                    selected = state.isPlanModeEnabled,
-                    onClick = { onPlanModeChanged(!state.isPlanModeEnabled) },
-                    enabled = state.planModeEnabled,
-                    label = {
-                        Text(if (state.isPlanModeEnabled) "Plan mode on" else "Plan mode")
-                    },
-                )
-                FilterChip(
-                    selected = state.isSubagentsEnabled,
-                    onClick = { onSubagentsModeChanged(!state.isSubagentsEnabled) },
-                    enabled = state.subagentsEnabled,
-                    label = {
-                        Text(if (state.isSubagentsEnabled) "Subagents on" else "Subagents")
-                    },
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = state.isPlanModeEnabled,
+                        onClick = { onPlanModeChanged(!state.isPlanModeEnabled) },
+                        enabled = state.planModeEnabled,
+                        label = {
+                            Text(if (state.isPlanModeEnabled) "Plan mode on" else "Plan mode")
+                        },
+                    )
+                    FilterChip(
+                        selected = state.isSubagentsEnabled,
+                        onClick = { onSubagentsModeChanged(!state.isSubagentsEnabled) },
+                        enabled = state.subagentsEnabled,
+                        label = {
+                            Text(if (state.isSubagentsEnabled) "Subagents on" else "Subagents")
+                        },
+                    )
+                    FilterChip(
+                        selected = state.runtimeButtonLabel != "Runtime",
+                        onClick = onOpenRuntime,
+                        enabled = state.runtimeButtonEnabled,
+                        label = {
+                            Text(state.runtimeButtonLabel)
+                        },
+                    )
+                }
+            }
+
+            if (!state.runtimeButtonEnabled && state.runtimeButtonLabel != "Runtime") {
+                Text(
+                    text = state.runtimeButtonLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

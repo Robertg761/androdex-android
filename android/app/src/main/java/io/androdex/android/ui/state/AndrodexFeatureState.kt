@@ -7,6 +7,7 @@ import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
 import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.ComposerImageAttachment
 import io.androdex.android.model.ComposerMentionedFile
@@ -20,7 +21,10 @@ import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
 import java.text.DateFormat
@@ -87,6 +91,7 @@ internal data class ThreadListItemUiState(
     val projectName: String,
     val updatedLabel: String?,
     val runState: ThreadRunBadgeUiState?,
+    val isForked: Boolean,
 )
 
 internal data class ThreadListEmptyStateUiState(
@@ -122,6 +127,7 @@ internal data class ThreadTimelineUiState(
     val title: String,
     val messages: List<ConversationMessage>,
     val runState: ThreadRunBadgeUiState?,
+    val isForkedThread: Boolean,
     val busy: BusyUiState,
     val git: ThreadGitUiState,
     val queuedDrafts: List<QueuedTurnDraft>,
@@ -129,6 +135,8 @@ internal data class ThreadTimelineUiState(
     val canRestoreQueuedDrafts: Boolean,
     val canPauseQueue: Boolean,
     val canResumeQueue: Boolean,
+    val runtime: ThreadRuntimeUiState,
+    val fork: ThreadForkUiState,
     val composer: ComposerUiState,
 )
 
@@ -178,6 +186,8 @@ internal data class ComposerUiState(
     val stopEnabled: Boolean,
     val queuedCount: Int,
     val isQueuePaused: Boolean,
+    val runtimeButtonLabel: String,
+    val runtimeButtonEnabled: Boolean,
 )
 
 internal enum class ComposerSubmitMode {
@@ -196,6 +206,9 @@ internal data class RuntimeSettingsUiState(
     val isLoading: Boolean,
     val modelOptions: List<RuntimeSettingsOptionUiState>,
     val reasoningOptions: List<RuntimeSettingsOptionUiState>,
+    val serviceTierOptions: List<RuntimeSettingsOptionUiState>,
+    val accessModeOptions: List<RuntimeSettingsOptionUiState>,
+    val serviceTierSupported: Boolean,
 )
 
 internal data class RuntimeSettingsOptionUiState(
@@ -203,6 +216,28 @@ internal data class RuntimeSettingsOptionUiState(
     val title: String,
     val subtitle: String?,
     val selected: Boolean,
+)
+
+internal data class ThreadRuntimeUiState(
+    val reasoningOptions: List<RuntimeSettingsOptionUiState>,
+    val selectedReasoningOverride: String?,
+    val serviceTierOptions: List<RuntimeSettingsOptionUiState>,
+    val selectedServiceTierOverride: String?,
+    val supportsServiceTier: Boolean,
+    val accessModeLabel: String,
+    val hasOverrides: Boolean,
+)
+
+internal data class ThreadForkUiState(
+    val isEnabled: Boolean,
+    val availabilityMessage: String?,
+    val targets: List<ThreadForkTargetUiState>,
+)
+
+internal data class ThreadForkTargetUiState(
+    val projectPath: String?,
+    val title: String,
+    val subtitle: String?,
 )
 
 internal fun AndrodexUiState.toAppUiState(
@@ -282,6 +317,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             projectName = thread.projectName,
             updatedLabel = thread.updatedAtEpochMs?.let { relativeTimeLabel(it, nowEpochMs) },
             runState = threadRunBadge(thread.id),
+            isForked = thread.forkedFromThreadId != null,
         )
     }
     val emptyState = if (items.isEmpty() && !isBusy) {
@@ -341,6 +377,7 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
+    val selectedThread = threads.firstOrNull { it.id == threadId }
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val isPlanModeEnabled = isComposerPlanMode || threadId in composerPlanModeByThread
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
@@ -350,10 +387,34 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val queueState = queuedDraftStateByThread[threadId]
     val queuedDrafts = queueState?.drafts.orEmpty()
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
-    val workingDirectory = threads.firstOrNull { it.id == threadId }?.cwd
+    val workingDirectory = selectedThread?.cwd
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    val selectedModel = resolveSelectedModel(availableModels, selectedModelId)
+    val threadRuntimeOverride = threadRuntimeOverridesByThread[threadId]
+    val effectiveReasoning = resolveEffectiveReasoning(
+        model = selectedModel,
+        selectedReasoningEffort = selectedReasoningEffort,
+        threadRuntimeOverride = threadRuntimeOverride,
+    )
+    val effectiveServiceTier = resolveEffectiveServiceTier(
+        selectedServiceTier = selectedServiceTier,
+        threadRuntimeOverride = threadRuntimeOverride,
+        supportsServiceTier = supportsServiceTier,
+    )
+    val threadRuntime = buildThreadRuntimeUiState(
+        selectedModel = selectedModel,
+        selectedReasoningEffort = selectedReasoningEffort,
+        selectedServiceTier = selectedServiceTier,
+        selectedAccessMode = selectedAccessMode,
+        supportsServiceTier = supportsServiceTier,
+        threadRuntimeOverride = threadRuntimeOverride,
+    )
+    val forkTargets = buildThreadForkTargets(
+        selectedThread = selectedThread,
+        activeWorkspacePath = activeWorkspacePath,
+    )
     val sendAvailability = ComposerSendAvailability(
         isSending = isSendingMessage || isBusy || isInterruptingSelectedThread,
         isConnected = connectionStatus == ConnectionStatus.CONNECTED,
@@ -369,6 +430,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         title = selectedThreadTitle ?: "Conversation",
         messages = messages,
         runState = threadRunBadge(threadId),
+        isForkedThread = selectedThread?.forkedFromThreadId != null,
         busy = toBusyUiState(),
         git = ThreadGitUiState(
             hasWorkingDirectory = workingDirectory != null,
@@ -411,6 +473,23 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         canResumeQueue = queuedDrafts.isNotEmpty()
             && queueControlsEnabled
             && queueState?.isPaused == true,
+        runtime = threadRuntime,
+        fork = ThreadForkUiState(
+            isEnabled = supportsThreadFork
+                && connectionStatus == ConnectionStatus.CONNECTED
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread
+                && !isThreadRunning,
+            availabilityMessage = when {
+                !supportsThreadFork -> "Update the host bridge to enable native thread forks."
+                connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to fork this thread."
+                isThreadRunning -> "Wait for the current run to finish before forking."
+                isBusy || isSendingMessage || isInterruptingSelectedThread -> "Wait for the current action to finish before forking."
+                else -> null
+            },
+            targets = forkTargets,
+        ),
         composer = ComposerUiState(
             text = composerText,
             attachments = composerAttachments,
@@ -442,6 +521,12 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             queuedCount = queuedDrafts.size,
             isQueuePaused = queueState?.isPaused == true,
+            runtimeButtonLabel = buildComposerRuntimeButtonLabel(
+                threadRuntime = threadRuntime,
+                effectiveReasoning = effectiveReasoning,
+                effectiveServiceTier = effectiveServiceTier,
+            ),
+            runtimeButtonEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
         ),
     )
 }
@@ -493,12 +578,46 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
             )
         }
     }
+    val serviceTierOptions = buildList {
+        add(
+            RuntimeSettingsOptionUiState(
+                value = null,
+                title = "Normal",
+                subtitle = "Use the standard runtime tier.",
+                selected = selectedServiceTier == null,
+            )
+        )
+        ServiceTier.entries.forEach { tier ->
+            add(
+                RuntimeSettingsOptionUiState(
+                    value = tier.wireValue,
+                    title = tier.displayName,
+                    subtitle = tier.description,
+                    selected = selectedServiceTier == tier,
+                )
+            )
+        }
+    }
+    val accessModeOptions = AccessMode.entries.map { mode ->
+        RuntimeSettingsOptionUiState(
+            value = mode.wireValue,
+            title = mode.menuTitle,
+            subtitle = when (mode) {
+                AccessMode.ON_REQUEST -> "Ask before elevated host actions."
+                AccessMode.FULL_ACCESS -> "Allow full host access for supported actions."
+            },
+            selected = selectedAccessMode == mode,
+        )
+    }
 
     return RuntimeSettingsUiState(
         isVisible = isVisible,
         isLoading = isLoadingRuntimeConfig,
         modelOptions = modelOptions,
         reasoningOptions = reasoningOptions,
+        serviceTierOptions = serviceTierOptions,
+        accessModeOptions = accessModeOptions,
+        serviceTierSupported = supportsServiceTier,
     )
 }
 
@@ -542,4 +661,160 @@ private fun resolveSelectedModel(
     return models.firstOrNull { it.id == selectedModelId || it.model == selectedModelId }
         ?: models.firstOrNull { it.isDefault }
         ?: models.firstOrNull()
+}
+
+private fun resolveEffectiveReasoning(
+    model: ModelOption?,
+    selectedReasoningEffort: String?,
+    threadRuntimeOverride: ThreadRuntimeOverride?,
+): String? {
+    val resolvedModel = model ?: return null
+    val supportedEfforts = resolvedModel.supportedReasoningEfforts.map { it.reasoningEffort }.toSet()
+    if (supportedEfforts.isEmpty()) {
+        return null
+    }
+
+    val overriddenReasoning = threadRuntimeOverride?.reasoningEffort
+        ?.takeIf { threadRuntimeOverride.overridesReasoning && it in supportedEfforts }
+    if (overriddenReasoning != null) {
+        return overriddenReasoning
+    }
+
+    return when {
+        selectedReasoningEffort != null && selectedReasoningEffort in supportedEfforts -> selectedReasoningEffort
+        resolvedModel.defaultReasoningEffort != null && resolvedModel.defaultReasoningEffort in supportedEfforts -> resolvedModel.defaultReasoningEffort
+        "medium" in supportedEfforts -> "medium"
+        else -> resolvedModel.supportedReasoningEfforts.firstOrNull()?.reasoningEffort
+    }
+}
+
+private fun resolveEffectiveServiceTier(
+    selectedServiceTier: ServiceTier?,
+    threadRuntimeOverride: ThreadRuntimeOverride?,
+    supportsServiceTier: Boolean,
+): ServiceTier? {
+    if (!supportsServiceTier) {
+        return null
+    }
+    if (threadRuntimeOverride?.overridesServiceTier == true) {
+        return threadRuntimeOverride.serviceTier
+    }
+    return selectedServiceTier
+}
+
+private fun buildThreadRuntimeUiState(
+    selectedModel: ModelOption?,
+    selectedReasoningEffort: String?,
+    selectedServiceTier: ServiceTier?,
+    selectedAccessMode: AccessMode,
+    supportsServiceTier: Boolean,
+    threadRuntimeOverride: ThreadRuntimeOverride?,
+): ThreadRuntimeUiState {
+    val reasoningOptions = buildList {
+        add(
+            RuntimeSettingsOptionUiState(
+                value = null,
+                title = "App default",
+                subtitle = resolveEffectiveReasoning(
+                    model = selectedModel,
+                    selectedReasoningEffort = selectedReasoningEffort,
+                    threadRuntimeOverride = null,
+                )?.let { "Current: ${it.replaceFirstChar(Char::uppercaseChar)}" },
+                selected = threadRuntimeOverride?.overridesReasoning != true,
+            )
+        )
+        selectedModel?.supportedReasoningEfforts.orEmpty().forEach { effort ->
+            add(
+                RuntimeSettingsOptionUiState(
+                    value = effort.reasoningEffort,
+                    title = effort.reasoningEffort.replaceFirstChar(Char::uppercaseChar),
+                    subtitle = effort.description,
+                    selected = threadRuntimeOverride?.overridesReasoning == true
+                        && threadRuntimeOverride.reasoningEffort == effort.reasoningEffort,
+                )
+            )
+        }
+    }
+    val serviceTierOptions = buildList {
+        add(
+            RuntimeSettingsOptionUiState(
+                value = null,
+                title = "App default",
+                subtitle = selectedServiceTier?.displayName?.let { "Current: $it" } ?: "Current: Normal",
+                selected = threadRuntimeOverride?.overridesServiceTier != true,
+            )
+        )
+        ServiceTier.entries.forEach { tier ->
+            add(
+                RuntimeSettingsOptionUiState(
+                    value = tier.wireValue,
+                    title = tier.displayName,
+                    subtitle = tier.description,
+                    selected = threadRuntimeOverride?.overridesServiceTier == true && threadRuntimeOverride.serviceTier == tier,
+                )
+            )
+        }
+    }
+    return ThreadRuntimeUiState(
+        reasoningOptions = reasoningOptions,
+        selectedReasoningOverride = threadRuntimeOverride?.reasoningEffort?.takeIf { threadRuntimeOverride.overridesReasoning },
+        serviceTierOptions = serviceTierOptions,
+        selectedServiceTierOverride = threadRuntimeOverride?.serviceTierRawValue?.takeIf { threadRuntimeOverride.overridesServiceTier },
+        supportsServiceTier = supportsServiceTier,
+        accessModeLabel = selectedAccessMode.menuTitle,
+        hasOverrides = threadRuntimeOverride?.isEmpty == false,
+    )
+}
+
+private fun buildComposerRuntimeButtonLabel(
+    threadRuntime: ThreadRuntimeUiState,
+    effectiveReasoning: String?,
+    effectiveServiceTier: ServiceTier?,
+): String {
+    if (!threadRuntime.hasOverrides) {
+        return "Runtime"
+    }
+
+    val parts = mutableListOf<String>()
+    if (threadRuntime.selectedReasoningOverride != null) {
+        parts += effectiveReasoning?.replaceFirstChar(Char::uppercaseChar) ?: "Reasoning"
+    }
+    if (threadRuntime.selectedServiceTierOverride != null) {
+        parts += effectiveServiceTier?.displayName ?: "Speed"
+    }
+    return if (parts.isEmpty()) "Runtime" else "Runtime: ${parts.joinToString(" • ")}"
+}
+
+private fun buildThreadForkTargets(
+    selectedThread: ThreadSummary?,
+    activeWorkspacePath: String?,
+): List<ThreadForkTargetUiState> {
+    val targets = mutableListOf<ThreadForkTargetUiState>()
+    val currentProjectPath = selectedThread?.cwd?.trim()?.takeIf { it.isNotEmpty() }
+    if (currentProjectPath != null) {
+        targets += ThreadForkTargetUiState(
+            projectPath = currentProjectPath,
+            title = "Current project",
+            subtitle = currentProjectPath,
+        )
+    }
+
+    val normalizedActiveWorkspace = activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    if (normalizedActiveWorkspace != null && normalizedActiveWorkspace != currentProjectPath) {
+        targets += ThreadForkTargetUiState(
+            projectPath = normalizedActiveWorkspace,
+            title = "Active workspace",
+            subtitle = normalizedActiveWorkspace,
+        )
+    }
+
+    if (targets.isEmpty()) {
+        targets += ThreadForkTargetUiState(
+            projectPath = null,
+            title = "Current runtime context",
+            subtitle = "Fork without changing the host project binding.",
+        )
+    }
+
+    return targets
 }

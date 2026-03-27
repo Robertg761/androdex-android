@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ComposerAttachmentIntakePlan
@@ -22,9 +23,11 @@ import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.hasBlockingState
@@ -86,6 +89,11 @@ data class AndrodexUiState(
     val availableModels: List<ModelOption> = emptyList(),
     val selectedModelId: String? = null,
     val selectedReasoningEffort: String? = null,
+    val selectedAccessMode: AccessMode = AccessMode.ON_REQUEST,
+    val selectedServiceTier: ServiceTier? = null,
+    val supportsServiceTier: Boolean = true,
+    val supportsThreadFork: Boolean = true,
+    val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride> = emptyMap(),
     val activeWorkspacePath: String? = null,
     val recentWorkspaces: List<WorkspacePathSummary> = emptyList(),
     val workspaceBrowserPath: String? = null,
@@ -1181,6 +1189,78 @@ class MainViewModel(
         }
     }
 
+    fun selectAccessMode(accessMode: AccessMode) {
+        viewModelScope.launch {
+            service.selectAccessMode(accessMode)
+        }
+    }
+
+    fun selectServiceTier(serviceTier: ServiceTier?) {
+        viewModelScope.launch {
+            service.selectServiceTier(serviceTier)
+        }
+    }
+
+    fun selectThreadReasoningOverride(effort: String?) {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        viewModelScope.launch {
+            val currentOverride = uiStateFlow.value.threadRuntimeOverridesByThread[threadId]
+            service.setThreadRuntimeOverride(
+                threadId = threadId,
+                runtimeOverride = ThreadRuntimeOverride(
+                    reasoningEffort = effort,
+                    serviceTierRawValue = currentOverride?.serviceTierRawValue,
+                    overridesReasoning = effort != null,
+                    overridesServiceTier = currentOverride?.overridesServiceTier == true,
+                ),
+            )
+        }
+    }
+
+    fun selectThreadServiceTierOverride(serviceTier: ServiceTier?) {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        viewModelScope.launch {
+            val currentOverride = uiStateFlow.value.threadRuntimeOverridesByThread[threadId]
+            service.setThreadRuntimeOverride(
+                threadId = threadId,
+                runtimeOverride = ThreadRuntimeOverride(
+                    reasoningEffort = currentOverride?.reasoningEffort,
+                    serviceTierRawValue = serviceTier?.wireValue,
+                    overridesReasoning = currentOverride?.overridesReasoning == true,
+                    overridesServiceTier = serviceTier != null,
+                ),
+            )
+        }
+    }
+
+    fun useThreadRuntimeDefaults() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        viewModelScope.launch {
+            service.setThreadRuntimeOverride(threadId, null)
+        }
+    }
+
+    fun forkSelectedThread(preferredProjectPath: String?) {
+        val current = uiStateFlow.value
+        val threadId = current.selectedThreadId ?: return
+        if (current.isBusy || current.isSendingMessage || current.isInterruptingSelectedThread || current.isThreadRunning(threadId)) {
+            return
+        }
+
+        runBusyAction("Forking thread...") {
+            service.forkThread(threadId, preferredProjectPath)
+            val forkedThreadId = service.state.value.selectedThreadId ?: return@runBusyAction
+            gitWorkingDirectoryForThread(forkedThreadId, uiStateFlow.value)?.let { workingDirectory ->
+                loadGitSnapshot(
+                    threadId = forkedThreadId,
+                    workingDirectory = workingDirectory,
+                    loadDiff = false,
+                    suppressErrors = true,
+                )
+            }
+        }
+    }
+
     fun openProjectPicker() {
         uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
         viewModelScope.launch {
@@ -1986,6 +2066,11 @@ private fun applyServiceState(
         availableModels = serviceState.availableModels,
         selectedModelId = serviceState.selectedModelId,
         selectedReasoningEffort = serviceState.selectedReasoningEffort,
+        selectedAccessMode = serviceState.selectedAccessMode,
+        selectedServiceTier = serviceState.selectedServiceTier,
+        supportsServiceTier = serviceState.supportsServiceTier,
+        supportsThreadFork = serviceState.supportsThreadFork,
+        threadRuntimeOverridesByThread = serviceState.threadRuntimeOverridesByThread,
         activeWorkspacePath = serviceState.activeWorkspacePath,
         recentWorkspaces = serviceState.recentWorkspaces,
         workspaceBrowserPath = serviceState.workspaceBrowserPath,

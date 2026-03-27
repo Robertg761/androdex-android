@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,6 +25,8 @@ import io.androdex.android.ui.shared.ApprovalDialog
 import io.androdex.android.ui.shared.ErrorMessageDialog
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.toAppUiState
+import io.androdex.android.ui.turn.ForkThreadSheet
+import io.androdex.android.ui.turn.ThreadRuntimeSheet
 import io.androdex.android.ui.turn.ThreadTimelineScreen
 import io.androdex.android.ui.turn.TurnAttachmentPipeline
 import kotlinx.coroutines.launch
@@ -32,11 +35,19 @@ import kotlinx.coroutines.launch
 fun AndrodexApp(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var settingsOpen by remember { mutableStateOf(false) }
+    var threadRuntimeOpen by remember { mutableStateOf(false) }
+    var forkThreadOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val activity = LocalActivity.current
     val scope = rememberCoroutineScope()
     val appState = remember(uiState, settingsOpen) {
         uiState.toAppUiState(isSettingsVisible = settingsOpen)
+    }
+    LaunchedEffect(appState.destination) {
+        if (appState.destination !is AndrodexDestinationUiState.Thread) {
+            threadRuntimeOpen = false
+            forkThreadOpen = false
+        }
     }
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let(viewModel::updatePairingInput)
@@ -107,6 +118,15 @@ fun AndrodexApp(viewModel: MainViewModel) {
             onReload = viewModel::loadRuntimeConfig,
             onSelectModel = viewModel::selectModel,
             onSelectReasoning = viewModel::selectReasoningEffort,
+            onSelectServiceTier = { wireValue ->
+                viewModel.selectServiceTier(io.androdex.android.model.ServiceTier.fromWireValue(wireValue))
+            },
+            onSelectAccessMode = { wireValue ->
+                viewModel.selectAccessMode(
+                    io.androdex.android.model.AccessMode.fromWireValue(wireValue)
+                        ?: io.androdex.android.model.AccessMode.ON_REQUEST
+                )
+            },
         )
     }
 
@@ -148,6 +168,31 @@ fun AndrodexApp(viewModel: MainViewModel) {
         }
 
         is AndrodexDestinationUiState.Thread -> {
+            if (threadRuntimeOpen) {
+                ThreadRuntimeSheet(
+                    state = destination.state.runtime,
+                    onDismiss = { threadRuntimeOpen = false },
+                    onSelectReasoning = viewModel::selectThreadReasoningOverride,
+                    onSelectServiceTier = { wireValue ->
+                        viewModel.selectThreadServiceTierOverride(
+                            io.androdex.android.model.ServiceTier.fromWireValue(wireValue)
+                        )
+                    },
+                    onUseDefaults = viewModel::useThreadRuntimeDefaults,
+                )
+            }
+
+            if (forkThreadOpen) {
+                ForkThreadSheet(
+                    state = destination.state.fork,
+                    onDismiss = { forkThreadOpen = false },
+                    onFork = { projectPath ->
+                        forkThreadOpen = false
+                        viewModel.forkSelectedThread(projectPath)
+                    },
+                )
+            }
+
             ThreadTimelineScreen(
                 state = destination.state,
                 onBack = viewModel::closeThread,
@@ -177,6 +222,12 @@ fun AndrodexApp(viewModel: MainViewModel) {
                     )
                 },
                 onRemoveComposerAttachment = viewModel::removeComposerAttachment,
+                onOpenRuntime = { threadRuntimeOpen = true },
+                onOpenFork = {
+                    if (destination.state.fork.isEnabled) {
+                        forkThreadOpen = true
+                    }
+                },
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::interruptSelectedThread,
                 onPauseQueue = viewModel::pauseSelectedThreadQueue,

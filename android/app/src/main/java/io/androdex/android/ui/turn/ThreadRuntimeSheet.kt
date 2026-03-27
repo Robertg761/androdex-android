@@ -1,4 +1,4 @@
-package io.androdex.android.ui.settings
+package io.androdex.android.ui.turn
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,10 +16,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -30,18 +30,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.state.RuntimeSettingsOptionUiState
-import io.androdex.android.ui.state.RuntimeSettingsUiState
+import io.androdex.android.ui.state.ThreadRuntimeUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RuntimeSettingsSheet(
-    state: RuntimeSettingsUiState,
+internal fun ThreadRuntimeSheet(
+    state: ThreadRuntimeUiState,
     onDismiss: () -> Unit,
-    onReload: () -> Unit,
-    onSelectModel: (String?) -> Unit,
     onSelectReasoning: (String?) -> Unit,
     onSelectServiceTier: (String?) -> Unit,
-    onSelectAccessMode: (String?) -> Unit,
+    onUseDefaults: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
@@ -80,50 +78,27 @@ internal fun RuntimeSettingsSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Runtime Settings",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                TextButton(onClick = onReload) {
-                    Text("Reload")
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Thread Runtime",
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        text = "Adjust reasoning and speed just for this thread.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onUseDefaults, enabled = state.hasOverrides) {
+                    Text("Use defaults")
                 }
             }
 
-            if (state.isLoading) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Choose the model and reasoning effort for new turns.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
             Spacer(modifier = Modifier.height(20.dp))
-            SectionHeader("Model")
+            RuntimeSectionHeader("Reasoning")
             Spacer(modifier = Modifier.height(8.dp))
-
-            state.modelOptions.forEach { option ->
-                SettingsOptionRow(
-                    state = option,
-                    onClick = { onSelectModel(option.value) },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            SectionHeader("Reasoning")
-            Spacer(modifier = Modifier.height(8.dp))
-
             state.reasoningOptions.forEach { option ->
-                SettingsOptionRow(
+                ThreadRuntimeOptionRow(
                     state = option,
                     onClick = { onSelectReasoning(option.value) },
                 )
@@ -133,19 +108,18 @@ internal fun RuntimeSettingsSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(16.dp))
 
-            SectionHeader("Speed")
+            RuntimeSectionHeader("Speed")
             Spacer(modifier = Modifier.height(8.dp))
-
-            if (state.serviceTierSupported) {
+            if (state.supportsServiceTier) {
                 state.serviceTierOptions.forEach { option ->
-                    SettingsOptionRow(
+                    ThreadRuntimeOptionRow(
                         state = option,
                         onClick = { onSelectServiceTier(option.value) },
                     )
                 }
             } else {
                 Text(
-                    text = "This host bridge does not expose service-tier controls yet.",
+                    text = "This host bridge is using the default runtime tier.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -155,21 +129,35 @@ internal fun RuntimeSettingsSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(16.dp))
 
-            SectionHeader("Access")
+            RuntimeSectionHeader("Access")
             Spacer(modifier = Modifier.height(8.dp))
-
-            state.accessModeOptions.forEach { option ->
-                SettingsOptionRow(
-                    state = option,
-                    onClick = { onSelectAccessMode(option.value) },
-                )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = state.accessModeLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "Access mode is set at the app level and applies when the host runtime supports it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SectionHeader(title: String) {
+private fun RuntimeSectionHeader(title: String) {
     Text(
         text = title.uppercase(),
         style = MaterialTheme.typography.labelMedium,
@@ -180,7 +168,7 @@ private fun SectionHeader(title: String) {
 }
 
 @Composable
-private fun SettingsOptionRow(
+private fun ThreadRuntimeOptionRow(
     state: RuntimeSettingsOptionUiState,
     onClick: () -> Unit,
 ) {

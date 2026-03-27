@@ -1,6 +1,7 @@
 package io.androdex.android.data
 
 import android.content.Context
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
@@ -18,8 +19,10 @@ import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.TurnSkillMention
@@ -65,6 +68,16 @@ interface AndrodexRepositoryContract {
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
     suspend fun setSelectedReasoningEffort(effort: String?)
+    suspend fun setSelectedAccessMode(accessMode: AccessMode) = Unit
+    suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) = Unit
+    suspend fun setThreadRuntimeOverride(threadId: String, runtimeOverride: ThreadRuntimeOverride?) = Unit
+    suspend fun forkThread(
+        threadId: String,
+        preferredProjectPath: String? = null,
+        preferredModel: String? = null,
+    ): ThreadSummary {
+        throw UnsupportedOperationException("Thread fork is not available in this repository implementation.")
+    }
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean)
     suspend fun listRecentWorkspaces(): WorkspaceRecentState
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult
@@ -172,6 +185,29 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun setSelectedReasoningEffort(effort: String?) {
         client.setSelectedReasoningEffort(effort)
+    }
+
+    override suspend fun setSelectedAccessMode(accessMode: AccessMode) {
+        client.setSelectedAccessMode(accessMode)
+    }
+
+    override suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) {
+        client.setSelectedServiceTier(serviceTier)
+    }
+
+    override suspend fun setThreadRuntimeOverride(
+        threadId: String,
+        runtimeOverride: ThreadRuntimeOverride?,
+    ) {
+        client.setThreadRuntimeOverride(threadId, runtimeOverride)
+    }
+
+    override suspend fun forkThread(
+        threadId: String,
+        preferredProjectPath: String?,
+        preferredModel: String?,
+    ): ThreadSummary {
+        return client.forkThread(threadId, preferredProjectPath, preferredModel)
     }
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {

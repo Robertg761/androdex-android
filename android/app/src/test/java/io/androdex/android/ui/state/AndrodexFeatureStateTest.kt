@@ -1,6 +1,7 @@
 package io.androdex.android.ui.state
 
 import io.androdex.android.AndrodexUiState
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ComposerImageAttachment
 import io.androdex.android.model.ComposerImageAttachmentState
 import io.androdex.android.model.ConnectionStatus
@@ -12,8 +13,10 @@ import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ReasoningEffortOption
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import org.junit.Assert.assertEquals
@@ -246,5 +249,67 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.composer.submitEnabled)
         assertTrue(route.state.composer.hasBlockingAttachmentState)
         assertFalse(route.state.canRestoreQueuedDrafts)
+    }
+
+    @Test
+    fun threadRoute_buildsRuntimeAndForkUiFromOverrides() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            activeWorkspacePath = "D:\\Projects\\Alt",
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Fork me",
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Fork me",
+                    preview = "Explore a new path",
+                    cwd = "C:\\Projects\\Androdex",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    forkedFromThreadId = "thread-1",
+                )
+            ),
+            availableModels = listOf(
+                ModelOption(
+                    id = "gpt-5.4",
+                    model = "gpt-5.4",
+                    displayName = "GPT-5.4",
+                    description = "Primary",
+                    isDefault = true,
+                    supportedReasoningEfforts = listOf(
+                        ReasoningEffortOption("medium", "Balanced"),
+                        ReasoningEffortOption("high", "Deep"),
+                    ),
+                    defaultReasoningEffort = "medium",
+                )
+            ),
+            selectedModelId = "gpt-5.4",
+            selectedReasoningEffort = "medium",
+            selectedAccessMode = AccessMode.FULL_ACCESS,
+            selectedServiceTier = ServiceTier.FAST,
+            threadRuntimeOverridesByThread = mapOf(
+                "thread-9" to ThreadRuntimeOverride(
+                    reasoningEffort = "high",
+                    serviceTierRawValue = "fast",
+                    overridesReasoning = true,
+                    overridesServiceTier = true,
+                )
+            ),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = true)
+        val route = appState.destination as AndrodexDestinationUiState.Thread
+
+        assertTrue(route.state.isForkedThread)
+        assertTrue(route.state.runtime.hasOverrides)
+        assertEquals("Full Access", route.state.runtime.accessModeLabel)
+        assertTrue(route.state.runtime.reasoningOptions.any { it.value == "high" && it.selected })
+        assertTrue(route.state.runtime.serviceTierOptions.any { it.value == "fast" && it.selected })
+        assertEquals("Runtime: High • Fast", route.state.composer.runtimeButtonLabel)
+        assertEquals(2, route.state.fork.targets.size)
+        assertEquals("Current project", route.state.fork.targets.first().title)
+        assertEquals("Active workspace", route.state.fork.targets.last().title)
+        assertTrue(appState.settings.accessModeOptions.any { it.value == "full-access" && it.selected })
+        assertTrue(appState.settings.serviceTierOptions.any { it.value == "fast" && it.selected })
     }
 }
