@@ -21,6 +21,7 @@ Status legend:
   - Android camera/gallery attachments are present
   - Android git status, diff, branch, commit, push/pull, and managed worktree UI are present
 - Refined the Android trust and recovery presentation with a more Remodex-like trusted-pair summary card, pairing hero, and about sheet.
+- Landed the first Android review-mode parity slice with `/review`, review target selection, and review-start RPC wiring.
 - Ported `thread/contextWindow/read` to the bridge so Android can read rollout-backed context usage on demand.
 - Added direct bridge regression coverage for the push notification service client in `androdex-bridge/test/push-notification-service-client.test.js`.
 - Added a bundled generic relay push helper with persistence, dedupe, webhook forwarding, and health wiring in `relay/`.
@@ -47,7 +48,7 @@ Status legend:
 
 ## Remaining Gaps
 
-- Review-mode parity is still the biggest user-facing composer gap. Remodex has dedicated review affordances, revert sheets, and supporting tests that Androdex does not yet mirror.
+- Review-mode parity is now partially landed on Android, but Remodex still has a richer review/revert surface, better branch-selection UX, and more complete review-result presentation.
 - The public repo now includes a bundled generic relay push helper, but the actual Android delivery backend is still something you wire to your own provider or webhook.
 - `thread/contextWindow/read` is now ported; `account-status` and voice helper RPCs remain unported.
 - Remodex still has more onboarding flow depth and settings micro-interactions than Androdex.
@@ -74,6 +75,6 @@ Status legend:
 
 ## Next Three Highest-Value Parity Tasks
 
-1. Port Remodex review-mode parity to Android: review entry points, assistant revert UX, and the corresponding state/tests.
+1. Deepen Android review-mode parity: assistant revert UX, richer findings/results presentation, and better base-branch selection flows.
 2. Close the remaining onboarding and trusted-pair UX gap: richer welcome/about presentation, clearer reconnect recovery, and stronger saved-pair status surfaces.
-3. Decide the next bridge-helper scope explicitly, then port `thread-context` first and only bring over `voice` and `account-status` if they still fit the host-local Android product.
+3. Decide the next bridge-helper scope explicitly, then port `account-status` and `voice` only if they still fit the host-local Android product.

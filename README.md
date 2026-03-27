@@ -54,6 +54,7 @@ Androdex does **not** run Codex on the phone itself.
 - queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
 - Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
 - Android composer `@file`, `$skill`, and `/subagents` affordances with autocomplete chips and structured skill turn payloads
+- Android `/review` composer flow with review target selection and host-side review start routing
 - Android photo attachments from camera and gallery with Remodex-style intake limits, preview tiles, loading and failure states, queued-draft restore, and in-memory cleanup after send or removal
 - Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
@@ -278,7 +279,6 @@ cd relay
 ANDRODEX_ENABLE_PUSH_SERVICE=true \
 ANDRODEX_PUSH_WEBHOOK_URL=https://your-notification-endpoint.example/webhook \
 npm start
-```
 ```
 
 ## Remote Access
