@@ -238,3 +238,75 @@ test("treats mac replacement close as recoverable and retries the relay", () => 
   assert.equal(FakeWebSocket.instances.length, 2);
   assert.equal(runtime.relayStatus, "connecting");
 });
+
+test("stops emitting rollout-derived token usage once native updates are observed", () => {
+  const HostRuntime = loadHostRuntime();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+  });
+  const responses = [];
+  runtime.sendApplicationResponse = (message) => {
+    responses.push(JSON.parse(message));
+  };
+
+  runtime.sendContextUsageNotification("thread-1", { totalTokens: 11 });
+  runtime.rememberThreadFromMessage("codex", JSON.stringify({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-1",
+      usage: {
+        totalTokens: 12,
+      },
+    },
+  }));
+  runtime.sendContextUsageNotification("thread-1", { totalTokens: 13 });
+
+  assert.deepEqual(responses, [
+    {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        usage: {
+          totalTokens: 11,
+        },
+      },
+    },
+  ]);
+});
+
+test("does not retry legacy initialize params for generic capabilities errors", () => {
+  const HostRuntime = loadHostRuntime();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+  });
+  let retried = false;
+  const originalConsoleError = console.error;
+  runtime.syntheticInitializeRequest = {
+    id: "init-1",
+    usingLegacyParams: false,
+  };
+  runtime.cachedLegacyInitializeParams = {
+    clientInfo: {
+      name: "androdex_android",
+    },
+  };
+  runtime.sendSyntheticInitialize = () => {
+    retried = true;
+  };
+
+  try {
+    console.error = () => {};
+    runtime.handleSyntheticInitializeMessage(JSON.stringify({
+      id: "init-1",
+      error: {
+        message: "Temporary capabilities probe timeout",
+      },
+    }));
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(retried, false);
+});

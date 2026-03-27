@@ -1,116 +1,9 @@
 // FILE: runtime-compat.js
-// Purpose: Shares bridge/runtime request shims and message-context helpers needed by richer mobile clients.
+// Purpose: Shares bridge/runtime message-context helpers and relay-safe history sanitization.
 // Layer: Bridge helper
-// Exports: request normalization, message-context extraction, and history sanitization helpers.
+// Exports: message-context extraction, token-usage watcher hints, and history sanitization helpers.
 
 const RELAY_HISTORY_IMAGE_REFERENCE_URL = "androdex://history-image-elided";
-
-function normalizeRuntimeCompatibleRequest(rawMessage) {
-  const parsed = parseBridgeJSON(rawMessage);
-  if (!parsed || typeof parsed.method !== "string") {
-    return rawMessage;
-  }
-
-  const method = parsed.method.trim();
-  const params = objectValue(parsed.params);
-  if (!params) {
-    return rawMessage;
-  }
-
-  let didChange = false;
-  const nextParams = { ...params };
-
-  if (method === "turn/interrupt") {
-    didChange = assignCompatibilityField(nextParams, "turnId", params.turnId, params.turn_id) || didChange;
-    didChange = assignCompatibilityField(nextParams, "threadId", params.threadId, params.thread_id) || didChange;
-  }
-
-  if (method === "turn/steer") {
-    didChange = assignCompatibilityField(nextParams, "threadId", params.threadId, params.thread_id) || didChange;
-    didChange = assignCompatibilityField(
-      nextParams,
-      "expectedTurnId",
-      params.expectedTurnId,
-      params.expected_turn_id,
-      params.expected_turnId
-    ) || didChange;
-  }
-
-  if (
-    method === "thread/start"
-    || method === "turn/start"
-    || method === "thread/fork"
-  ) {
-    didChange = assignCompatibilityField(nextParams, "serviceTier", params.serviceTier, params.service_tier) || didChange;
-    didChange = assignCompatibilityField(nextParams, "cwd", params.cwd, params.currentWorkingDirectory) || didChange;
-  }
-
-  if (method === "turn/start" || method === "turn/steer") {
-    didChange = assignCompatibilityObjectField(
-      nextParams,
-      "collaborationMode",
-      params.collaborationMode,
-      params.collaboration_mode
-    ) || didChange;
-    didChange = assignCompatibilityField(nextParams, "effort", params.effort, params.reasoning_effort) || didChange;
-  }
-
-  if (method === "initialize") {
-    const capabilities = objectValue(params.capabilities);
-    if (capabilities && capabilities.experimentalApi == null && capabilities.experimental_api != null) {
-      nextParams.capabilities = {
-        ...capabilities,
-        experimentalApi: capabilities.experimental_api,
-      };
-      didChange = true;
-    }
-  }
-
-  if (!didChange) {
-    return rawMessage;
-  }
-
-  return JSON.stringify({
-    ...parsed,
-    params: nextParams,
-  });
-}
-
-function assignCompatibilityField(target, targetKey, currentValue, ...candidateValues) {
-  const resolvedCurrent = readString(currentValue);
-  if (resolvedCurrent) {
-    return false;
-  }
-
-  for (const candidate of candidateValues) {
-    const resolvedCandidate = readString(candidate);
-    if (!resolvedCandidate) {
-      continue;
-    }
-
-    target[targetKey] = resolvedCandidate;
-    return true;
-  }
-
-  return false;
-}
-
-function assignCompatibilityObjectField(target, targetKey, currentValue, ...candidateValues) {
-  if (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) {
-    return false;
-  }
-
-  for (const candidate of candidateValues) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      continue;
-    }
-
-    target[targetKey] = candidate;
-    return true;
-  }
-
-  return false;
-}
 
 function extractBridgeMessageContext(rawMessage) {
   const parsed = parseBridgeJSON(rawMessage);
@@ -419,7 +312,6 @@ function readString(value) {
 
 module.exports = {
   extractBridgeMessageContext,
-  normalizeRuntimeCompatibleRequest,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 };

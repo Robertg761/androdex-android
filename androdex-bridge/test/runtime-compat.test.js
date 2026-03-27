@@ -8,29 +8,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   extractBridgeMessageContext,
-  normalizeRuntimeCompatibleRequest,
   shouldStartContextUsageWatcher,
 } = require("../src/runtime-compat");
-
-test("normalizeRuntimeCompatibleRequest promotes snake_case interrupt and runtime override fields", () => {
-  const normalized = JSON.parse(normalizeRuntimeCompatibleRequest(JSON.stringify({
-    id: "request-1",
-    method: "turn/steer",
-    params: {
-      thread_id: "thread-1",
-      expected_turn_id: "turn-1",
-      collaboration_mode: {
-        mode: "plan",
-      },
-      reasoning_effort: "medium",
-    },
-  })));
-
-  assert.equal(normalized.params.threadId, "thread-1");
-  assert.equal(normalized.params.expectedTurnId, "turn-1");
-  assert.deepEqual(normalized.params.collaborationMode, { mode: "plan" });
-  assert.equal(normalized.params.effort, "medium");
-});
 
 test("extractBridgeMessageContext reads nested event and item identifiers", () => {
   const context = extractBridgeMessageContext(JSON.stringify({

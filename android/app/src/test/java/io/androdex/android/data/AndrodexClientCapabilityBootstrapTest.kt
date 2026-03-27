@@ -90,11 +90,34 @@ class AndrodexClientCapabilityBootstrapTest {
     }
 
     @Test
+    fun shouldRetryInitializeWithoutCapabilities_ignoresGenericCapabilitiesErrors() {
+        assertFalse(
+            shouldRetryInitializeWithoutCapabilities("Temporary capabilities probe timeout")
+        )
+    }
+
+    @Test
     fun shouldTreatAsUnsupportedCollaborationModeList_ignoresGenericRpcFailures() {
         assertFalse(
             shouldTreatAsUnsupportedCollaborationModeList(
                 errorCode = -32000,
                 errorMessage = "Temporary relay issue",
+            )
+        )
+    }
+
+    @Test
+    fun shouldTreatAsUnsupportedCollaborationModeList_requiresMethodSpecificSignal() {
+        assertFalse(
+            shouldTreatAsUnsupportedCollaborationModeList(
+                errorCode = -32000,
+                errorMessage = "Host does not support this relay operation right now",
+            )
+        )
+        assertTrue(
+            shouldTreatAsUnsupportedCollaborationModeList(
+                errorCode = -32000,
+                errorMessage = "collaborationMode/list is not supported by this host",
             )
         )
     }

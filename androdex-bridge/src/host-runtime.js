@@ -27,7 +27,6 @@ const { createBridgeSecureTransport } = require("./secure-transport");
 const { readDaemonRuntimeState, writeDaemonRuntimeState } = require("./daemon-store");
 const {
   extractBridgeMessageContext,
-  normalizeRuntimeCompatibleRequest,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 } = require("./runtime-compat");
@@ -117,6 +116,7 @@ class HostRuntime {
     this.syntheticInitializeCounter = 0;
     this.contextUsageWatcher = null;
     this.watchedContextUsageKey = null;
+    this.supportsNativeTokenUsageUpdates = false;
     this.isStopping = false;
     this.runtimeState = readDaemonRuntimeState();
   }
@@ -353,6 +353,7 @@ class HostRuntime {
     this.syntheticInitializeRequest = null;
     this.stopContextUsageWatcher();
     this.rolloutLiveMirror?.stopAll();
+    this.supportsNativeTokenUsageUpdates = false;
     if (!activeCodex) {
       this.codex = null;
       return;
@@ -382,6 +383,7 @@ class HostRuntime {
     this.rememberRecentWorkspace(cwd);
     this.codexHandshakeState = this.config.codexEndpoint ? "warm" : "cold";
     this.forwardedInitializeRequestIds.clear();
+    this.supportsNativeTokenUsageUpdates = false;
 
     const codex = createCodexTransport({
       endpoint: this.config.codexEndpoint,
@@ -442,37 +444,36 @@ class HostRuntime {
   }
 
   handleApplicationMessage(rawMessage) {
-    const normalizedRawMessage = normalizeRuntimeCompatibleRequest(rawMessage);
-    if (this.handleBridgeManagedHandshakeMessage(normalizedRawMessage)) {
+    if (this.handleBridgeManagedHandshakeMessage(rawMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this), {
+    if (handleWorkspaceRequest(rawMessage, this.sendApplicationResponse.bind(this), {
       activateWorkspace: this.activateWorkspace.bind(this),
       getWorkspaceState: this.getWorkspaceState.bind(this),
       platform: this.platform,
     })) {
       return;
     }
-    if (this.notificationsHandler.handleNotificationsRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
+    if (this.notificationsHandler.handleNotificationsRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
-    if (this.accountStatusHandler.handleAccountStatusRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
+    if (this.accountStatusHandler.handleAccountStatusRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
-    if (handleGitRequest(normalizedRawMessage, this.sendApplicationResponse.bind(this))) {
+    if (handleGitRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
 
     if (!this.codex) {
-      this.respondWorkspaceNotActive(normalizedRawMessage);
+      this.respondWorkspaceNotActive(rawMessage);
       return;
     }
 
-    this.desktopRefresher.handleInbound(normalizedRawMessage);
-    this.rolloutLiveMirror?.observeInbound(normalizedRawMessage);
-    this.rememberForwardedRequestMethod(normalizedRawMessage);
-    this.rememberThreadFromMessage("android", normalizedRawMessage);
-    this.codex.send(normalizedRawMessage);
+    this.desktopRefresher.handleInbound(rawMessage);
+    this.rolloutLiveMirror?.observeInbound(rawMessage);
+    this.rememberForwardedRequestMethod(rawMessage);
+    this.rememberThreadFromMessage("android", rawMessage);
+    this.codex.send(rawMessage);
   }
 
   sendApplicationResponse(rawMessage) {
@@ -489,7 +490,12 @@ class HostRuntime {
       return;
     }
     rememberActiveThread(context.threadId, source);
-    if (shouldStartContextUsageWatcher(context)) {
+    if (context.method === "thread/tokenUsage/updated") {
+      this.supportsNativeTokenUsageUpdates = true;
+      this.stopContextUsageWatcher();
+      return;
+    }
+    if (!this.supportsNativeTokenUsageUpdates && shouldStartContextUsageWatcher(context)) {
       this.ensureContextUsageWatcher(context);
     }
   }
@@ -584,7 +590,7 @@ class HostRuntime {
   }
 
   sendContextUsageNotification(threadId, usage) {
-    if (!threadId || !usage) {
+    if (!threadId || !usage || this.supportsNativeTokenUsageUpdates) {
       return;
     }
 
@@ -822,7 +828,19 @@ function isAlreadyInitializedError(message) {
 
 function isCapabilitiesMismatchError(message) {
   const normalized = normalizeNonEmptyString(message).toLowerCase();
-  return normalized.includes("capabilities") || normalized.includes("experimentalapi");
+  const mentionsCapabilitiesField = normalized.includes("capabilities")
+    || normalized.includes("experimentalapi");
+  if (!mentionsCapabilitiesField) {
+    return false;
+  }
+
+  return normalized.includes("unknown field")
+    || normalized.includes("unexpected field")
+    || normalized.includes("unrecognized field")
+    || normalized.includes("invalid param")
+    || normalized.includes("invalid params")
+    || normalized.includes("failed to parse")
+    || normalized.includes("unsupported");
 }
 
 function isExistingDirectory(targetPath) {

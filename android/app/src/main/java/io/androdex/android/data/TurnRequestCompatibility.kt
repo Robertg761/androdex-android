@@ -29,8 +29,21 @@ internal data class TurnRequestCompatibilityState(
 
 internal fun shouldRetryTurnWithoutCollaborationMode(errorMessage: String?): Boolean {
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    return (normalizedMessage.contains("collaborationmode") || normalizedMessage.contains("collaboration_mode"))
-        && !normalizedMessage.contains("experimentalapi")
+    val mentionsCollaborationMode = normalizedMessage.contains("collaborationmode")
+        || normalizedMessage.contains("collaboration_mode")
+        || normalizedMessage.contains("collaboration mode")
+    if (!mentionsCollaborationMode || normalizedMessage.contains("experimentalapi")) {
+        return false
+    }
+    return normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("not supported")
+        || normalizedMessage.contains("expected")
 }
 
 internal fun shouldRetryTurnWithImageUrlField(errorMessage: String?): Boolean {

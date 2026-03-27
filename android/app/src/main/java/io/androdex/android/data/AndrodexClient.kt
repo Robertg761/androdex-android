@@ -2986,8 +2986,18 @@ internal enum class AccessModeSandboxMode {
 
 internal fun shouldRetryInitializeWithoutCapabilities(errorMessage: String?): Boolean {
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    return normalizedMessage.contains("capabilities")
+    val mentionsCapabilitiesField = normalizedMessage.contains("capabilities")
         || normalizedMessage.contains("experimentalapi")
+    if (!mentionsCapabilitiesField) {
+        return false
+    }
+    return normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
 }
 
 internal fun resolveCollaborationModesAfterProbeFailure(
@@ -3008,10 +3018,29 @@ internal fun shouldTreatAsUnsupportedCollaborationModeList(errorCode: Int, error
     }
 
     val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
-    return normalizedMessage.contains("method not found")
+    val mentionsCollaborationModeList = normalizedMessage.contains("collaborationmode/list")
+        || normalizedMessage.contains("collaborationmode list")
+        || normalizedMessage.contains("collaboration mode list")
+        || normalizedMessage.contains("collaborationmode")
+        || normalizedMessage.contains("collaboration mode")
+    if (!mentionsCollaborationModeList) {
+        return false
+    }
+
+    val mentionsUnsupportedMethod = normalizedMessage.contains("method not found")
         || normalizedMessage.contains("unknown method")
         || normalizedMessage.contains("not implemented")
         || normalizedMessage.contains("does not support")
+    val mentionsUnsupportedField = normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("not supported")
+
+    return mentionsUnsupportedMethod || mentionsUnsupportedField
 }
 
 internal fun shouldRetryWithApprovalPolicyFallback(errorMessage: String?): Boolean {

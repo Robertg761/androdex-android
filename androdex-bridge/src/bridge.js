@@ -27,7 +27,6 @@ const { createPushNotificationTracker } = require("./push-notification-tracker")
 const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const {
   extractBridgeMessageContext,
-  normalizeRuntimeCompatibleRequest,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 } = require("./runtime-compat");
@@ -65,6 +64,7 @@ function startBridge() {
   const forwardedRequestMethodTTLms = 2 * 60_000;
   let contextUsageWatcher = null;
   let watchedContextUsageKey = null;
+  let supportsNativeTokenUsageUpdates = false;
   const secureTransport = createBridgeSecureTransport({
     sessionId,
     relayUrl: relayBaseUrl,
@@ -260,30 +260,29 @@ function startBridge() {
 
   // Routes decrypted app payloads through the same bridge handlers as before.
   function handleApplicationMessage(rawMessage) {
-    const normalizedRawMessage = normalizeRuntimeCompatibleRequest(rawMessage);
-    if (handleBridgeManagedHandshakeMessage(normalizedRawMessage)) {
+    if (handleBridgeManagedHandshakeMessage(rawMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(normalizedRawMessage, sendApplicationResponse)) {
+    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    if (notificationsHandler.handleNotificationsRequest(normalizedRawMessage, sendApplicationResponse)) {
+    if (notificationsHandler.handleNotificationsRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    if (accountStatusHandler.handleAccountStatusRequest(normalizedRawMessage, sendApplicationResponse)) {
+    if (accountStatusHandler.handleAccountStatusRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleGitRequest(normalizedRawMessage, sendApplicationResponse)) {
+    if (handleGitRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleThreadContextRequest(normalizedRawMessage, sendApplicationResponse)) {
+    if (handleThreadContextRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    desktopRefresher.handleInbound(normalizedRawMessage);
-    rolloutLiveMirror?.observeInbound(normalizedRawMessage);
-    rememberForwardedRequestMethod(normalizedRawMessage);
-    rememberThreadFromMessage("android", normalizedRawMessage);
-    codex.send(normalizedRawMessage);
+    desktopRefresher.handleInbound(rawMessage);
+    rolloutLiveMirror?.observeInbound(rawMessage);
+    rememberForwardedRequestMethod(rawMessage);
+    rememberThreadFromMessage("android", rawMessage);
+    codex.send(rawMessage);
   }
 
   // Encrypts bridge-generated responses instead of letting the relay see plaintext.
@@ -302,7 +301,13 @@ function startBridge() {
     }
 
     rememberActiveThread(context.threadId, source);
-    if (shouldStartContextUsageWatcher(context)) {
+    if (context.method === "thread/tokenUsage/updated") {
+      supportsNativeTokenUsageUpdates = true;
+      stopContextUsageWatcher();
+      return;
+    }
+
+    if (!supportsNativeTokenUsageUpdates && shouldStartContextUsageWatcher(context)) {
       ensureContextUsageWatcher(context);
     }
   }
@@ -397,7 +402,7 @@ function startBridge() {
   }
 
   function sendContextUsageNotification(threadId, usage) {
-    if (!threadId || !usage) {
+    if (!threadId || !usage || supportsNativeTokenUsageUpdates) {
       return;
     }
 
