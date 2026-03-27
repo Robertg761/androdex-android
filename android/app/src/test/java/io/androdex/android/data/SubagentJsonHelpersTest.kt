@@ -3,6 +3,7 @@ package io.androdex.android.data
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,6 +88,19 @@ class SubagentJsonHelpersTest {
         assertNotNull(action)
         assertEquals("thread-child", action?.receiverThreadIds?.single())
         assertEquals("Scout", action?.receiverAgents?.single()?.nickname)
+    }
+
+    @Test
+    fun decodeSubagentActionItem_ignoresGenericPayloadsWithoutCollaborationSignals() {
+        val action = decodeSubagentActionItem(
+            mapOf(
+                "type" to "message",
+                "threadId" to "thread-child",
+                "message" to "Normal assistant update",
+            )
+        )
+
+        assertNull(action)
     }
 
     @Test

@@ -27,6 +27,7 @@ const { createPushNotificationTracker } = require("./push-notification-tracker")
 const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const {
   extractBridgeMessageContext,
+  normalizeLegacyAndroidRpcMessage,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 } = require("./runtime-compat");
@@ -64,6 +65,7 @@ function startBridge() {
   const forwardedRequestMethodTTLms = 2 * 60_000;
   let contextUsageWatcher = null;
   let watchedContextUsageKey = null;
+  let lastContextUsageHint = null;
   let supportsNativeTokenUsageUpdates = false;
   const secureTransport = createBridgeSecureTransport({
     sessionId,
@@ -176,11 +178,13 @@ function startBridge() {
       clearReconnectTimer();
       reconnectAttempt = 0;
       logConnectionStatus("connected");
+      supportsNativeTokenUsageUpdates = false;
       secureTransport.bindLiveSendWireMessage((wireMessage) => {
         if (nextSocket.readyState === WebSocket.OPEN) {
           nextSocket.send(wireMessage);
         }
       });
+      resumeContextUsageWatcherIfNeeded();
     });
 
     nextSocket.on("message", (data) => {
@@ -204,7 +208,8 @@ function startBridge() {
       if (socket === nextSocket) {
         socket = null;
       }
-      stopContextUsageWatcher();
+      supportsNativeTokenUsageUpdates = false;
+      stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       desktopRefresher.handleTransportReset();
       scheduleRelayReconnect(code);
@@ -239,7 +244,7 @@ function startBridge() {
     logConnectionStatus("disconnected");
     isShuttingDown = true;
     clearReconnectTimer();
-    stopContextUsageWatcher();
+    stopContextUsageWatcher({ clearHint: false });
     rolloutLiveMirror?.stopAll();
     desktopRefresher.handleTransportReset();
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -250,39 +255,40 @@ function startBridge() {
   process.on("SIGINT", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
-    stopContextUsageWatcher();
+    stopContextUsageWatcher({ clearHint: false });
   }));
   process.on("SIGTERM", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
-    stopContextUsageWatcher();
+    stopContextUsageWatcher({ clearHint: false });
   }));
 
   // Routes decrypted app payloads through the same bridge handlers as before.
   function handleApplicationMessage(rawMessage) {
-    if (handleBridgeManagedHandshakeMessage(rawMessage)) {
+    const normalizedMessage = normalizeLegacyAndroidRpcMessage(rawMessage);
+    if (handleBridgeManagedHandshakeMessage(normalizedMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse)) {
+    if (handleWorkspaceRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    if (notificationsHandler.handleNotificationsRequest(rawMessage, sendApplicationResponse)) {
+    if (notificationsHandler.handleNotificationsRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    if (accountStatusHandler.handleAccountStatusRequest(rawMessage, sendApplicationResponse)) {
+    if (accountStatusHandler.handleAccountStatusRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleGitRequest(rawMessage, sendApplicationResponse)) {
+    if (handleGitRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleThreadContextRequest(rawMessage, sendApplicationResponse)) {
+    if (handleThreadContextRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    desktopRefresher.handleInbound(rawMessage);
-    rolloutLiveMirror?.observeInbound(rawMessage);
-    rememberForwardedRequestMethod(rawMessage);
-    rememberThreadFromMessage("android", rawMessage);
-    codex.send(rawMessage);
+    desktopRefresher.handleInbound(normalizedMessage);
+    rolloutLiveMirror?.observeInbound(normalizedMessage);
+    rememberForwardedRequestMethod(normalizedMessage);
+    rememberThreadFromMessage("android", normalizedMessage);
+    codex.send(normalizedMessage);
   }
 
   // Encrypts bridge-generated responses instead of letting the relay see plaintext.
@@ -303,7 +309,7 @@ function startBridge() {
     rememberActiveThread(context.threadId, source);
     if (context.method === "thread/tokenUsage/updated") {
       supportsNativeTokenUsageUpdates = true;
-      stopContextUsageWatcher();
+      stopContextUsageWatcher({ clearHint: false });
       return;
     }
 
@@ -361,12 +367,16 @@ function startBridge() {
       return;
     }
 
+    lastContextUsageHint = {
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+    };
     const nextWatcherKey = `${normalizedThreadId}|${normalizedTurnId || "pending-turn"}`;
     if (watchedContextUsageKey === nextWatcherKey && contextUsageWatcher) {
       return;
     }
 
-    stopContextUsageWatcher();
+    stopContextUsageWatcher({ clearHint: false });
     watchedContextUsageKey = nextWatcherKey;
     contextUsageWatcher = createThreadRolloutActivityWatcher({
       threadId: normalizedThreadId,
@@ -392,13 +402,24 @@ function startBridge() {
     });
   }
 
-  function stopContextUsageWatcher() {
+  function resumeContextUsageWatcherIfNeeded() {
+    if (supportsNativeTokenUsageUpdates || contextUsageWatcher || !lastContextUsageHint?.threadId) {
+      return;
+    }
+
+    ensureContextUsageWatcher(lastContextUsageHint);
+  }
+
+  function stopContextUsageWatcher({ clearHint = true } = {}) {
     if (contextUsageWatcher) {
       contextUsageWatcher.stop();
     }
 
     contextUsageWatcher = null;
     watchedContextUsageKey = null;
+    if (clearHint) {
+      lastContextUsageHint = null;
+    }
   }
 
   function sendContextUsageNotification(threadId, usage) {

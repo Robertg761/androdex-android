@@ -1331,6 +1331,24 @@ internal fun decodePlanSteps(items: JSONArray): List<PlanStep> {
     return planSteps
 }
 
+internal fun extractProtocolItemCandidate(params: JSONObject?): JSONObject? {
+    if (params == null) {
+        return null
+    }
+
+    params.objectOrNull("item")?.let { return it }
+    (params.optJSONObject("msg")?.optJSONObject("event") ?: params.optJSONObject("event"))?.let { event ->
+        event.optJSONObject("item")?.let { return it }
+        if (!event.stringOrNull("type").isNullOrBlank()) {
+            return event
+        }
+    }
+    if (!params.stringOrNull("type").isNullOrBlank()) {
+        return params
+    }
+    return null
+}
+
 internal fun isSubagentActionItemType(rawType: String?): Boolean {
     val normalized = normalizeItemType(rawType)
     return normalized == "collabagenttoolcall"
@@ -1343,7 +1361,7 @@ internal fun isSubagentActionItemType(rawType: String?): Boolean {
 }
 
 internal fun decodeSubagentActionItem(itemObject: JSONObject): SubagentAction? {
-    return decodeSubagentActionSpec(itemObject.toRawMap())
+    return decodeSubagentActionItem(itemObject.toRawMap())
 }
 
 internal fun decodeSubagentActionSpec(values: Map<String, Any?>): SubagentAction? {
@@ -1399,7 +1417,67 @@ internal fun decodeSubagentActionItem(itemObject: Map<String, Any?>): SubagentAc
         ?.let(::decodeSubagentActionSpec)
         ?.let { return it }
 
+    if (!looksLikeExplicitSubagentPayload(itemObject)) {
+        return null
+    }
+
     return decodeSubagentActionSpec(itemObject)
+}
+
+private fun looksLikeExplicitSubagentPayload(itemObject: Map<String, Any?>): Boolean {
+    if (isRecognizedSubagentToolName(itemObject.stringOrNull("tool"))) {
+        return true
+    }
+    return hasExplicitSubagentRoutingOrStateShape(itemObject)
+}
+
+private fun hasExplicitSubagentRoutingOrStateShape(itemObject: Map<String, Any?>): Boolean {
+    if (itemObject.stringOrNull(
+            "receiverThreadId",
+            "receiver_thread_id",
+            "newThreadId",
+            "new_thread_id",
+            "receiverAgentId",
+            "receiver_agent_id",
+            "newAgentId",
+            "new_agent_id",
+            "receiverAgentNickname",
+            "receiver_agent_nickname",
+            "newAgentNickname",
+            "new_agent_nickname",
+            "receiverAgentRole",
+            "receiver_agent_role",
+            "newAgentRole",
+            "new_agent_role",
+        ) != null
+    ) {
+        return true
+    }
+
+    if (!itemObject.listOrNull("receiverThreadIds", "receiver_thread_ids").isNullOrEmpty()) {
+        return true
+    }
+    if (!itemObject.listOrNull("receiverAgents", "receiver_agents").isNullOrEmpty()) {
+        return true
+    }
+    if (itemObject.mapOrNull("agentStates", "agent_states", "agentsStates", "agents_states") != null) {
+        return true
+    }
+    if (!itemObject.listOrNull("agentStatuses", "agent_statuses").isNullOrEmpty()) {
+        return true
+    }
+    return false
+}
+
+private fun isRecognizedSubagentToolName(rawValue: String?): Boolean {
+    return normalizeItemType(rawValue) in setOf(
+        "spawnagent",
+        "wait",
+        "waitagent",
+        "closeagent",
+        "resumeagent",
+        "sendinput",
+    )
 }
 
 private fun decodeSubagentReceiverThreadIds(itemObject: Map<String, Any?>): List<String> {

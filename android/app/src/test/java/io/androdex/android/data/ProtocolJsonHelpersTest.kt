@@ -133,6 +133,30 @@ class ProtocolJsonHelpersTest {
     }
 
     @Test
+    fun extractProtocolItemCandidate_supportsDirectMsgEventExecutionPayloads() {
+        val item = extractProtocolItemCandidate(
+            JSONObject(
+                """
+                {
+                  "msg": {
+                    "event": {
+                      "id": "review-1",
+                      "type": "reviewRequest",
+                      "status": "completed",
+                      "summary": "Reviewing current changes"
+                    }
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertNotNull(item)
+        assertEquals("review-1", item?.getString("id"))
+        assertEquals("reviewRequest", item?.getString("type"))
+    }
+
+    @Test
     fun decodeMessagesFromThreadRead_preservesExecutionStyleHistoryRows() {
         val messages = decodeMessagesFromThreadRead(
             threadId = "thread-1",

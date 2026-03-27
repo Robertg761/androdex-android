@@ -151,4 +151,15 @@ class AndrodexClientCapabilityBootstrapTest {
             )
         )
     }
+
+    @Test
+    fun resetMaintenanceActionCapabilityFlags_reEnablesDowngradedActionsOnReconnect() {
+        val reset = resetMaintenanceActionCapabilityFlags(
+            supportsThreadCompaction = false,
+            supportsThreadRollback = false,
+            supportsBackgroundTerminalCleanup = false,
+        )
+
+        assertEquals(Triple(true, true, true), reset)
+    }
 }

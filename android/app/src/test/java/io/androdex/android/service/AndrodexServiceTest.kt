@@ -313,6 +313,74 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun executionUpdates_mergeReloadedTerminalReviewRowsWithoutItemIds() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-review",
+                        threadId = "thread-1",
+                        role = ConversationRole.SYSTEM,
+                        kind = ConversationKind.EXECUTION,
+                        text = "Completed: Review current changes",
+                        createdAtEpochMs = System.currentTimeMillis() + 1_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                        isStreaming = false,
+                        status = "completed",
+                        execution = ExecutionContent(
+                            kind = ExecutionKind.REVIEW,
+                            title = "Review current changes",
+                            status = "completed",
+                            summary = "Found one issue",
+                        ),
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                text = "Completed: Review current changes",
+                isStreaming = false,
+                execution = ExecutionContent(
+                    kind = ExecutionKind.REVIEW,
+                    title = "Review current changes",
+                    status = "completed",
+                    summary = "Found one issue",
+                ),
+            )
+        )
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val executions = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.EXECUTION }
+        assertEquals(1, executions.size)
+        assertEquals("Found one issue", executions.single().execution?.summary)
+    }
+
+    @Test
     fun lateReasoningDeltaAfterTurnCompletionDoesNotCreateNewThinkingRow() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -915,6 +983,72 @@ class AndrodexServiceTest {
 
         assertEquals(listOf("thread-1"), repository.cleanedBackgroundTerminalThreadIds)
         assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun cleanBackgroundTerminals_dropsStaleStreamingExecutionRowsOnReload() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-command",
+                        threadId = "thread-1",
+                        role = ConversationRole.SYSTEM,
+                        kind = ConversationKind.COMMAND,
+                        text = "Completed: clean background terminals",
+                        createdAtEpochMs = System.currentTimeMillis() + 1_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                        isStreaming = false,
+                        status = "completed",
+                        command = "clean background terminals",
+                        execution = ExecutionContent(
+                            kind = ExecutionKind.COMMAND,
+                            title = "clean background terminals",
+                            status = "completed",
+                            summary = "Background terminals removed",
+                        ),
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.CommandExecutionUpdate(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                command = "clean background terminals",
+                status = "running",
+                text = "Running: clean background terminals\nstale output that should not survive reload",
+                isStreaming = true,
+            )
+        )
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        advanceUntilIdle()
+
+        service.cleanBackgroundTerminals("thread-1")
+        advanceUntilIdle()
+
+        val commands = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.kind == ConversationKind.COMMAND }
+        assertEquals(1, commands.size)
+        assertEquals("Completed: clean background terminals", commands.single().text)
+        assertFalse(commands.single().isStreaming)
     }
 
     @Test

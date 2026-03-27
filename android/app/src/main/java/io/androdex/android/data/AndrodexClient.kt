@@ -101,6 +101,18 @@ private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
 private const val logTag = "AndrodexClient"
 
+internal fun resetMaintenanceActionCapabilityFlags(
+    supportsThreadCompaction: Boolean,
+    supportsThreadRollback: Boolean,
+    supportsBackgroundTerminalCleanup: Boolean,
+): Triple<Boolean, Boolean, Boolean> {
+    return if (supportsThreadCompaction && supportsThreadRollback && supportsBackgroundTerminalCleanup) {
+        Triple(supportsThreadCompaction, supportsThreadRollback, supportsBackgroundTerminalCleanup)
+    } else {
+        Triple(true, true, true)
+    }
+}
+
 class AndrodexClient(
     private val persistence: AndrodexPersistence,
 ) {
@@ -828,6 +840,7 @@ class AndrodexClient(
     private suspend fun connect(pairing: PairingPayload) {
         connectionLifecycleMutex.withLock {
             disconnectInternal(clearSavedPairing = false)
+            resetMaintenanceActionCapabilityDowngrades()
             updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTING, "Connecting to relay..."))
 
             val relayUrl = pairing.relay.trimEnd('/')
@@ -950,6 +963,24 @@ class AndrodexClient(
         performInitializeSessionRequest { params -> sendRequest("initialize", params) }
         sendNotification("initialized", null)
         refreshCollaborationModes()
+    }
+
+    private fun resetMaintenanceActionCapabilityDowngrades() {
+        val (nextSupportsThreadCompaction, nextSupportsThreadRollback, nextSupportsBackgroundTerminalCleanup) =
+            resetMaintenanceActionCapabilityFlags(
+                supportsThreadCompaction = supportsThreadCompaction,
+                supportsThreadRollback = supportsThreadRollback,
+                supportsBackgroundTerminalCleanup = supportsBackgroundTerminalCleanup,
+            )
+        val changed = nextSupportsThreadCompaction != supportsThreadCompaction
+            || nextSupportsThreadRollback != supportsThreadRollback
+            || nextSupportsBackgroundTerminalCleanup != supportsBackgroundTerminalCleanup
+        supportsThreadCompaction = nextSupportsThreadCompaction
+        supportsThreadRollback = nextSupportsThreadRollback
+        supportsBackgroundTerminalCleanup = nextSupportsBackgroundTerminalCleanup
+        if (changed) {
+            emitRuntimeConfig()
+        }
     }
 
     private suspend fun resumeThread(threadId: String) {
@@ -1969,8 +2000,7 @@ class AndrodexClient(
 
     private fun extractCommandExecutionUpdate(method: String, params: JSONObject?): ClientUpdate.CommandExecutionUpdate? {
         val normalizedMethod = normalizeItemType(method)
-        val item = params?.objectOrNull("item")
-            ?: params?.objectOrNull("msg", "event")?.optJSONObject("item")
+        val item = extractProtocolItemCandidate(params)
         val methodLooksCommandLike = normalizedMethod.contains("commandexecution")
             || normalizedMethod.contains("commandexec")
             || normalizedMethod.contains("terminalcommand")
@@ -2007,9 +2037,7 @@ class AndrodexClient(
     }
 
     private fun extractExecutionStyleUpdate(method: String, params: JSONObject?): ClientUpdate.ExecutionUpdate? {
-        val item = params?.objectOrNull("item")
-            ?: params?.objectOrNull("msg", "event")?.optJSONObject("item")
-            ?: return null
+        val item = extractProtocolItemCandidate(params) ?: return null
         if (!isExecutionStyleItemType(item.optString("type"))) {
             return null
         }
@@ -2057,8 +2085,8 @@ class AndrodexClient(
     private fun extractSubagentAction(params: JSONObject?): io.androdex.android.model.SubagentAction? {
         if (params == null) return null
         val candidateItems = listOfNotNull(
-            params.objectOrNull("item"),
-            params.objectOrNull("msg", "event")?.optJSONObject("item"),
+            extractProtocolItemCandidate(params),
+            params.objectOrNull("msg", "event"),
             params.objectOrNull("event"),
             params,
         )

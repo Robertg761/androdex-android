@@ -42,6 +42,16 @@ function shouldStartContextUsageWatcher(context) {
     || isActiveThreadStatus(context.method, context.params, envelopeEventObject(context.params));
 }
 
+function normalizeLegacyAndroidRpcMessage(rawMessage) {
+  const parsed = parseBridgeJSON(rawMessage);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return rawMessage;
+  }
+
+  const { value: normalized, changed } = normalizeLegacyValue(parsed);
+  return changed ? JSON.stringify(normalized) : rawMessage;
+}
+
 function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
   if (requestMethod !== "thread/read" && requestMethod !== "thread/resume") {
     return rawMessage;
@@ -284,6 +294,60 @@ function normalizeRelayHistoryContentType(value) {
     : "";
 }
 
+function normalizeLegacyValue(value) {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const normalizedItems = value.map((item) => {
+      const normalizedItem = normalizeLegacyValue(item);
+      changed = changed || normalizedItem.changed;
+      return normalizedItem.value;
+    });
+    return { value: normalizedItems, changed };
+  }
+
+  if (!value || typeof value !== "object") {
+    return { value, changed: false };
+  }
+
+  let changed = false;
+  const normalizedObject = {};
+  for (const [key, rawChild] of Object.entries(value)) {
+    const normalizedKey = normalizeExplicitLegacyFieldName(key);
+    const normalizedChild = normalizeLegacyValue(rawChild);
+    const nextChild = normalizedChild.value;
+    changed = changed || normalizedChild.changed || normalizedKey !== key;
+
+    if (Object.prototype.hasOwnProperty.call(normalizedObject, normalizedKey)) {
+      if (normalizedKey === key) {
+        normalizedObject[normalizedKey] = nextChild;
+      }
+      continue;
+    }
+
+    normalizedObject[normalizedKey] = nextChild;
+  }
+
+  return { value: normalizedObject, changed };
+}
+
+function normalizeExplicitLegacyFieldName(key) {
+  switch (key) {
+    case "thread_id":
+      return "threadId";
+    case "expected_turn_id":
+      return "expectedTurnId";
+    case "service_tier":
+      return "serviceTier";
+    case "currentWorkingDirectory":
+    case "current_working_directory":
+      return "cwd";
+    case "experimental_api":
+      return "experimentalApi";
+    default:
+      return key;
+  }
+}
+
 function isInlineHistoryImageDataURL(value) {
   return typeof value === "string" && value.toLowerCase().startsWith("data:image");
 }
@@ -312,6 +376,7 @@ function readString(value) {
 
 module.exports = {
   extractBridgeMessageContext,
+  normalizeLegacyAndroidRpcMessage,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 };

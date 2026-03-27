@@ -51,8 +51,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
+import kotlin.math.abs
 
 private const val savedReconnectRetryDelayMs = 5_000L
+private const val executionReloadMergeWindowMs = 5_000L
 
 private data class SubagentIdentityEntry(
     val threadId: String?,
@@ -506,7 +508,7 @@ class AndrodexService(
     suspend fun cleanBackgroundTerminals(threadId: String) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
         repository.cleanBackgroundTerminals(normalizedThreadId)
-        loadThreadIntoState(normalizedThreadId)
+        loadThreadIntoState(normalizedThreadId, keepStreamingRowsOverride = false)
         refreshThreadsInternal()
     }
 
@@ -604,11 +606,14 @@ class AndrodexService(
         repository.refreshThreads()
     }
 
-    private suspend fun loadThreadIntoState(threadId: String) {
+    private suspend fun loadThreadIntoState(
+        threadId: String,
+        keepStreamingRowsOverride: Boolean? = null,
+    ) {
         val result = repository.loadThread(threadId)
         stateFlow.update { current ->
             val existingMessages = current.timelineByThread[threadId].orEmpty()
-            val keepStreamingRows = isThreadConsideredRunning(threadId, current)
+            val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
             current.copy(
                 selectedThreadTitle = if (current.selectedThreadId == threadId) {
                     result.thread?.title ?: current.selectedThreadTitle
@@ -2026,6 +2031,7 @@ private fun mergeMatchedMessage(
         incoming.text.isBlank() -> existing.text
         existing.text.isBlank() -> incoming.text
         keepStreamingRows && existing.isStreaming && incoming.text.length < existing.text.length -> existing.text
+        !keepStreamingRows -> incoming.text
         incoming.text.length >= existing.text.length -> incoming.text
         else -> existing.text
     }
@@ -2154,12 +2160,18 @@ private fun executionMessagesRepresentSameItem(
     val incomingIdentity = executionIdentity(incoming)
     if (existingIdentity != null && incomingIdentity != null) {
         return existingIdentity == incomingIdentity
-            && existing.shouldMergeAsInFlightExecution()
+            && (
+                existing.shouldMergeAsInFlightExecution()
+                    || shouldMergeReloadedExecutionSnapshot(existing, incoming)
+                )
     }
 
     return existing.text == incoming.text
         && existing.status == incoming.status
-        && existing.shouldMergeAsInFlightExecution()
+        && (
+            existing.shouldMergeAsInFlightExecution()
+                || shouldMergeReloadedExecutionSnapshot(existing, incoming)
+            )
 }
 
 private fun executionIdentity(message: ConversationMessage): String? {
@@ -2171,6 +2183,34 @@ private fun executionIdentity(message: ConversationMessage): String? {
     val execution = message.execution ?: return null
     val normalizedTitle = execution.title.trim().lowercase().takeIf { it.isNotEmpty() } ?: return null
     return "${execution.kind.name.lowercase()}:$normalizedTitle"
+}
+
+private fun shouldMergeReloadedExecutionSnapshot(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    if (existing.shouldMergeAsInFlightExecution() || incoming.shouldMergeAsInFlightExecution()) {
+        return false
+    }
+
+    val existingStatus = normalizedExecutionMergeStatus(existing)
+    val incomingStatus = normalizedExecutionMergeStatus(incoming)
+    if (existingStatus != null && incomingStatus != null && existingStatus != incomingStatus) {
+        return false
+    }
+
+    return abs(existing.createdAtEpochMs - incoming.createdAtEpochMs) <= executionReloadMergeWindowMs
+}
+
+private fun normalizedExecutionMergeStatus(message: ConversationMessage): String? {
+    return message.status
+        ?.trim()
+        ?.lowercase()
+        ?.takeIf { it.isNotEmpty() }
+        ?: message.execution?.status
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it.isNotEmpty() }
 }
 
 private fun ConversationMessage.shouldMergeAsInFlightExecution(): Boolean {

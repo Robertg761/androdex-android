@@ -27,6 +27,7 @@ const { createBridgeSecureTransport } = require("./secure-transport");
 const { readDaemonRuntimeState, writeDaemonRuntimeState } = require("./daemon-store");
 const {
   extractBridgeMessageContext,
+  normalizeLegacyAndroidRpcMessage,
   sanitizeThreadHistoryImagesForRelay,
   shouldStartContextUsageWatcher,
 } = require("./runtime-compat");
@@ -116,6 +117,7 @@ class HostRuntime {
     this.syntheticInitializeCounter = 0;
     this.contextUsageWatcher = null;
     this.watchedContextUsageKey = null;
+    this.lastContextUsageHint = null;
     this.supportsNativeTokenUsageUpdates = false;
     this.isStopping = false;
     this.runtimeState = readDaemonRuntimeState();
@@ -137,7 +139,7 @@ class HostRuntime {
     this.clearReconnectTimer();
     this.clearConnectTimeout();
     this.clearCachedBridgeHandshakeState();
-    this.stopContextUsageWatcher();
+    this.stopContextUsageWatcher({ clearHint: false });
     this.rolloutLiveMirror?.stopAll();
     this.desktopRefresher.handleTransportReset();
     if (
@@ -272,11 +274,13 @@ class HostRuntime {
       this.clearConnectTimeout(connectTimeoutTimer);
       this.reconnectAttempt = 0;
       this.relayStatus = "connected";
+      this.supportsNativeTokenUsageUpdates = false;
       this.secureTransport.bindLiveSendWireMessage((wireMessage) => {
         if (nextSocket.readyState === this.WebSocketImpl.OPEN) {
           nextSocket.send(wireMessage);
         }
       });
+      this.resumeContextUsageWatcherIfNeeded();
     });
 
     nextSocket.on("message", (data) => {
@@ -306,7 +310,8 @@ class HostRuntime {
       this.relayStatus = "disconnected";
       this.socket = null;
       this.clearCachedBridgeHandshakeState();
-      this.stopContextUsageWatcher();
+      this.supportsNativeTokenUsageUpdates = false;
+      this.stopContextUsageWatcher({ clearHint: false });
       this.rolloutLiveMirror?.stopAll();
       this.desktopRefresher.handleTransportReset();
       this.scheduleRelayReconnect(code);
@@ -351,7 +356,7 @@ class HostRuntime {
   async shutdownCodex() {
     const activeCodex = this.codex;
     this.syntheticInitializeRequest = null;
-    this.stopContextUsageWatcher();
+    this.stopContextUsageWatcher({ clearHint: false });
     this.rolloutLiveMirror?.stopAll();
     this.supportsNativeTokenUsageUpdates = false;
     if (!activeCodex) {
@@ -444,36 +449,37 @@ class HostRuntime {
   }
 
   handleApplicationMessage(rawMessage) {
-    if (this.handleBridgeManagedHandshakeMessage(rawMessage)) {
+    const normalizedMessage = normalizeLegacyAndroidRpcMessage(rawMessage);
+    if (this.handleBridgeManagedHandshakeMessage(normalizedMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, this.sendApplicationResponse.bind(this), {
+    if (handleWorkspaceRequest(normalizedMessage, this.sendApplicationResponse.bind(this), {
       activateWorkspace: this.activateWorkspace.bind(this),
       getWorkspaceState: this.getWorkspaceState.bind(this),
       platform: this.platform,
     })) {
       return;
     }
-    if (this.notificationsHandler.handleNotificationsRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
+    if (this.notificationsHandler.handleNotificationsRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
-    if (this.accountStatusHandler.handleAccountStatusRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
+    if (this.accountStatusHandler.handleAccountStatusRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
-    if (handleGitRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
+    if (handleGitRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
 
     if (!this.codex) {
-      this.respondWorkspaceNotActive(rawMessage);
+      this.respondWorkspaceNotActive(normalizedMessage);
       return;
     }
 
-    this.desktopRefresher.handleInbound(rawMessage);
-    this.rolloutLiveMirror?.observeInbound(rawMessage);
-    this.rememberForwardedRequestMethod(rawMessage);
-    this.rememberThreadFromMessage("android", rawMessage);
-    this.codex.send(rawMessage);
+    this.desktopRefresher.handleInbound(normalizedMessage);
+    this.rolloutLiveMirror?.observeInbound(normalizedMessage);
+    this.rememberForwardedRequestMethod(normalizedMessage);
+    this.rememberThreadFromMessage("android", normalizedMessage);
+    this.codex.send(normalizedMessage);
   }
 
   sendApplicationResponse(rawMessage) {
@@ -492,7 +498,7 @@ class HostRuntime {
     rememberActiveThread(context.threadId, source);
     if (context.method === "thread/tokenUsage/updated") {
       this.supportsNativeTokenUsageUpdates = true;
-      this.stopContextUsageWatcher();
+      this.stopContextUsageWatcher({ clearHint: false });
       return;
     }
     if (!this.supportsNativeTokenUsageUpdates && shouldStartContextUsageWatcher(context)) {
@@ -549,12 +555,16 @@ class HostRuntime {
       return;
     }
 
+    this.lastContextUsageHint = {
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+    };
     const nextWatcherKey = `${normalizedThreadId}|${normalizedTurnId || "pending-turn"}`;
     if (this.watchedContextUsageKey === nextWatcherKey && this.contextUsageWatcher) {
       return;
     }
 
-    this.stopContextUsageWatcher();
+    this.stopContextUsageWatcher({ clearHint: false });
     this.watchedContextUsageKey = nextWatcherKey;
     this.contextUsageWatcher = createThreadRolloutActivityWatcher({
       threadId: normalizedThreadId,
@@ -580,13 +590,24 @@ class HostRuntime {
     });
   }
 
-  stopContextUsageWatcher() {
+  resumeContextUsageWatcherIfNeeded() {
+    if (this.supportsNativeTokenUsageUpdates || this.contextUsageWatcher || !this.lastContextUsageHint?.threadId) {
+      return;
+    }
+
+    this.ensureContextUsageWatcher(this.lastContextUsageHint);
+  }
+
+  stopContextUsageWatcher({ clearHint = true } = {}) {
     if (this.contextUsageWatcher) {
       this.contextUsageWatcher.stop();
     }
 
     this.contextUsageWatcher = null;
     this.watchedContextUsageKey = null;
+    if (clearHint) {
+      this.lastContextUsageHint = null;
+    }
   }
 
   sendContextUsageNotification(threadId, usage) {
