@@ -1,5 +1,6 @@
 param(
-  [string]$TargetUrl = ""
+  [string]$TargetUrl = "",
+  [int]$RemoteDebuggingPort = 9333
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,8 +77,9 @@ for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
 
 Start-Sleep -Milliseconds 250
 
+$argumentList = @("--remote-debugging-port=$RemoteDebuggingPort")
 if ($TargetUrl) {
-  Start-Process -FilePath $exePath -ArgumentList $TargetUrl -WindowStyle Hidden
-} else {
-  Start-Process -FilePath $exePath -WindowStyle Hidden
+  $argumentList += $TargetUrl
 }
+
+Start-Process -FilePath $exePath -ArgumentList $argumentList -WindowStyle Hidden

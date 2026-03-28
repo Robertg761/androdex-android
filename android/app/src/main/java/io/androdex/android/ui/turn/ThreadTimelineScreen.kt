@@ -61,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,6 +114,7 @@ import kotlinx.coroutines.launch
 internal fun ThreadTimelineScreen(
     state: ThreadTimelineUiState,
     onBack: () -> Unit,
+    onOpenSidebar: () -> Unit,
     onRefresh: () -> Unit,
     onComposerChanged: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
@@ -342,6 +344,7 @@ internal fun ThreadTimelineScreen(
                 )
             }
             GitStatusCard(
+                threadId = state.threadId,
                 state = state.git,
                 onRefreshGit = onRefreshGit,
                 onLoadGitDiff = onLoadGitDiff,
@@ -827,6 +830,7 @@ private fun ToolInputQuestionCard(
 
 @Composable
 private fun GitStatusCard(
+    threadId: String,
     state: ThreadGitUiState,
     onRefreshGit: () -> Unit,
     onLoadGitDiff: () -> Unit,
@@ -836,6 +840,8 @@ private fun GitStatusCard(
     onOpenGitBranchDialog: () -> Unit,
     onOpenGitWorktreeDialog: () -> Unit,
 ) {
+    var expanded by rememberSaveable(threadId) { mutableStateOf(true) }
+
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(18.dp),
@@ -848,7 +854,11 @@ private fun GitStatusCard(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { expanded = !expanded }
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -873,112 +883,123 @@ private fun GitStatusCard(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
                     )
-                }
-            }
-
-            state.status?.let { status ->
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    GitBadge(label = status.state.replace('_', ' '), emphasized = true)
-                    GitBadge(label = if (status.isDirty) "Dirty" else "Clean")
-                    if (status.aheadCount > 0) {
-                        GitBadge(label = "Ahead ${status.aheadCount}")
-                    }
-                    if (status.behindCount > 0) {
-                        GitBadge(label = "Behind ${status.behindCount}")
-                    }
-                    if (status.localOnlyCommitCount > 0) {
-                        GitBadge(label = "Local ${status.localOnlyCommitCount}")
-                    }
-                    status.trackingBranch?.takeIf { it.isNotBlank() }?.let { GitBadge(label = it) }
-                }
-
-                status.repoDiffTotals?.let { diffTotals ->
-                    Text(
-                        text = buildString {
-                            append("+")
-                            append(diffTotals.additions)
-                            append(" / -")
-                            append(diffTotals.deletions)
-                            if (diffTotals.binaryFiles > 0) {
-                                append(" / ")
-                                append(diffTotals.binaryFiles)
-                                append(" binary")
-                            }
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (expanded) "Collapse Git section" else "Expand Git section",
+                        modifier = Modifier.scale(scaleX = 1f, scaleY = if (expanded) 1f else -1f),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
 
-                if (status.files.isNotEmpty()) {
-                    status.files.take(5).forEach { file ->
+            AnimatedVisibility(visible = expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    state.status?.let { status ->
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            GitFileStatusPill(file.status)
+                            GitBadge(label = status.state.replace('_', ' '), emphasized = true)
+                            GitBadge(label = if (status.isDirty) "Dirty" else "Clean")
+                            if (status.aheadCount > 0) {
+                                GitBadge(label = "Ahead ${status.aheadCount}")
+                            }
+                            if (status.behindCount > 0) {
+                                GitBadge(label = "Behind ${status.behindCount}")
+                            }
+                            if (status.localOnlyCommitCount > 0) {
+                                GitBadge(label = "Local ${status.localOnlyCommitCount}")
+                            }
+                            status.trackingBranch?.takeIf { it.isNotBlank() }?.let { GitBadge(label = it) }
+                        }
+
+                        status.repoDiffTotals?.let { diffTotals ->
                             Text(
-                                text = file.path,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
+                                text = buildString {
+                                    append("+")
+                                    append(diffTotals.additions)
+                                    append(" / -")
+                                    append(diffTotals.deletions)
+                                    if (diffTotals.binaryFiles > 0) {
+                                        append(" / ")
+                                        append(diffTotals.binaryFiles)
+                                        append(" binary")
+                                    }
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         }
+
+                        if (status.files.isNotEmpty()) {
+                            status.files.take(5).forEach { file ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    GitFileStatusPill(file.status)
+                                    Text(
+                                        text = file.path,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
                     }
-                }
-            }
 
-            state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
-                DiffView(diffText = patch)
-            }
+                    state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
+                        DiffView(diffText = patch)
+                    }
 
-            state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                    state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
 
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(onClick = onRefreshGit, enabled = state.canRunActions) {
-                    Text("Status")
-                }
-                OutlinedButton(onClick = onLoadGitDiff, enabled = state.canRunActions) {
-                    Text(if (state.diffPatch.isNullOrBlank()) "Load Diff" else "Refresh Diff")
-                }
-                OutlinedButton(
-                    onClick = onOpenGitCommit,
-                    enabled = state.canRunActions && state.status?.isDirty == true,
-                ) {
-                    Text("Commit")
-                }
-                OutlinedButton(
-                    onClick = onPushGit,
-                    enabled = state.canRunActions && (state.status?.canPush == true),
-                ) {
-                    Text("Push")
-                }
-                OutlinedButton(
-                    onClick = onRequestGitPull,
-                    enabled = state.canRunActions && state.status != null,
-                ) {
-                    Text("Pull")
-                }
-                OutlinedButton(onClick = onOpenGitBranchDialog, enabled = state.canRunActions) {
-                    Text("Branches")
-                }
-                OutlinedButton(onClick = onOpenGitWorktreeDialog, enabled = state.canRunActions) {
-                    Text("Worktrees")
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = onRefreshGit, enabled = state.canRunActions) {
+                            Text("Status")
+                        }
+                        OutlinedButton(onClick = onLoadGitDiff, enabled = state.canRunActions) {
+                            Text(if (state.diffPatch.isNullOrBlank()) "Load Diff" else "Refresh Diff")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenGitCommit,
+                            enabled = state.canRunActions && state.status?.isDirty == true,
+                        ) {
+                            Text("Commit")
+                        }
+                        OutlinedButton(
+                            onClick = onPushGit,
+                            enabled = state.canRunActions && (state.status?.canPush == true),
+                        ) {
+                            Text("Push")
+                        }
+                        OutlinedButton(
+                            onClick = onRequestGitPull,
+                            enabled = state.canRunActions && state.status != null,
+                        ) {
+                            Text("Pull")
+                        }
+                        OutlinedButton(onClick = onOpenGitBranchDialog, enabled = state.canRunActions) {
+                            Text("Branches")
+                        }
+                        OutlinedButton(onClick = onOpenGitWorktreeDialog, enabled = state.canRunActions) {
+                            Text("Worktrees")
+                        }
+                    }
                 }
             }
         }

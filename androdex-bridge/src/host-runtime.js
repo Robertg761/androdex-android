@@ -11,6 +11,7 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
+const { createDesktopThreadReadRefresher } = require("./codex-desktop-thread-sync");
 const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { rememberActiveThread } = require("./session-state");
@@ -51,13 +52,6 @@ class HostRuntime {
     this.deviceState = loadOrCreateBridgeDeviceState();
     this.hostId = this.deviceState.hostId;
     this.relayHostUrl = `${this.relayBaseUrl}/${this.hostId}`;
-    this.desktopRefresher = new CodexDesktopRefresher({
-      enabled: this.config.refreshEnabled,
-      debounceMs: this.config.refreshDebounceMs,
-      refreshCommand: this.config.refreshCommand,
-      bundleId: this.config.codexBundleId,
-      appPath: this.config.codexAppPath,
-    });
     this.secureTransport = createBridgeSecureTransport({
       hostId: this.hostId,
       relayUrl: this.relayBaseUrl,
@@ -83,6 +77,17 @@ class HostRuntime {
         this.codex.send(message);
       },
       requestIdPrefix: `androdex-host-${this.hostId}`,
+    });
+    this.desktopRefresher = new CodexDesktopRefresher({
+      enabled: this.config.refreshEnabled,
+      debounceMs: this.config.refreshDebounceMs,
+      refreshCommand: this.config.refreshCommand,
+      bundleId: this.config.codexBundleId,
+      appPath: this.config.codexAppPath,
+      windowsRemoteDebuggingPort: this.config.codexWindowsRemoteDebuggingPort,
+      threadStateSyncExecutor: createDesktopThreadReadRefresher({
+        sendCodexRequest: (...args) => this.codexRpcClient.sendRequest(...args),
+      }),
     });
     this.accountStatusHandler = createAccountStatusHandler({
       sendCodexRequest: (...args) => this.codexRpcClient.sendRequest(...args),

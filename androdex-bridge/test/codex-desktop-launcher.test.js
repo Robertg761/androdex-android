@@ -35,3 +35,21 @@ test("non-mac launch plans still require a concrete target URL", () => {
     /target URL is required/
   );
 });
+
+test("windows launch plans pass a stable remote debugging port to the official app helper", () => {
+  const launchPlan = createDesktopLaunchPlan({
+    targetUrl: "codex://threads/thread-123",
+    platform: "win32",
+    windowsRemoteDebuggingPort: 9444,
+  });
+
+  assert.equal(launchPlan.command, "powershell.exe");
+  assert.equal(launchPlan.args[0], "-NoProfile");
+  assert.equal(launchPlan.args[3], "-File");
+  assert.equal(launchPlan.args[5], "-TargetUrl");
+  assert.equal(launchPlan.args[6], "codex://threads/thread-123");
+  assert.deepEqual(launchPlan.args.slice(-2), [
+    "-RemoteDebuggingPort",
+    "9444",
+  ]);
+});

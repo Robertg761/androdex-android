@@ -7,6 +7,12 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const { openCodexDesktopTarget } = require("./codex-desktop-launcher");
+const {
+  DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
+  navigateCodexDesktopRendererToRouteViaTrustedRenderer,
+  resolveWindowsRemoteDebuggingPort,
+  restartCodexDesktopAppServerViaTrustedRenderer,
+} = require("./codex-desktop-windows-devtools");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
@@ -18,9 +24,12 @@ const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
 const DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS = 120;
+const DEFAULT_WINDOWS_TRUSTED_RESTART_WAIT_MS = 800;
+const DEFAULT_WINDOWS_TRUSTED_REOPEN_RETRY_DELAY_MS = 700;
 const DEFAULT_WINDOWS_HARD_RESTART_COOLDOWN_MS = 8_000;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
 const WINDOWS_RESTART_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-relaunch-windows.ps1");
+const SETTINGS_DEEP_LINK = "codex://settings";
 const NEW_THREAD_DEEP_LINK = "codex://threads/new";
 
 class CodexDesktopRefresher {
@@ -41,10 +50,16 @@ class CodexDesktopRefresher {
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
     protocolRefreshExecutor = openCodexDesktopTarget,
     hardRefreshExecutor = null,
+    windowsTrustedRestartExecutor = restartCodexDesktopAppServerViaTrustedRenderer,
+    windowsTrustedRendererNavigationExecutor = navigateCodexDesktopRendererToRouteViaTrustedRenderer,
     sleepFn = waitForDelay,
+    threadStateSyncExecutor = null,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
     windowsThreadBounceDelayMs = DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS,
+    windowsTrustedRestartWaitMs = DEFAULT_WINDOWS_TRUSTED_RESTART_WAIT_MS,
+    windowsTrustedReopenRetryDelayMs = DEFAULT_WINDOWS_TRUSTED_REOPEN_RETRY_DELAY_MS,
     windowsHardRestartCooldownMs = DEFAULT_WINDOWS_HARD_RESTART_COOLDOWN_MS,
   } = {}) {
     this.enabled = enabled;
@@ -63,7 +78,10 @@ class CodexDesktopRefresher {
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
     this.protocolRefreshExecutor = protocolRefreshExecutor;
     this.hardRefreshExecutor = hardRefreshExecutor;
+    this.windowsTrustedRestartExecutor = windowsTrustedRestartExecutor;
+    this.windowsTrustedRendererNavigationExecutor = windowsTrustedRendererNavigationExecutor;
     this.sleepFn = sleepFn;
+    this.threadStateSyncExecutor = threadStateSyncExecutor;
     this.refreshBackend = refreshBackend
       || (this.refreshCommand
         ? "command"
@@ -71,7 +89,10 @@ class CodexDesktopRefresher {
           ? "command"
           : (this.platform === "darwin" ? "applescript" : "protocol")));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.windowsRemoteDebuggingPort = resolveWindowsRemoteDebuggingPort(windowsRemoteDebuggingPort);
     this.windowsThreadBounceDelayMs = windowsThreadBounceDelayMs;
+    this.windowsTrustedRestartWaitMs = windowsTrustedRestartWaitMs;
+    this.windowsTrustedReopenRetryDelayMs = windowsTrustedReopenRetryDelayMs;
     this.windowsHardRestartCooldownMs = windowsHardRestartCooldownMs;
 
     this.mode = "idle";
@@ -296,6 +317,11 @@ class CodexDesktopRefresher {
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
+        await this.syncThreadState(targetThreadId, {
+          targetUrl,
+          refreshKinds: pendingRefreshKinds,
+          isCompletionRun,
+        });
         await this.executeRefresh(targetUrl, {
           refreshKinds: pendingRefreshKinds,
           isCompletionRun,
@@ -325,6 +351,23 @@ class CodexDesktopRefresher {
       if (this.hasPendingRefreshWork()) {
         this.scheduleRefresh("pending follow-up refresh");
       }
+    }
+  }
+
+  async syncThreadState(threadId, options = {}) {
+    if (!threadId || typeof this.threadStateSyncExecutor !== "function") {
+      return;
+    }
+
+    try {
+      await this.threadStateSyncExecutor({
+        threadId,
+        targetUrl: options.targetUrl || "",
+        refreshKinds: options.refreshKinds || new Set(),
+        isCompletionRun: Boolean(options.isCompletionRun),
+      });
+    } catch (error) {
+      this.log(`thread state sync failed thread=${threadId}: ${extractErrorMessage(error)}`);
     }
   }
 
@@ -361,6 +404,7 @@ class CodexDesktopRefresher {
       bundleId: this.bundleId,
       appPath: this.appPath,
       platform: this.platform,
+      windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
     });
   }
 
@@ -369,6 +413,13 @@ class CodexDesktopRefresher {
     isCompletionRun = false,
   } = {}) {
     const refreshTarget = targetUrl || "";
+    if (this.shouldUseWindowsTrustedRestart(refreshTarget)) {
+      const didTrustedRestart = await this.tryWindowsTrustedRestart(refreshTarget);
+      if (didTrustedRestart) {
+        return;
+      }
+    }
+
     if (this.shouldHardRestartThreadRefresh({
       targetUrl: refreshTarget,
       refreshKinds,
@@ -379,10 +430,11 @@ class CodexDesktopRefresher {
 
     if (this.shouldBounceThreadRefresh(refreshTarget)) {
       await this.protocolRefreshExecutor({
-        targetUrl: NEW_THREAD_DEEP_LINK,
+        targetUrl: SETTINGS_DEEP_LINK,
         bundleId: this.bundleId,
         appPath: this.appPath,
         platform: this.platform,
+        windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
       });
       await this.sleepFn(this.windowsThreadBounceDelayMs);
     }
@@ -392,6 +444,7 @@ class CodexDesktopRefresher {
       bundleId: this.bundleId,
       appPath: this.appPath,
       platform: this.platform,
+      windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
     });
   }
 
@@ -405,7 +458,10 @@ class CodexDesktopRefresher {
         "Bypass",
         "-File",
         WINDOWS_RESTART_SCRIPT_PATH,
+        "-TargetUrl",
         payload.targetUrl || "",
+        "-RemoteDebuggingPort",
+        String(payload.windowsRemoteDebuggingPort || this.windowsRemoteDebuggingPort),
       ],
       {
         stdio: "ignore",
@@ -418,6 +474,7 @@ class CodexDesktopRefresher {
       bundleId: this.bundleId,
       appPath: this.appPath,
       platform: this.platform,
+      windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
     })).then((result) => {
       this.lastWindowsHardRestartAt = this.now();
       this.lastWindowsHardRestartTargetUrl = refreshTarget;
@@ -425,42 +482,78 @@ class CodexDesktopRefresher {
     });
   }
 
+  async tryWindowsTrustedRestart(targetUrl) {
+    if (typeof this.windowsTrustedRestartExecutor !== "function") {
+      return false;
+    }
+
+    try {
+      const usedTrustedNavigation = typeof this.windowsTrustedRendererNavigationExecutor === "function";
+      if (usedTrustedNavigation) {
+        await this.windowsTrustedRendererNavigationExecutor({
+          port: this.windowsRemoteDebuggingPort,
+          path: "/settings",
+        });
+        await this.sleepFn(this.windowsThreadBounceDelayMs);
+      }
+
+      await this.windowsTrustedRestartExecutor({
+        port: this.windowsRemoteDebuggingPort,
+      });
+      await this.sleepFn(this.windowsTrustedRestartWaitMs);
+
+      await this.protocolRefreshExecutor({
+        targetUrl,
+        bundleId: this.bundleId,
+        appPath: this.appPath,
+        platform: this.platform,
+        windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
+      });
+      if (usedTrustedNavigation) {
+        await this.sleepFn(this.windowsTrustedReopenRetryDelayMs);
+        await this.protocolRefreshExecutor({
+          targetUrl,
+          bundleId: this.bundleId,
+          appPath: this.appPath,
+          platform: this.platform,
+          windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
+        });
+      }
+      this.log(`windows trusted settings navigation and restart dispatched for ${targetUrl}`);
+      return true;
+    } catch (error) {
+      const errorCode = typeof error?.code === "string" ? error.code : "unknown";
+      this.log(
+        `windows trusted restart unavailable (${errorCode}): ${extractErrorMessage(error)}`
+      );
+      return false;
+    }
+  }
+
+  shouldUseWindowsTrustedRestart(targetUrl) {
+    return this.refreshBackend === "protocol"
+      && this.platform === "win32"
+      && isConcreteThreadDeepLink(targetUrl)
+      && this.lastRefreshSignature.split("|")[0] === targetUrl;
+  }
+
   shouldHardRestartThreadRefresh({
     targetUrl,
     refreshKinds = new Set(),
     isCompletionRun = false,
   } = {}) {
-    if (this.refreshBackend !== "protocol" || this.platform !== "win32") {
-      return false;
-    }
-
-    if (isCompletionRun || !refreshKinds.has("phone") || !isConcreteThreadDeepLink(targetUrl)) {
-      return false;
-    }
-
-    const lastTargetUrl = this.lastRefreshSignature.split("|")[0] || "";
-    if (lastTargetUrl !== targetUrl) {
-      return false;
-    }
-
-    if (targetUrl === this.lastWindowsHardRestartTargetUrl) {
-      return this.now() - this.lastWindowsHardRestartAt >= this.windowsHardRestartCooldownMs;
-    }
-
-    return true;
+    // Windows Codex deep links already support a dedicated settings route, so
+    // we prefer a lightweight route remount over terminating the desktop app.
+    // Keep the heavier relaunch machinery available as an explicit fallback,
+    // but do not force it by default for same-thread refreshes.
+    void targetUrl;
+    void refreshKinds;
+    void isCompletionRun;
+    return false;
   }
 
   shouldBounceThreadRefresh(targetUrl) {
-    if (this.refreshBackend !== "protocol" || this.platform !== "win32") {
-      return false;
-    }
-
-    if (!isConcreteThreadDeepLink(targetUrl)) {
-      return false;
-    }
-
-    const lastTargetUrl = this.lastRefreshSignature.split("|")[0] || "";
-    return lastTargetUrl === targetUrl;
+    return this.shouldUseWindowsTrustedRestart(targetUrl);
   }
 
   clearPendingState() {
@@ -695,6 +788,13 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
       env
     ),
     codexAppPath: DEFAULT_APP_PATH,
+    codexWindowsRemoteDebuggingPort: resolveWindowsRemoteDebuggingPort(
+      readFirstDefinedEnv(
+        ["ANDRODEX_CODEX_REMOTE_DEBUGGING_PORT"],
+        String(DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT),
+        env
+      )
+    ),
     pushServiceUrl: readFirstDefinedEnv(
       ["ANDRODEX_PUSH_SERVICE_URL"],
       "",

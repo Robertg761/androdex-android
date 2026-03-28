@@ -10,6 +10,7 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
+const { createDesktopThreadReadRefresher } = require("./codex-desktop-thread-sync");
 const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
@@ -41,13 +42,6 @@ function startBridge() {
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const deviceState = loadOrCreateBridgeDeviceState();
-  const desktopRefresher = new CodexDesktopRefresher({
-    enabled: config.refreshEnabled,
-    debounceMs: config.refreshDebounceMs,
-    refreshCommand: config.refreshCommand,
-    bundleId: config.codexBundleId,
-    appPath: config.codexAppPath,
-  });
 
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
@@ -99,6 +93,17 @@ function startBridge() {
     sendToCodex(message) {
       codex.send(message);
     },
+  });
+  const desktopRefresher = new CodexDesktopRefresher({
+    enabled: config.refreshEnabled,
+    debounceMs: config.refreshDebounceMs,
+    refreshCommand: config.refreshCommand,
+    bundleId: config.codexBundleId,
+    appPath: config.codexAppPath,
+    windowsRemoteDebuggingPort: config.codexWindowsRemoteDebuggingPort,
+    threadStateSyncExecutor: createDesktopThreadReadRefresher({
+      sendCodexRequest: (method, params) => codexRpcClient.sendRequest(method, params),
+    }),
   });
   const accountStatusHandler = createAccountStatusHandler({
     sendCodexRequest: codexRpcClient.sendRequest,

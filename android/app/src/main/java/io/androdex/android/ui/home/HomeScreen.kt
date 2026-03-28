@@ -1,61 +1,61 @@
 package io.androdex.android.ui.home
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.androdex.android.R
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.shared.BusyIndicator
-import io.androdex.android.ui.shared.BridgeStatusCard
-import io.androdex.android.ui.shared.HostAccountCard
-import io.androdex.android.ui.shared.StatusCapsule
-import io.androdex.android.ui.shared.TrustedPairCard
-import io.androdex.android.ui.sidebar.ThreadListPane
+import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.HomeScreenUiState
+import io.androdex.android.ui.state.TrustedPairUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun HomeScreen(
     state: HomeScreenUiState,
-    onDisconnect: () -> Unit,
-    onForgetPairing: () -> Unit,
-    onRefresh: () -> Unit,
-    onCreateThread: () -> Unit,
-    onOpenThread: (String) -> Unit,
+    onOpenSidebar: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenProjects: () -> Unit,
     onCloseProjects: () -> Unit,
@@ -64,8 +64,6 @@ internal fun HomeScreen(
     onWorkspaceBrowserPathChanged: (String) -> Unit,
     onActivateWorkspace: (String) -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-
     state.projectPicker?.let { projectPicker ->
         ProjectPickerSheet(
             state = projectPicker,
@@ -79,150 +77,219 @@ internal fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text("Threads", style = MaterialTheme.typography.titleLarge)
-                },
-                actions = {
-                    TextButton(onClick = onOpenProjects) {
-                        Text("Projects")
-                    }
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Disconnect") },
-                                onClick = {
-                                    menuExpanded = false
-                                    onDisconnect()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Forget Pairing",
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    onForgetPairing()
-                                },
+            Column {
+                TopAppBar(
+                    title = {},
+                    navigationIcon = {
+                        IconButton(onClick = onOpenSidebar) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Open sidebar",
+                                tint = MaterialTheme.colorScheme.onBackground,
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                ),
-            )
+                    },
+                    actions = {
+                        IconButton(onClick = onOpenProjects) {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = "New chat",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent,
+                    ),
+                    windowInsets = WindowInsets(0),
+                )
+                BusyIndicator(state = state.busy)
+            }
         },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onCreateThread,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("New Chat") },
-                shape = MaterialTheme.shapes.large,
-                elevation = FloatingActionButtonDefaults.elevation(
-                    defaultElevation = 2.dp,
-                    pressedElevation = 6.dp,
-                ),
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.background,
-    ) { paddingValues ->
+        containerColor = Color.Transparent,
+    ) { innerPadding ->
+        HomeEmptyState(
+            connection = state.connection,
+            trustedPair = state.trustedPair,
+            modifier = Modifier.padding(innerPadding),
+        )
+    }
+}
+
+// ── HomeEmptyStateView — matches remodex HomeEmptyStateView ────────────────────
+
+@Composable
+private fun HomeEmptyState(
+    connection: ConnectionBannerUiState,
+    trustedPair: TrustedPairUiState?,
+    modifier: Modifier = Modifier,
+) {
+    val isConnecting = connection.status == ConnectionStatus.CONNECTING ||
+        connection.status == ConnectionStatus.HANDSHAKING ||
+        connection.status == ConnectionStatus.RETRYING_SAVED_PAIRING
+
+    val (dotColor, statusText) = when (connection.status) {
+        ConnectionStatus.CONNECTED ->
+            Color(0xFF30D158) to "Connected"
+        ConnectionStatus.CONNECTING ->
+            Color(0xFFFF9F0A) to "Connecting..."
+        ConnectionStatus.HANDSHAKING ->
+            Color(0xFFFF9F0A) to "Handshaking..."
+        ConnectionStatus.RETRYING_SAVED_PAIRING ->
+            Color(0xFFFF9F0A) to "Waiting for host..."
+        ConnectionStatus.RECONNECT_REQUIRED ->
+            Color(0xFFFF453A) to "Reconnect required"
+        ConnectionStatus.UPDATE_REQUIRED ->
+            Color(0xFFFF453A) to "Update required"
+        ConnectionStatus.DISCONNECTED ->
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) to "Offline"
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseAlpha",
+    )
+
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(horizontal = 32.dp),
         ) {
-            StatusCapsule(
-                state = state.connection,
-                modifier = Modifier.padding(horizontal = 20.dp),
-            )
-
-            BusyIndicator(state = state.busy)
-
-            state.trustedPair?.let {
-                TrustedPairCard(
-                    state = it,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            // App logo 88×88
+            Surface(
+                modifier = Modifier.size(88.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            ) {
+                Image(
+                    painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                    contentDescription = "Androdex",
+                    modifier = Modifier.size(88.dp),
                 )
             }
 
-            state.hostAccount?.let {
-                HostAccountCard(
-                    state = it,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            // Pulsing status dot
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(
+                        dotColor.copy(alpha = if (isConnecting) pulseAlpha else 1f),
+                    ),
+            )
+
+            // Status text
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // TrustedPairSummaryView (Mac pair info)
+            trustedPair?.let { pair ->
+                TrustedPairSummaryCard(
+                    pair = pair,
+                    modifier = Modifier.widthIn(max = 260.dp),
                 )
             }
 
-            BridgeStatusCard(
-                state = state.bridgeStatus,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-
-            ActiveWorkspaceBanner(
-                activeWorkspacePath = state.activeWorkspacePath,
-                onOpenProjects = onOpenProjects,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-
-            ThreadListPane(
-                state = state.threadList,
-                onOpenThread = onOpenThread,
-                onOpenProjects = onOpenProjects,
-            )
+            // E2EE label
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(11.dp),
+                )
+                Text(
+                    text = "End-to-end encrypted",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+            }
         }
     }
 }
 
+// ── TrustedPairSummaryCard — matches remodex TrustedPairSummaryView ────────────
+
 @Composable
-private fun ActiveWorkspaceBanner(
-    activeWorkspacePath: String?,
-    onOpenProjects: () -> Unit,
+private fun TrustedPairSummaryCard(
+    pair: TrustedPairUiState,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.large,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            // Desktop icon in small circle (6% opacity)
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
+                modifier = Modifier.size(28.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Icon(
+                        imageVector = Icons.Outlined.Computer,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.weight(1f),
+            ) {
                 Text(
-                    text = "Active Project",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = activeWorkspacePath ?: "No project selected",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
+                    text = pair.name,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp,
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            OutlinedButton(onClick = onOpenProjects) {
-                Text(if (activeWorkspacePath == null) "Choose" else "Switch")
+                pair.systemName?.let {
+                    Text(
+                        text = "\"$it\"",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                pair.detail?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

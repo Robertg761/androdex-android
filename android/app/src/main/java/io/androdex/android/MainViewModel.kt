@@ -205,6 +205,9 @@ class MainViewModel(
             ?: deepLinkText?.takeIf { it.isNotEmpty() }
             ?: return
         uiStateFlow.update { it.copy(pairingInput = payload) }
+        if (deepLinkText != null) {
+            connectWithCurrentPairingInput()
+        }
     }
 
     fun updatePairingInput(value: String) {
@@ -2392,7 +2395,8 @@ class MainViewModel(
 }
 
 private fun Uri.extractPairingPayload(): String? {
-    return getQueryParameter("payload")
+    return runCatching { getQueryParameter("payload") }
+        .getOrNull()
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 }

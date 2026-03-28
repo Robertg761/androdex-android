@@ -1,11 +1,19 @@
 package io.androdex.android.ui.pairing
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,36 +24,42 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import io.androdex.android.ui.shared.StatusCapsule
-import io.androdex.android.ui.shared.TrustedPairCard
-import io.androdex.android.ui.shared.HostAccountCard
+import androidx.compose.ui.unit.sp
+import io.androdex.android.R
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.state.PairingScreenUiState
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PairingScreen(
     state: PairingScreenUiState,
@@ -54,17 +68,31 @@ internal fun PairingScreen(
     onConnect: () -> Unit,
     onReconnectSaved: () -> Unit,
 ) {
+    val isConnecting = state.connection.status == ConnectionStatus.CONNECTING ||
+        state.connection.status == ConnectionStatus.HANDSHAKING
+
+    val statusDotColor = when (state.connection.status) {
+        ConnectionStatus.CONNECTED -> Color(0xFF30D158)
+        ConnectionStatus.CONNECTING,
+        ConnectionStatus.HANDSHAKING,
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFFF9F0A)
+        ConnectionStatus.RECONNECT_REQUIRED,
+        ConnectionStatus.UPDATE_REQUIRED -> Color(0xFFFF453A)
+        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseAlpha",
+    )
+
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text("Androdex", style = MaterialTheme.typography.titleLarge)
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                ),
-            )
-        },
         containerColor = MaterialTheme.colorScheme.background,
     ) { paddingValues ->
         Column(
@@ -72,89 +100,93 @@ internal fun PairingScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .safeDrawingPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(48.dp))
 
-            StatusCapsule(state = state.connection)
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = "Connect to your host",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "Trust the host once with `androdex pair`, then reconnect from saved pairing on future launches. Android stays the remote control while Codex keeps running on your PC.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                )
-                if (state.hasSavedPairing || state.defaultRelayUrl != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.hasSavedPairing) {
-                            StatusChip(label = "Saved pair")
-                        }
-                        if (state.defaultRelayUrl != null) {
-                            StatusChip(label = "Relay-ready")
-                        }
-                        StatusChip(label = "Host-local")
-                    }
-                }
-                state.defaultRelayUrl?.let { defaultRelayUrl ->
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = MaterialTheme.shapes.medium,
-                    ) {
-                        Text(
-                            text = "Default relay: $defaultRelayUrl",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            // App logo with status dot
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Surface(
+                    modifier = Modifier.size(88.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Image(
+                            painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                            contentDescription = "Androdex",
+                            modifier = Modifier.size(88.dp),
                         )
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            state.trustedPair?.let { trustedPair ->
-                Text(
-                    text = "Trusted host",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                // Status dot
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                )
-                TrustedPairCard(state = trustedPair, modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
+                        .padding(2.dp)
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.background),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(
+                                statusDotColor.copy(alpha = if (isConnecting) pulseAlpha else 1f),
+                            ),
+                    )
+                }
             }
 
-            state.hostAccount?.let { hostAccount ->
-                HostAccountCard(
-                    state = hostAccount,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+            Spacer(modifier = Modifier.height(24.dp))
 
-            Card(
-                shape = MaterialTheme.shapes.large,
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            Text(
+                text = "Androdex",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 32.sp,
                 ),
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Control Codex from your Android.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // E2EE badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(
+                    text = "End-to-end encrypted",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // Pairing input card
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -163,39 +195,54 @@ internal fun PairingScreen(
                         onValueChange = onPairingInputChanged,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp),
+                            .height(110.dp),
                         label = { Text("Pairing payload") },
                         placeholder = { Text("{\"v\":3,...}") },
-                        shape = MaterialTheme.shapes.medium,
+                        shape = RoundedCornerShape(12.dp),
                         textStyle = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
                         ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                        ),
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         OutlinedButton(
                             onClick = onScanQr,
                             modifier = Modifier.weight(1f),
-                            shape = MaterialTheme.shapes.medium,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onBackground,
+                            ),
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.QrCode2,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text("Scan QR")
                         }
                         Button(
                             onClick = onConnect,
                             enabled = !state.isBusy,
                             modifier = Modifier.weight(1f),
-                            shape = MaterialTheme.shapes.medium,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White,
+                            ),
                         ) {
                             Text("Connect")
                         }
@@ -203,26 +250,42 @@ internal fun PairingScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Status chips
+            if (state.hasSavedPairing || state.defaultRelayUrl != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.hasSavedPairing) {
+                        StatusChip(label = "Saved pair")
+                    }
+                    if (state.defaultRelayUrl != null) {
+                        StatusChip(label = "Relay-ready")
+                    }
+                    StatusChip(label = "E2EE")
+                }
+            }
 
-            Card(
-                shape = MaterialTheme.shapes.large,
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ),
+            // Recovery info
+            Spacer(modifier = Modifier.height(16.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
                         text = state.recoveryTitle,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
                         text = state.recoveryMessage,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     state.compatibilityMessage?.let {
@@ -235,20 +298,19 @@ internal fun PairingScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
             AnimatedVisibility(visible = state.hasSavedPairing) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Spacer(modifier = Modifier.height(16.dp))
                     HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 40.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     FilledTonalButton(
                         onClick = onReconnectSaved,
                         enabled = state.reconnectEnabled,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                        shape = RoundedCornerShape(12.dp),
                     ) {
                         Text(state.reconnectButtonLabel)
                     }
@@ -263,13 +325,13 @@ internal fun PairingScreen(
                 exit = fadeOut() + scaleOut(targetScale = 0.8f),
             ) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
-                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 2.5.dp,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 }
@@ -277,14 +339,14 @@ internal fun PairingScreen(
 @Composable
 private fun StatusChip(label: String) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        shape = RoundedCornerShape(999.dp),
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
         )
     }
 }
