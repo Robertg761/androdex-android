@@ -26,6 +26,10 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   });
   const linuxConfig = readBridgeConfig({ env: {}, platform: "linux" });
   const windowsConfig = readBridgeConfig({ env: {}, platform: "win32" });
+  const windowsCustomPortConfig = readBridgeConfig({
+    env: { ANDRODEX_CODEX_REMOTE_DEBUGGING_PORT: "9444" },
+    platform: "win32",
+  });
   const linuxCommandConfig = readBridgeConfig({
     env: { ANDRODEX_REFRESH_COMMAND: "echo refresh" },
     platform: "linux",
@@ -52,6 +56,8 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
+  assert.equal(windowsConfig.codexWindowsRemoteDebuggingPort, 9333);
+  assert.equal(windowsCustomPortConfig.codexWindowsRemoteDebuggingPort, 9444);
 });
 
 test("CodexDesktopRefresher picks the expected desktop refresh backend per platform", () => {
@@ -77,12 +83,16 @@ test("createDesktopLaunchPlan uses the Codex protocol launcher on Windows", () =
   const launchPlan = createDesktopLaunchPlan({
     targetUrl: "codex://threads/thread-123",
     platform: "win32",
+    windowsRemoteDebuggingPort: 9444,
   });
 
   assert.equal(launchPlan.command, "powershell.exe");
   assert.equal(launchPlan.args[0], "-NoProfile");
   assert.equal(launchPlan.args[3], "-File");
-  assert.equal(launchPlan.args.at(-1), "codex://threads/thread-123");
+  assert.equal(launchPlan.args[5], "-TargetUrl");
+  assert.equal(launchPlan.args[6], "codex://threads/thread-123");
+  assert.equal(launchPlan.args.at(-2), "-RemoteDebuggingPort");
+  assert.equal(launchPlan.args.at(-1), "9444");
   assert.equal(launchPlan.options.windowsHide, true);
 });
 
@@ -123,7 +133,7 @@ test("thread/start falls back once to the new-thread route when thread id is sti
     params: {},
   }));
 
-  await wait(40);
+  await wait(80);
 
   assert.deepEqual(refreshCalls, ["codex://threads/new"]);
   refresher.handleTransportReset();
@@ -233,6 +243,35 @@ test("rollout growth refreshes are throttled during long runs", async () => {
   assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
 });
 
+test("turn/steer refreshes the active thread and keeps the watcher armed", async () => {
+  const refreshCalls = [];
+  const watchedThreads = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: ({ threadId }) => {
+      watchedThreads.push(threadId);
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/steer",
+    params: {
+      threadId: "thread-steer",
+      expectedTurnId: "turn-live",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-steer"]);
+  assert.deepEqual(watchedThreads, ["thread-steer"]);
+});
+
 test("turn/completed bypasses duplicate-target dedupe and still stops the watcher", async () => {
   const refreshCalls = [];
   let stopCount = 0;
@@ -287,23 +326,86 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
   assert.equal(stopCount, 1);
 });
 
-test("windows same-thread phone refresh uses a hard restart workaround", async () => {
-  const softRefreshCalls = [];
-  const hardRefreshCalls = [];
+test("thread state sync runs before a concrete thread refresh", async () => {
+  const syncCalls = [];
+  const refreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    threadStateSyncExecutor: async ({ threadId }) => {
+      syncCalls.push(threadId);
+    },
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-sync",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(syncCalls, ["thread-sync"]);
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-sync"]);
+});
+
+test("thread state sync failures fall back to the existing desktop refresh", async () => {
+  const refreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    threadStateSyncExecutor: async () => {
+      throw new Error("thread read failed");
+    },
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-sync-fallback",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-sync-fallback"]);
+});
+
+test("windows same-thread phone refresh uses the trusted renderer restart path before reopening", async () => {
+  const navigationCalls = [];
+  const restartCalls = [];
+  const refreshCalls = [];
+  const sleepCalls = [];
 
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
     platform: "win32",
     refreshBackend: "protocol",
-    windowsHardRestartCooldownMs: 0,
-    protocolRefreshExecutor: async ({ targetUrl }) => {
-      softRefreshCalls.push(targetUrl);
+    windowsRemoteDebuggingPort: 9444,
+    windowsThreadBounceDelayMs: 0,
+    windowsTrustedRestartWaitMs: 0,
+    windowsTrustedReopenRetryDelayMs: 0,
+    windowsTrustedRendererNavigationExecutor: async ({ port, path }) => {
+      navigationCalls.push({ port, path });
     },
-    hardRefreshExecutor: async ({ targetUrl }) => {
-      hardRefreshCalls.push(targetUrl);
+    windowsTrustedRestartExecutor: async ({ port }) => {
+      restartCalls.push(port);
+    },
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
     },
     watchThreadRolloutFactory: () => ({ stop() {} }),
+    sleepFn: async (delayMs) => {
+      sleepCalls.push(delayMs);
+    },
   });
 
   refresher.handleInbound(JSON.stringify({
@@ -322,13 +424,69 @@ test("windows same-thread phone refresh uses a hard restart workaround", async (
   }));
   await wait(10);
 
-  assert.deepEqual(softRefreshCalls, [
+  assert.deepEqual(navigationCalls, [{ port: 9444, path: "/settings" }]);
+  assert.deepEqual(restartCalls, [9444]);
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-live-sync",
+    "codex://threads/thread-live-sync",
     "codex://threads/thread-live-sync",
   ]);
-  assert.deepEqual(hardRefreshCalls, ["codex://threads/thread-live-sync"]);
+  assert.deepEqual(sleepCalls, [0, 0, 0]);
 });
 
-test("windows rollout refresh still bounces away and back on the same thread", async () => {
+test("windows same-thread completion refresh falls back to settings bounce when trusted restart is unavailable", async () => {
+  const refreshCalls = [];
+  const sleepCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "win32",
+    refreshBackend: "protocol",
+    windowsThreadBounceDelayMs: 0,
+    windowsTrustedRestartExecutor: async () => {
+      const error = new Error("connection refused");
+      error.code = "cdp_port_unavailable";
+      throw error;
+    },
+    windowsTrustedRendererNavigationExecutor: null,
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+    sleepFn: async (delayMs) => {
+      sleepCalls.push(delayMs);
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-live-complete",
+    },
+  }));
+  await wait(10);
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-live-complete",
+      turnId: "turn-live-complete",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-live-complete",
+    "codex://settings",
+    "codex://threads/thread-live-complete",
+  ]);
+  assert.deepEqual(sleepCalls, [0]);
+});
+
+test("windows rollout refresh also uses the trusted renderer restart path on the same thread", async () => {
+  const navigationCalls = [];
+  const restartCalls = [];
   const refreshCalls = [];
 
   const refresher = new CodexDesktopRefresher({
@@ -337,6 +495,14 @@ test("windows rollout refresh still bounces away and back on the same thread", a
     platform: "win32",
     refreshBackend: "protocol",
     windowsThreadBounceDelayMs: 0,
+    windowsTrustedRestartWaitMs: 0,
+    windowsTrustedReopenRetryDelayMs: 0,
+    windowsTrustedRendererNavigationExecutor: async ({ path }) => {
+      navigationCalls.push(path);
+    },
+    windowsTrustedRestartExecutor: async () => {
+      restartCalls.push("restart");
+    },
     protocolRefreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -359,9 +525,57 @@ test("windows rollout refresh still bounces away and back on the same thread", a
   }, "test rollout");
   await wait(10);
 
+  assert.deepEqual(navigationCalls, ["/settings"]);
+  assert.deepEqual(restartCalls, ["restart"]);
   assert.deepEqual(refreshCalls, [
-    "codex://threads/new",
     "codex://threads/thread-rollout-sync",
+    "codex://threads/thread-rollout-sync",
+  ]);
+});
+
+test("windows trusted restart still reopens the thread when trusted renderer navigation is unavailable", async () => {
+  const restartCalls = [];
+  const refreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "win32",
+    refreshBackend: "protocol",
+    windowsTrustedRestartWaitMs: 0,
+    windowsThreadBounceDelayMs: 0,
+    windowsTrustedReopenRetryDelayMs: 0,
+    windowsTrustedRestartExecutor: async () => {
+      restartCalls.push("restart");
+    },
+    windowsTrustedRendererNavigationExecutor: null,
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    sleepFn: async () => {},
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-protocol-fallback",
+    },
+  }));
+  await wait(10);
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-protocol-fallback",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(restartCalls, ["restart"]);
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-protocol-fallback",
+    "codex://threads/thread-protocol-fallback",
   ]);
 });
 
@@ -619,6 +833,9 @@ test("rollout watcher retries transient filesystem errors before succeeding", as
         }];
       },
       statSync: () => ({ size: 12 }),
+      openSync: () => 1,
+      readSync: () => 0,
+      closeSync: () => {},
     },
     onEvent: (event) => events.push(event),
     onError: (error) => errors.push(error),

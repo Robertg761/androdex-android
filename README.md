@@ -48,9 +48,21 @@ Androdex does **not** run Codex on the phone itself.
 - QR pairing and pairing-payload paste
 - open existing threads and create new ones from Android
 - stream Codex output on the phone while work continues on the host
+- item-scoped timeline reconciliation with per-thread running, ready, and failed state on Android
+- reconnect-safe rollout mirroring for desktop-started runs reopened on Android
+- Stop-button recovery that falls back to `thread/read` when a live turn has not published a usable `turnId`
+- queued follow-up prompts on Android with per-thread drafts, pause/resume, restore-to-composer, and idle-time auto flush
+- Android composer plan mode with Remodex-style `collaborationMode` turn payloads and queued-send preservation
+- Android composer `@file`, `$skill`, and `/subagents` affordances with autocomplete chips and structured skill turn payloads
+- Android `/review` composer flow with review target selection and host-side review start routing
+- Android photo attachments from camera and gallery with Remodex-style intake limits, preview tiles, loading and failure states, queued-draft restore, and in-memory cleanup after send or removal
+- Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
 - reconnect from a saved pairing
-- model and reasoning controls on Android
+- model, access mode, service-tier, and per-thread runtime controls on Android
+- native thread fork actions on Android when the host bridge/runtime supports them
+- native thread maintenance actions on Android for context compaction, rollback, and background-terminal cleanup when the host bridge/runtime supports them
+- optional bridge-side Android push registration and run-completion forwarding
 
 ## Current Status
 
@@ -121,7 +133,10 @@ Use this after host-side changes to make sure Windows and macOS still behave the
 2. Run `androdex up`, choose a workspace, and confirm the host-local Codex session opens in that project.
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
-5. Restart the daemon or reconnect the phone and confirm the saved pairing and active workspace recover cleanly.
+5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
+6. On an idle thread with history, confirm Android thread maintenance actions can compact context, roll back the last turn, and clean background terminals when the connected host advertises support. `thread/shellCommand` is still intentionally not exposed on Android.
+7. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
+8. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands
 
@@ -206,6 +221,18 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
+| `ANDRODEX_PUSH_SERVICE_URL` | Optional Android push service endpoint for device registration and completion notifications |
+| `ANDRODEX_ENABLE_PUSH_SERVICE` | Enable the public relay-side push helper that forwards completions to a webhook you control |
+| `ANDRODEX_PUSH_WEBHOOK_URL` | Webhook target used by the relay-side push helper for completion fan-out |
+| `ANDRODEX_PUSH_WEBHOOK_TOKEN` | Optional bearer token for the relay-side push webhook |
+| `ANDRODEX_PUSH_WEBHOOK_PATH` | Optional relay-side push webhook path override |
+| `ANDRODEX_PUSH_WEBHOOK_TIMEOUT_MS` | Timeout for relay-side push webhook delivery |
+| `ANDRODEX_PUSH_STATE_FILE` | Override the relay-side persisted push-state file |
+| `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` | Maximum stored preview length used when building completion notification payloads |
+| `ANDRODEX_FCM_APPLICATION_ID` | Optional Android FCM app ID used for direct token registration in source builds |
+| `ANDRODEX_FCM_PROJECT_ID` | Optional Android FCM project ID used for direct token registration in source builds |
+| `ANDRODEX_FCM_API_KEY` | Optional Android FCM Web API key used for direct token registration in source builds |
+| `ANDRODEX_FCM_GCM_SENDER_ID` | Optional Android FCM sender ID used for direct token registration in source builds |
 
 The bridge resolves relay configuration in this order:
 
@@ -222,6 +249,38 @@ ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex pair
 
 # Public relay you control
 ANDRODEX_RELAY=wss://relay.example.com/relay androdex pair
+```
+
+### Android Push Environment
+
+If you want completion notifications while the Android app is backgrounded or temporarily disconnected, configure a push service the bridge can call after the phone registers.
+
+- Androdex keeps this bridge-side and platform-neutral: the bridge only forwards `notifications/push/register` requests and completion events to your configured service.
+- The public relay can optionally host a generic push helper that stores Android registrations and forwards completion payloads to a webhook you control.
+- Use Android/FCM-oriented identifiers and routing in that webhook-backed service. The public repo does not ship private FCM credentials, hosted endpoints, or deployment runbooks.
+- Set `ANDRODEX_PUSH_SERVICE_URL` on the host before pairing or reconnecting the phone so registration requests have a destination.
+- If you want the bundled relay helper, set `ANDRODEX_ENABLE_PUSH_SERVICE=true` and `ANDRODEX_PUSH_WEBHOOK_URL=https://...` on the host before starting `relay/server.js` or `cd relay && npm start`.
+- If you build the Android app from source and want device-token registration, provide your own FCM config through `ANDRODEX_FCM_APPLICATION_ID`, `ANDRODEX_FCM_PROJECT_ID`, `ANDRODEX_FCM_API_KEY`, and `ANDRODEX_FCM_GCM_SENDER_ID`.
+- Android now mirrors Remodex-style recovery behavior: completion taps reopen the targeted thread when it can be recovered, keep the target pending across reconnect/background restore, and show a missing-thread prompt instead of silently dropping the tap.
+- `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` only affects the bridge-side completion preview cache; it does not change Android UI rendering.
+- Apple-specific launchd or APNs host setup from Remodex is intentionally not part of Androdex.
+- The bundled relay helper is intentionally generic and still expects you to point it at your own notification webhook.
+
+Example:
+
+```sh
+ANDRODEX_RELAY=wss://relay.example.com/relay \
+ANDRODEX_PUSH_SERVICE_URL=https://push.example.com \
+androdex up
+```
+
+For the bundled relay helper:
+
+```sh
+cd relay
+ANDRODEX_ENABLE_PUSH_SERVICE=true \
+ANDRODEX_PUSH_WEBHOOK_URL=https://your-notification-endpoint.example/webhook \
+npm start
 ```
 
 ## Remote Access

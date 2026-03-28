@@ -206,7 +206,20 @@ function getRelayStats() {
   };
 }
 
+function hasLiveSession(sessionId) {
+  const normalizedSessionId = typeof sessionId === "string" && sessionId.trim()
+    ? sessionId.trim()
+    : "";
+  if (!normalizedSessionId) {
+    return false;
+  }
+
+  const session = sessions.get(normalizedSessionId);
+  return Boolean(session?.mac && session.mac.readyState === WebSocket.OPEN);
+}
+
 module.exports = {
+  hasLiveSession,
   setupRelay,
   getRelayStats,
 };

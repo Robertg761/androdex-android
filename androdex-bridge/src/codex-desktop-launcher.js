@@ -6,6 +6,10 @@
 
 const { execFile, execFileSync } = require("child_process");
 const path = require("path");
+const {
+  DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
+  resolveWindowsRemoteDebuggingPort,
+} = require("./codex-desktop-windows-devtools");
 
 const WINDOWS_OPEN_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-open-windows.ps1");
 
@@ -15,6 +19,7 @@ function openCodexDesktopTarget({
   appPath = "/Applications/Codex.app",
   platform = process.platform,
   platformAdapter = null,
+  windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
 } = {}) {
   const plan = createDesktopLaunchPlan({
     targetUrl,
@@ -22,6 +27,7 @@ function openCodexDesktopTarget({
     appPath,
     platform,
     platformAdapter,
+    windowsRemoteDebuggingPort,
   });
   return execFilePromise(plan.command, plan.args, plan.options);
 }
@@ -32,6 +38,7 @@ function openCodexDesktopTargetSync({
   appPath = "/Applications/Codex.app",
   platform = process.platform,
   platformAdapter = null,
+  windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
 } = {}) {
   const plan = createDesktopLaunchPlan({
     targetUrl,
@@ -39,6 +46,7 @@ function openCodexDesktopTargetSync({
     appPath,
     platform,
     platformAdapter,
+    windowsRemoteDebuggingPort,
   });
   execFileSync(plan.command, plan.args, plan.options);
 }
@@ -49,6 +57,7 @@ function createDesktopLaunchPlan({
   appPath = "/Applications/Codex.app",
   platform = process.platform,
   platformAdapter = null,
+  windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
 } = {}) {
   if (platformAdapter?.createDesktopLaunchPlan) {
     return platformAdapter.createDesktopLaunchPlan({
@@ -56,6 +65,7 @@ function createDesktopLaunchPlan({
       bundleId,
       appPath,
       platform,
+      windowsRemoteDebuggingPort,
     });
   }
 
@@ -82,6 +92,7 @@ function createDesktopLaunchPlan({
   }
 
   if (platform === "win32") {
+    const resolvedDebuggingPort = resolveWindowsRemoteDebuggingPort(windowsRemoteDebuggingPort);
     return {
       command: "powershell.exe",
       args: [
@@ -90,7 +101,10 @@ function createDesktopLaunchPlan({
         "Bypass",
         "-File",
         WINDOWS_OPEN_SCRIPT_PATH,
+        "-TargetUrl",
         safeTargetUrl,
+        "-RemoteDebuggingPort",
+        String(resolvedDebuggingPort),
       ],
       options: {
         stdio: "ignore",

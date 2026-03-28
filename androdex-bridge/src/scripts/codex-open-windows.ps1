@@ -1,5 +1,6 @@
 param(
-  [string]$TargetUrl = ""
+  [string]$TargetUrl = "",
+  [int]$RemoteDebuggingPort = 9333
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,11 +44,11 @@ if (-not $exePath) {
 }
 
 if ($exePath) {
+  $argumentList = @("--remote-debugging-port=$RemoteDebuggingPort")
   if ($TargetUrl) {
-    Start-Process -FilePath $exePath -ArgumentList $TargetUrl -WindowStyle Hidden
-  } else {
-    Start-Process -FilePath $exePath -WindowStyle Hidden
+    $argumentList += $TargetUrl
   }
+  Start-Process -FilePath $exePath -ArgumentList $argumentList -WindowStyle Hidden
   exit 0
 }
 

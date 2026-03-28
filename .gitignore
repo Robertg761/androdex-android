@@ -38,6 +38,7 @@ build/
 *.swo
 *~
 .gradle/
+.gradle-local/
 **/.kotlin/
 **/.cxx/
 .idea/
@@ -50,6 +51,9 @@ keystore.properties
 
 # Minified JS bundles (not part of this project)
 /main.js
+/main-*.js
+/index-*.js
+/mcp-settings-*.js
 /links-*.js
 /scheme-*.js
 /initial-route-atom-*.js
@@ -58,6 +62,8 @@ keystore.properties
 # Local scratch / generated outputs
 /tmp/
 /tmp-gh-artifact/
+/.asar-installed/
+/androdex_ui.xml
 
 # Claude project config (local only)
 .claude/

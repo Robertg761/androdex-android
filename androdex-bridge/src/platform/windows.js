@@ -8,11 +8,16 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFile, execFileSync, spawn } = require("child_process");
+const {
+  DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
+  resolveWindowsRemoteDebuggingPort,
+} = require("../codex-desktop-windows-devtools");
 
 const STORE_DIR = path.join(os.homedir(), ".androdex");
 const STORE_FILE = path.join(STORE_DIR, "device-state.json");
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
 const DEFAULT_APP_PATH = "/Applications/Codex.app";
+const WINDOWS_OPEN_SCRIPT_PATH = path.join(__dirname, "..", "scripts", "codex-open-windows.ps1");
 
 function createWindowsHostPlatform({
   env = process.env,
@@ -58,14 +63,26 @@ function createWindowsHostPlatform({
     },
     createDesktopLaunchPlan({
       targetUrl = "",
+      windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
     } = {}) {
       const safeTargetUrl = typeof targetUrl === "string" ? targetUrl.trim() : "";
       if (!safeTargetUrl) {
         throw new Error("Codex desktop target URL is required on this platform.");
       }
+      const resolvedDebuggingPort = resolveWindowsRemoteDebuggingPort(windowsRemoteDebuggingPort);
       return {
-        command: env.ComSpec || "cmd.exe",
-        args: ["/d", "/c", "start", "\"\"", safeTargetUrl],
+        command: "powershell.exe",
+        args: [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          WINDOWS_OPEN_SCRIPT_PATH,
+          "-TargetUrl",
+          safeTargetUrl,
+          "-RemoteDebuggingPort",
+          String(resolvedDebuggingPort),
+        ],
         options: {
           stdio: "ignore",
           windowsHide: true,

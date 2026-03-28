@@ -2,7 +2,7 @@
 // Purpose: Keeps a durable relay presence alive and activates the local Codex workspace on demand.
 // Layer: CLI service
 // Exports: HostRuntime
-// Depends on: fs, ws, ./codex-desktop-refresher, ./codex-transport, ./session-state, ./secure-device-state, ./secure-transport
+// Depends on: fs, ws, ./codex-desktop-refresher, ./codex-transport, ./rollout-watch, ./session-state, ./secure-device-state, ./secure-transport
 
 const fs = require("fs");
 const path = require("path");
@@ -11,13 +11,27 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
+const { createDesktopThreadReadRefresher } = require("./codex-desktop-thread-sync");
 const { createCodexTransport } = require("./codex-transport");
+const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
+const { createAccountStatusHandler } = require("./account-handler");
+const { createCodexRpcClient } = require("./codex-rpc-client");
+const { createNotificationsHandler } = require("./notifications-handler");
+const { createPushNotificationServiceClient } = require("./push-notification-service-client");
+const { createPushNotificationTracker } = require("./push-notification-tracker");
+const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
 const { readDaemonRuntimeState, writeDaemonRuntimeState } = require("./daemon-store");
+const {
+  extractBridgeMessageContext,
+  normalizeLegacyAndroidRpcMessage,
+  sanitizeThreadHistoryImagesForRelay,
+  shouldStartContextUsageWatcher,
+} = require("./runtime-compat");
 
 class HostRuntime {
   constructor({
@@ -38,18 +52,51 @@ class HostRuntime {
     this.deviceState = loadOrCreateBridgeDeviceState();
     this.hostId = this.deviceState.hostId;
     this.relayHostUrl = `${this.relayBaseUrl}/${this.hostId}`;
+    this.secureTransport = createBridgeSecureTransport({
+      hostId: this.hostId,
+      relayUrl: this.relayBaseUrl,
+      deviceState: this.deviceState,
+    });
+    this.pushServiceClient = createPushNotificationServiceClient({
+      baseUrl: this.config.pushServiceUrl,
+      sessionId: this.hostId,
+    });
+    this.notificationsHandler = createNotificationsHandler({
+      pushServiceClient: this.pushServiceClient,
+    });
+    this.pushNotificationTracker = createPushNotificationTracker({
+      sessionId: this.hostId,
+      pushServiceClient: this.pushServiceClient,
+      previewMaxChars: this.config.pushPreviewMaxChars,
+    });
+    this.codexRpcClient = createCodexRpcClient({
+      sendToCodex: (message) => {
+        if (!this.codex) {
+          throw new Error("No active Codex workspace on the host.");
+        }
+        this.codex.send(message);
+      },
+      requestIdPrefix: `androdex-host-${this.hostId}`,
+    });
     this.desktopRefresher = new CodexDesktopRefresher({
       enabled: this.config.refreshEnabled,
       debounceMs: this.config.refreshDebounceMs,
       refreshCommand: this.config.refreshCommand,
       bundleId: this.config.codexBundleId,
       appPath: this.config.codexAppPath,
+      windowsRemoteDebuggingPort: this.config.codexWindowsRemoteDebuggingPort,
+      threadStateSyncExecutor: createDesktopThreadReadRefresher({
+        sendCodexRequest: (...args) => this.codexRpcClient.sendRequest(...args),
+      }),
     });
-    this.secureTransport = createBridgeSecureTransport({
-      hostId: this.hostId,
-      relayUrl: this.relayBaseUrl,
-      deviceState: this.deviceState,
+    this.accountStatusHandler = createAccountStatusHandler({
+      sendCodexRequest: (...args) => this.codexRpcClient.sendRequest(...args),
     });
+    this.rolloutLiveMirror = !this.config.codexEndpoint
+      ? createRolloutLiveMirrorController({
+        sendApplicationResponse: this.sendApplicationResponse.bind(this),
+      })
+      : null;
     this.socket = null;
     this.codex = null;
     this.currentCwd = "";
@@ -62,16 +109,27 @@ class HostRuntime {
     this.relayStatus = "disconnected";
     this.codexHandshakeState = "cold";
     this.forwardedInitializeRequestIds = new Set();
+    this.relaySanitizedResponseMethodsById = new Map();
+    this.relaySanitizedRequestMethods = new Set([
+      "thread/read",
+      "thread/resume",
+    ]);
+    this.forwardedRequestMethodTTLms = 2 * 60_000;
     this.cachedInitializeParams = null;
     this.cachedLegacyInitializeParams = null;
     this.cachedInitializedNotification = false;
     this.syntheticInitializeRequest = null;
     this.syntheticInitializeCounter = 0;
+    this.contextUsageWatcher = null;
+    this.watchedContextUsageKey = null;
+    this.lastContextUsageHint = null;
+    this.supportsNativeTokenUsageUpdates = false;
     this.isStopping = false;
     this.runtimeState = readDaemonRuntimeState();
   }
 
   start() {
+    this.pushServiceClient.logUnavailable();
     this.connectRelay();
     const rememberedCwd = normalizeNonEmptyString(this.runtimeState.lastActiveCwd);
     if (rememberedCwd && isExistingDirectory(rememberedCwd)) {
@@ -86,6 +144,8 @@ class HostRuntime {
     this.clearReconnectTimer();
     this.clearConnectTimeout();
     this.clearCachedBridgeHandshakeState();
+    this.stopContextUsageWatcher({ clearHint: false });
+    this.rolloutLiveMirror?.stopAll();
     this.desktopRefresher.handleTransportReset();
     if (
       this.socket?.readyState === this.WebSocketImpl.OPEN
@@ -219,11 +279,13 @@ class HostRuntime {
       this.clearConnectTimeout(connectTimeoutTimer);
       this.reconnectAttempt = 0;
       this.relayStatus = "connected";
+      this.supportsNativeTokenUsageUpdates = false;
       this.secureTransport.bindLiveSendWireMessage((wireMessage) => {
         if (nextSocket.readyState === this.WebSocketImpl.OPEN) {
           nextSocket.send(wireMessage);
         }
       });
+      this.resumeContextUsageWatcherIfNeeded();
     });
 
     nextSocket.on("message", (data) => {
@@ -253,6 +315,9 @@ class HostRuntime {
       this.relayStatus = "disconnected";
       this.socket = null;
       this.clearCachedBridgeHandshakeState();
+      this.supportsNativeTokenUsageUpdates = false;
+      this.stopContextUsageWatcher({ clearHint: false });
+      this.rolloutLiveMirror?.stopAll();
       this.desktopRefresher.handleTransportReset();
       this.scheduleRelayReconnect(code);
     });
@@ -296,12 +361,16 @@ class HostRuntime {
   async shutdownCodex() {
     const activeCodex = this.codex;
     this.syntheticInitializeRequest = null;
+    this.stopContextUsageWatcher({ clearHint: false });
+    this.rolloutLiveMirror?.stopAll();
+    this.supportsNativeTokenUsageUpdates = false;
     if (!activeCodex) {
       this.codex = null;
       return;
     }
 
     this.codex = null;
+    this.codexRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge RPC completed."));
     this.codexHandshakeState = "cold";
     try {
       activeCodex.shutdown();
@@ -324,6 +393,7 @@ class HostRuntime {
     this.rememberRecentWorkspace(cwd);
     this.codexHandshakeState = this.config.codexEndpoint ? "warm" : "cold";
     this.forwardedInitializeRequestIds.clear();
+    this.supportsNativeTokenUsageUpdates = false;
 
     const codex = createCodexTransport({
       endpoint: this.config.codexEndpoint,
@@ -354,10 +424,14 @@ class HostRuntime {
       if (this.handleSyntheticInitializeMessage(message)) {
         return;
       }
+      if (this.codexRpcClient.handleCodexMessage(message)) {
+        return;
+      }
       this.trackCodexHandshakeState(message);
       this.desktopRefresher.handleOutbound(message);
+      this.pushNotificationTracker.handleOutbound(message);
       this.rememberThreadFromMessage("codex", message);
-      this.secureTransport.queueOutboundApplicationMessage(message, (wireMessage) => {
+      this.secureTransport.queueOutboundApplicationMessage(this.sanitizeRelayBoundCodexMessage(message), (wireMessage) => {
         if (this.socket?.readyState === WebSocket.OPEN) {
           this.socket.send(wireMessage);
         }
@@ -369,6 +443,8 @@ class HostRuntime {
         return;
       }
       this.desktopRefresher.handleTransportReset();
+      this.stopContextUsageWatcher();
+      this.rolloutLiveMirror?.stopAll();
       this.codex = null;
       this.codexHandshakeState = "cold";
     });
@@ -378,28 +454,37 @@ class HostRuntime {
   }
 
   handleApplicationMessage(rawMessage) {
-    if (this.handleBridgeManagedHandshakeMessage(rawMessage)) {
+    const normalizedMessage = normalizeLegacyAndroidRpcMessage(rawMessage);
+    if (this.handleBridgeManagedHandshakeMessage(normalizedMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, this.sendApplicationResponse.bind(this), {
+    if (handleWorkspaceRequest(normalizedMessage, this.sendApplicationResponse.bind(this), {
       activateWorkspace: this.activateWorkspace.bind(this),
       getWorkspaceState: this.getWorkspaceState.bind(this),
       platform: this.platform,
     })) {
       return;
     }
-    if (handleGitRequest(rawMessage, this.sendApplicationResponse.bind(this))) {
+    if (this.notificationsHandler.handleNotificationsRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
+      return;
+    }
+    if (this.accountStatusHandler.handleAccountStatusRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
+      return;
+    }
+    if (handleGitRequest(normalizedMessage, this.sendApplicationResponse.bind(this))) {
       return;
     }
 
     if (!this.codex) {
-      this.respondWorkspaceNotActive(rawMessage);
+      this.respondWorkspaceNotActive(normalizedMessage);
       return;
     }
 
-    this.desktopRefresher.handleInbound(rawMessage);
-    this.rememberThreadFromMessage("android", rawMessage);
-    this.codex.send(rawMessage);
+    this.desktopRefresher.handleInbound(normalizedMessage);
+    this.rolloutLiveMirror?.observeInbound(normalizedMessage);
+    this.rememberForwardedRequestMethod(normalizedMessage);
+    this.rememberThreadFromMessage("android", normalizedMessage);
+    this.codex.send(normalizedMessage);
   }
 
   sendApplicationResponse(rawMessage) {
@@ -411,11 +496,137 @@ class HostRuntime {
   }
 
   rememberThreadFromMessage(source, rawMessage) {
-    const threadId = extractThreadId(rawMessage);
-    if (!threadId) {
+    const context = extractBridgeMessageContext(rawMessage);
+    if (!context.threadId) {
       return;
     }
-    rememberActiveThread(threadId, source);
+    rememberActiveThread(context.threadId, source);
+    if (context.method === "thread/tokenUsage/updated") {
+      this.supportsNativeTokenUsageUpdates = true;
+      this.stopContextUsageWatcher({ clearHint: false });
+      return;
+    }
+    if (!this.supportsNativeTokenUsageUpdates && shouldStartContextUsageWatcher(context)) {
+      this.ensureContextUsageWatcher(context);
+    }
+  }
+
+  rememberForwardedRequestMethod(rawMessage) {
+    const context = extractBridgeMessageContext(rawMessage);
+    const parsed = safeParseJSON(rawMessage);
+    const requestId = parsed?.id;
+    if (!context.method || requestId == null) {
+      return;
+    }
+
+    this.pruneExpiredForwardedRequestMethods();
+    if (this.relaySanitizedRequestMethods.has(context.method)) {
+      this.relaySanitizedResponseMethodsById.set(String(requestId), {
+        method: context.method,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  sanitizeRelayBoundCodexMessage(rawMessage) {
+    this.pruneExpiredForwardedRequestMethods();
+    const parsed = safeParseJSON(rawMessage);
+    const responseId = parsed?.id;
+    if (responseId == null) {
+      return rawMessage;
+    }
+
+    const trackedRequest = this.relaySanitizedResponseMethodsById.get(String(responseId));
+    if (!trackedRequest) {
+      return rawMessage;
+    }
+    this.relaySanitizedResponseMethodsById.delete(String(responseId));
+
+    return sanitizeThreadHistoryImagesForRelay(rawMessage, trackedRequest.method);
+  }
+
+  pruneExpiredForwardedRequestMethods(now = Date.now()) {
+    for (const [requestId, trackedRequest] of this.relaySanitizedResponseMethodsById.entries()) {
+      if (!trackedRequest || (now - trackedRequest.createdAt) >= this.forwardedRequestMethodTTLms) {
+        this.relaySanitizedResponseMethodsById.delete(requestId);
+      }
+    }
+  }
+
+  ensureContextUsageWatcher({ threadId, turnId }) {
+    const normalizedThreadId = readString(threadId);
+    const normalizedTurnId = readString(turnId);
+    if (!normalizedThreadId) {
+      return;
+    }
+
+    this.lastContextUsageHint = {
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+    };
+    const nextWatcherKey = `${normalizedThreadId}|${normalizedTurnId || "pending-turn"}`;
+    if (this.watchedContextUsageKey === nextWatcherKey && this.contextUsageWatcher) {
+      return;
+    }
+
+    this.stopContextUsageWatcher({ clearHint: false });
+    this.watchedContextUsageKey = nextWatcherKey;
+    this.contextUsageWatcher = createThreadRolloutActivityWatcher({
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+      onUsage: ({ threadId: usageThreadId, usage }) => {
+        this.sendContextUsageNotification(usageThreadId, usage);
+      },
+      onIdle: () => {
+        if (this.watchedContextUsageKey === nextWatcherKey) {
+          this.stopContextUsageWatcher();
+        }
+      },
+      onTimeout: () => {
+        if (this.watchedContextUsageKey === nextWatcherKey) {
+          this.stopContextUsageWatcher();
+        }
+      },
+      onError: () => {
+        if (this.watchedContextUsageKey === nextWatcherKey) {
+          this.stopContextUsageWatcher();
+        }
+      },
+    });
+  }
+
+  resumeContextUsageWatcherIfNeeded() {
+    if (this.supportsNativeTokenUsageUpdates || this.contextUsageWatcher || !this.lastContextUsageHint?.threadId) {
+      return;
+    }
+
+    this.ensureContextUsageWatcher(this.lastContextUsageHint);
+  }
+
+  stopContextUsageWatcher({ clearHint = true } = {}) {
+    if (this.contextUsageWatcher) {
+      this.contextUsageWatcher.stop();
+    }
+
+    this.contextUsageWatcher = null;
+    this.watchedContextUsageKey = null;
+    if (clearHint) {
+      this.lastContextUsageHint = null;
+    }
+  }
+
+  sendContextUsageNotification(threadId, usage) {
+    if (!threadId || !usage || this.supportsNativeTokenUsageUpdates) {
+      return;
+    }
+
+    this.sendApplicationResponse(JSON.stringify({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId,
+        usage,
+      },
+    }));
   }
 
   handleBridgeManagedHandshakeMessage(rawMessage) {
@@ -610,37 +821,6 @@ class HostRuntime {
   }
 }
 
-function extractThreadId(rawMessage) {
-  const parsed = safeParseJSON(rawMessage);
-  if (!parsed) {
-    return null;
-  }
-
-  const method = parsed?.method;
-  const params = parsed?.params;
-  if (method === "turn/start") {
-    return readString(params?.threadId) || readString(params?.thread_id);
-  }
-  if (method === "thread/start" || method === "thread/started") {
-    return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.thread?.id)
-      || readString(params?.thread?.threadId)
-      || readString(params?.thread?.thread_id)
-    );
-  }
-  if (method === "turn/completed") {
-    return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.turn?.threadId)
-      || readString(params?.turn?.thread_id)
-    );
-  }
-  return null;
-}
-
 function safeParseJSON(value) {
   try {
     return JSON.parse(value);
@@ -674,7 +854,19 @@ function isAlreadyInitializedError(message) {
 
 function isCapabilitiesMismatchError(message) {
   const normalized = normalizeNonEmptyString(message).toLowerCase();
-  return normalized.includes("capabilities") || normalized.includes("experimentalapi");
+  const mentionsCapabilitiesField = normalized.includes("capabilities")
+    || normalized.includes("experimentalapi");
+  if (!mentionsCapabilitiesField) {
+    return false;
+  }
+
+  return normalized.includes("unknown field")
+    || normalized.includes("unexpected field")
+    || normalized.includes("unrecognized field")
+    || normalized.includes("invalid param")
+    || normalized.includes("invalid params")
+    || normalized.includes("failed to parse")
+    || normalized.includes("unsupported");
 }
 
 function isExistingDirectory(targetPath) {

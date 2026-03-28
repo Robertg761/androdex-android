@@ -9,6 +9,22 @@ val defaultRelayUrlProvider = providers
     .gradleProperty("ANDRODEX_DEFAULT_RELAY_URL")
     .orElse(providers.environmentVariable("ANDRODEX_DEFAULT_RELAY_URL"))
     .orElse("")
+val fcmApplicationIdProvider = providers
+    .gradleProperty("ANDRODEX_FCM_APPLICATION_ID")
+    .orElse(providers.environmentVariable("ANDRODEX_FCM_APPLICATION_ID"))
+    .orElse("")
+val fcmProjectIdProvider = providers
+    .gradleProperty("ANDRODEX_FCM_PROJECT_ID")
+    .orElse(providers.environmentVariable("ANDRODEX_FCM_PROJECT_ID"))
+    .orElse("")
+val fcmApiKeyProvider = providers
+    .gradleProperty("ANDRODEX_FCM_API_KEY")
+    .orElse(providers.environmentVariable("ANDRODEX_FCM_API_KEY"))
+    .orElse("")
+val fcmSenderIdProvider = providers
+    .gradleProperty("ANDRODEX_FCM_GCM_SENDER_ID")
+    .orElse(providers.environmentVariable("ANDRODEX_FCM_GCM_SENDER_ID"))
+    .orElse("")
 
 fun escapeBuildConfigString(value: String): String {
     return value
@@ -36,6 +52,26 @@ android {
             "String",
             "ANDRODEX_DEFAULT_RELAY_URL",
             "\"${escapeBuildConfigString(defaultRelayUrlProvider.get())}\""
+        )
+        buildConfigField(
+            "String",
+            "ANDRODEX_FCM_APPLICATION_ID",
+            "\"${escapeBuildConfigString(fcmApplicationIdProvider.get())}\""
+        )
+        buildConfigField(
+            "String",
+            "ANDRODEX_FCM_PROJECT_ID",
+            "\"${escapeBuildConfigString(fcmProjectIdProvider.get())}\""
+        )
+        buildConfigField(
+            "String",
+            "ANDRODEX_FCM_API_KEY",
+            "\"${escapeBuildConfigString(fcmApiKeyProvider.get())}\""
+        )
+        buildConfigField(
+            "String",
+            "ANDRODEX_FCM_GCM_SENDER_ID",
+            "\"${escapeBuildConfigString(fcmSenderIdProvider.get())}\""
         )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -100,6 +136,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-text-google-fonts")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
@@ -107,9 +144,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("org.bouncycastle:bcprov-jdk18on:1.82")
+    implementation("com.google.firebase:firebase-messaging:25.0.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.0")
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

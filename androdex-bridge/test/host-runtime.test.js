@@ -43,6 +43,9 @@ class FakeWebSocket extends EventEmitter {
 function loadHostRuntime() {
   FakeWebSocket.instances = [];
   delete require.cache[hostRuntimePath];
+  const watcherHarness = {
+    created: [],
+  };
 
   const stubbedModules = new Map([
     [path.resolve(__dirname, "../src/codex-desktop-refresher.js"), {
@@ -126,6 +129,19 @@ function loadHostRuntime() {
       },
       writeDaemonRuntimeState() {},
     }],
+    [path.resolve(__dirname, "../src/rollout-watch.js"), {
+      createThreadRolloutActivityWatcher(options) {
+        const watcher = {
+          options,
+          stopCalls: 0,
+          stop() {
+            watcher.stopCalls += 1;
+          },
+        };
+        watcherHarness.created.push(watcher);
+        return watcher;
+      },
+    }],
   ]);
 
   for (const [modulePath, exports] of stubbedModules.entries()) {
@@ -137,7 +153,10 @@ function loadHostRuntime() {
     };
   }
 
-  return require(hostRuntimePath).HostRuntime;
+  return {
+    HostRuntime: require(hostRuntimePath).HostRuntime,
+    watcherHarness,
+  };
 }
 
 function createTimerHarness() {
@@ -165,7 +184,7 @@ function createTimerHarness() {
 }
 
 test("ignores stale relay socket events after a newer socket becomes current", () => {
-  const HostRuntime = loadHostRuntime();
+  const { HostRuntime } = loadHostRuntime();
   const timerHarness = createTimerHarness();
   const runtime = new HostRuntime({
     env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
@@ -189,7 +208,7 @@ test("ignores stale relay socket events after a newer socket becomes current", (
 });
 
 test("times out stuck relay connects and schedules a retry", () => {
-  const HostRuntime = loadHostRuntime();
+  const { HostRuntime } = loadHostRuntime();
   const timerHarness = createTimerHarness();
   const runtime = new HostRuntime({
     env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
@@ -216,7 +235,7 @@ test("times out stuck relay connects and schedules a retry", () => {
 });
 
 test("treats mac replacement close as recoverable and retries the relay", () => {
-  const HostRuntime = loadHostRuntime();
+  const { HostRuntime } = loadHostRuntime();
   const timerHarness = createTimerHarness();
   const runtime = new HostRuntime({
     env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
@@ -237,4 +256,140 @@ test("treats mac replacement close as recoverable and retries the relay", () => 
 
   assert.equal(FakeWebSocket.instances.length, 2);
   assert.equal(runtime.relayStatus, "connecting");
+});
+
+test("stops emitting rollout-derived token usage once native updates are observed", () => {
+  const { HostRuntime } = loadHostRuntime();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+  });
+  const responses = [];
+  runtime.sendApplicationResponse = (message) => {
+    responses.push(JSON.parse(message));
+  };
+
+  runtime.sendContextUsageNotification("thread-1", { totalTokens: 11 });
+  runtime.rememberThreadFromMessage("codex", JSON.stringify({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-1",
+      usage: {
+        totalTokens: 12,
+      },
+    },
+  }));
+  runtime.sendContextUsageNotification("thread-1", { totalTokens: 13 });
+
+  assert.deepEqual(responses, [
+    {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        usage: {
+          totalTokens: 11,
+        },
+      },
+    },
+  ]);
+});
+
+test("relay reconnect re-arms rollout usage watching after native updates disabled fallback", () => {
+  const { HostRuntime, watcherHarness } = loadHostRuntime();
+  const timerHarness = createTimerHarness();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+    setTimeoutFn: timerHarness.setTimeoutFn,
+    clearTimeoutFn: timerHarness.clearTimeoutFn,
+  });
+
+  runtime.connectRelay();
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+
+  runtime.rememberThreadFromMessage("android", JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    },
+  }));
+  runtime.rememberThreadFromMessage("codex", JSON.stringify({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-1",
+      usage: {
+        totalTokens: 12,
+      },
+    },
+  }));
+
+  assert.equal(watcherHarness.created.length, 1);
+  assert.equal(watcherHarness.created[0].stopCalls, 1);
+
+  socket.close(1006);
+  const reconnectTimer = timerHarness.nextTimer(1_000);
+  assert.ok(reconnectTimer, "expected a reconnect attempt after the relay close");
+  reconnectTimer.fn();
+  const reconnectSocket = FakeWebSocket.instances[1];
+  reconnectSocket.open();
+
+  assert.equal(watcherHarness.created.length, 2);
+  assert.equal(watcherHarness.created[1].options.threadId, "thread-1");
+  assert.equal(watcherHarness.created[1].options.turnId, "turn-1");
+
+  const responses = [];
+  runtime.sendApplicationResponse = (message) => {
+    responses.push(JSON.parse(message));
+  };
+  runtime.sendContextUsageNotification("thread-1", { totalTokens: 13 });
+
+  assert.deepEqual(responses, [
+    {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        usage: {
+          totalTokens: 13,
+        },
+      },
+    },
+  ]);
+});
+
+test("does not retry legacy initialize params for generic capabilities errors", () => {
+  const { HostRuntime } = loadHostRuntime();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+  });
+  let retried = false;
+  const originalConsoleError = console.error;
+  runtime.syntheticInitializeRequest = {
+    id: "init-1",
+    usingLegacyParams: false,
+  };
+  runtime.cachedLegacyInitializeParams = {
+    clientInfo: {
+      name: "androdex_android",
+    },
+  };
+  runtime.sendSyntheticInitialize = () => {
+    retried = true;
+  };
+
+  try {
+    console.error = () => {};
+    runtime.handleSyntheticInitializeMessage(JSON.stringify({
+      id: "init-1",
+      error: {
+        message: "Temporary capabilities probe timeout",
+      },
+    }));
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(retried, false);
 });

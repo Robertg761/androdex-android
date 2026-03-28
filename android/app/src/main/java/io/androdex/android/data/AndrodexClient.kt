@@ -20,14 +20,47 @@ import io.androdex.android.crypto.secureProtocolVersion
 import io.androdex.android.crypto.sha256
 import io.androdex.android.crypto.signEd25519
 import io.androdex.android.crypto.verifyEd25519
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.AccessMode
+import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
-import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.FuzzyFileMatch
+import io.androdex.android.model.GitBranchesWithStatusResult
+import io.androdex.android.model.GitCheckoutResult
+import io.androdex.android.model.GitCommitResult
+import io.androdex.android.model.GitCreateBranchResult
+import io.androdex.android.model.GitCreateWorktreeResult
+import io.androdex.android.model.GitOperationException
+import io.androdex.android.model.GitPullResult
+import io.androdex.android.model.GitPushResult
+import io.androdex.android.model.GitRemoveWorktreeResult
+import io.androdex.android.model.GitRepoDiffResult
+import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountSnapshotOrigin
+import io.androdex.android.model.HostAccountStatus
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.ServiceTier
+import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRunSnapshot
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadSummary
+import io.androdex.android.model.ToolUserInputOption
+import io.androdex.android.model.ToolUserInputQuestion
+import io.androdex.android.model.ToolUserInputRequest
+import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TrustedPairSnapshot
+import io.androdex.android.model.TurnFileMention
+import io.androdex.android.model.TurnTerminalState
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.TrustedMacRecord
 import io.androdex.android.model.TrustedMacRegistry
 import io.androdex.android.model.WorkspaceActivationStatus
@@ -68,6 +101,18 @@ private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
 private const val logTag = "AndrodexClient"
 
+internal fun resetMaintenanceActionCapabilityFlags(
+    supportsThreadCompaction: Boolean,
+    supportsThreadRollback: Boolean,
+    supportsBackgroundTerminalCleanup: Boolean,
+): Triple<Boolean, Boolean, Boolean> {
+    return if (supportsThreadCompaction && supportsThreadRollback && supportsBackgroundTerminalCleanup) {
+        Triple(supportsThreadCompaction, supportsThreadRollback, supportsBackgroundTerminalCleanup)
+    } else {
+        Triple(true, true, true)
+    }
+}
+
 class AndrodexClient(
     private val persistence: AndrodexPersistence,
 ) {
@@ -97,6 +142,16 @@ class AndrodexClient(
     private var availableModels: List<ModelOption> = emptyList()
     private var selectedModelId: String? = persistence.loadSelectedModelId()
     private var selectedReasoningEffort: String? = persistence.loadSelectedReasoningEffort()
+    private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
+    private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
+    private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides()
+    private var collaborationModes: Set<CollaborationModeKind> = emptySet()
+    private var hostAccountSnapshot: HostAccountSnapshot? = null
+    private var supportsServiceTier = true
+    private var supportsThreadCompaction = true
+    private var supportsThreadRollback = true
+    private var supportsBackgroundTerminalCleanup = true
+    private var supportsThreadFork = true
 
     val updates: SharedFlow<ClientUpdate> = updatesFlow.asSharedFlow()
 
@@ -111,6 +166,17 @@ class AndrodexClient(
         val pairing = savedPairingPayload ?: return null
         val trusted = trustedMacRegistry.records[pairing.macDeviceId]
         return fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey)
+    }
+
+    fun currentTrustedPairSnapshot(): TrustedPairSnapshot? {
+        val pairing = savedPairingPayload ?: return null
+        val trusted = trustedMacRegistry.records[pairing.macDeviceId]
+        return TrustedPairSnapshot(
+            deviceId = pairing.macDeviceId,
+            relayUrl = pairing.relay,
+            fingerprint = fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey),
+            lastPairedAtEpochMs = trusted?.lastPairedAtEpochMs,
+        )
     }
 
     suspend fun connectWithPairingPayload(rawPayload: String) {
@@ -179,18 +245,201 @@ class AndrodexClient(
     }
 
     suspend fun startThread(preferredProjectPath: String? = null): ThreadSummary {
-        val params = JSONObject()
-        runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
-        preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params.put("cwd", it) }
-        val result = sendRequest("thread/start", params)
-        val thread = decodeThreadSummary(result.optJSONObject("thread") ?: JSONObject())
-            ?: throw IllegalStateException("thread/start response did not include a thread.")
-        return thread
+        var includesServiceTier = supportsServiceTier
+        while (true) {
+            val params = buildThreadStartParams(
+                preferredProjectPath = preferredProjectPath,
+                model = runtimeModelIdentifierForTurn(),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread() else null,
+            )
+            val result = try {
+                sendRequestWithAccessModeFallback("thread/start", params)
+            } catch (error: RpcException) {
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
+                    continue
+                }
+                throw error
+            }
+            val thread = decodeThreadSummary(result.optJSONObject("thread") ?: JSONObject())
+                ?: throw IllegalStateException("thread/start response did not include a thread.")
+            return thread
+        }
+    }
+
+    suspend fun forkThread(
+        threadId: String,
+        preferredProjectPath: String? = null,
+        preferredModel: String? = null,
+    ): ThreadSummary {
+        if (!supportsThreadFork) {
+            throw IllegalStateException("This host bridge does not support native thread forks yet. Update Androdex on the host and retry.")
+        }
+
+        var includesServiceTier = supportsServiceTier
+        var includesSandbox = true
+        var usesMinimalForkParams = false
+        while (true) {
+            val params = buildThreadForkParams(
+                sourceThreadId = threadId,
+                preferredProjectPath = preferredProjectPath,
+                model = preferredModel ?: runtimeModelIdentifierForTurn(),
+                serviceTier = if (includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                includeSandbox = includesSandbox,
+                usesMinimalForkParams = usesMinimalForkParams,
+                accessMode = selectedAccessMode,
+            )
+            try {
+                val result = sendRequestWithApprovalPolicyFallback(
+                    method = "thread/fork",
+                    baseParams = params,
+                    context = if (includesSandbox) "sandbox" else "minimal",
+                )
+                val threadObject = result.optJSONObject("thread") ?: JSONObject()
+                val decoded = decodeThreadSummary(threadObject)
+                    ?: throw IllegalStateException("thread/fork response did not include a thread.")
+                val patched = decoded.copy(
+                    cwd = decoded.cwd ?: preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() },
+                    forkedFromThreadId = decoded.forkedFromThreadId ?: threadId,
+                )
+                inheritThreadRuntimeOverrides(fromThreadId = threadId, toThreadId = patched.id)
+                return patched
+            } catch (error: RpcException) {
+                if (consumeUnsupportedThreadFork(error)) {
+                    throw IllegalStateException("This host bridge does not support native thread forks yet. Update Androdex on the host and retry.")
+                }
+                if (consumeUnsupportedThreadForkOverrides(error, usesMinimalForkParams)) {
+                    includesServiceTier = false
+                    includesSandbox = false
+                    usesMinimalForkParams = true
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, includesServiceTier)) {
+                    includesServiceTier = false
+                    continue
+                }
+                if (includesSandbox && shouldFallbackFromSandboxPolicy(error.message)) {
+                    includesSandbox = false
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    suspend fun compactThread(threadId: String) {
+        if (!supportsThreadCompaction) {
+            throw IllegalStateException("This host bridge does not support native thread compaction yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            sendRequest(
+                "thread/compact/start",
+                JSONObject().put("threadId", threadId),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedThreadCompaction(error)) {
+                throw IllegalStateException("This host bridge does not support native thread compaction yet. Update Androdex on the host and retry.")
+            }
+            throw error
+        }
+    }
+
+    suspend fun rollbackThread(
+        threadId: String,
+        numTurns: Int = 1,
+    ): ThreadLoadResult {
+        require(numTurns >= 1) { "Rollback requires dropping at least one turn." }
+        if (!supportsThreadRollback) {
+            throw IllegalStateException("This host bridge does not support native thread rollback yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            val result = sendRequest(
+                "thread/rollback",
+                JSONObject()
+                    .put("threadId", threadId)
+                    .put("numTurns", numTurns),
+            )
+            val threadObject = result.optJSONObject("thread") ?: JSONObject()
+            return ThreadLoadResult(
+                thread = decodeThreadSummary(threadObject),
+                messages = decodeMessagesFromThreadRead(threadId, threadObject),
+                runSnapshot = decodeThreadRunSnapshot(threadObject),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedThreadRollback(error)) {
+                throw IllegalStateException("This host bridge does not support native thread rollback yet. Update Androdex on the host and retry.")
+            }
+            throw error
+        }
+    }
+
+    suspend fun cleanBackgroundTerminals(threadId: String) {
+        if (!supportsBackgroundTerminalCleanup) {
+            throw IllegalStateException("This host bridge does not support native background terminal cleanup yet. Update Androdex on the host and retry.")
+        }
+
+        resumeThread(threadId)
+        try {
+            sendRequest(
+                "thread/backgroundTerminals/clean",
+                JSONObject().put("threadId", threadId),
+            )
+        } catch (error: RpcException) {
+            if (consumeUnsupportedBackgroundTerminalCleanup(error)) {
+                throw IllegalStateException("This host bridge does not support native background terminal cleanup yet. Update Androdex on the host and retry.")
+            }
+            throw error
+        }
     }
 
     suspend fun listRecentWorkspaces(): WorkspaceRecentState {
         val result = sendRequest("workspace/listRecent", JSONObject())
         return decodeWorkspaceRecentState(result)
+    }
+
+    suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        cancellationToken: String? = null,
+    ): List<FuzzyFileMatch> {
+        val normalizedQuery = query.trim()
+        val normalizedRoots = roots.map { it.trim() }.filter { it.isNotEmpty() }
+        if (normalizedQuery.isEmpty() || normalizedRoots.isEmpty()) {
+            return emptyList()
+        }
+
+        val params = JSONObject()
+            .put("query", normalizedQuery)
+            .put("roots", JSONArray(normalizedRoots))
+            .put("cancellationToken", cancellationToken?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+        val result = sendRequest("fuzzyFileSearch", params)
+        return decodeFuzzyFileMatches(result)
+    }
+
+    suspend fun listSkills(cwds: List<String>?): List<SkillMetadata> {
+        val normalizedCwds = cwds.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+        val params = JSONObject()
+        if (normalizedCwds.isNotEmpty()) {
+            params.put("cwds", JSONArray(normalizedCwds))
+        }
+
+        return try {
+            decodeSkillMetadata(sendRequest("skills/list", params))
+        } catch (error: RpcException) {
+            if (!shouldRetrySkillsListWithCwdFallback(error.message) || normalizedCwds.isEmpty()) {
+                throw error
+            }
+            decodeSkillMetadata(
+                sendRequest(
+                    "skills/list",
+                    JSONObject().put("cwd", normalizedCwds.first()),
+                )
+            )
+        }
     }
 
     suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
@@ -208,7 +457,122 @@ class AndrodexClient(
         return decodeWorkspaceActivationStatus(result)
     }
 
-    suspend fun loadThread(threadId: String): Pair<ThreadSummary?, List<ConversationMessage>> {
+    suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult {
+        return runGitRequest {
+            decodeGitRepoSyncResult(
+                sendRequest("git/status", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitDiff(workingDirectory: String): GitRepoDiffResult {
+        return runGitRequest {
+            decodeGitRepoDiffResult(
+                sendRequest("git/diff", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitCommit(
+        workingDirectory: String,
+        message: String,
+    ): GitCommitResult {
+        return runGitRequest {
+            decodeGitCommitResult(
+                sendRequest(
+                    "git/commit",
+                    gitParams(workingDirectory).put("message", message.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitPush(workingDirectory: String): GitPushResult {
+        return runGitRequest {
+            decodeGitPushResult(
+                sendRequest("git/push", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitPull(workingDirectory: String): GitPullResult {
+        return runGitRequest {
+            decodeGitPullResult(
+                sendRequest("git/pull", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
+        return runGitRequest {
+            decodeGitBranchesWithStatusResult(
+                sendRequest("git/branchesWithStatus", gitParams(workingDirectory))
+            )
+        }
+    }
+
+    suspend fun gitCheckout(
+        workingDirectory: String,
+        branch: String,
+    ): GitCheckoutResult {
+        return runGitRequest {
+            decodeGitCheckoutResult(
+                sendRequest(
+                    "git/checkout",
+                    gitParams(workingDirectory).put("branch", branch.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitCreateBranch(
+        workingDirectory: String,
+        name: String,
+    ): GitCreateBranchResult {
+        return runGitRequest {
+            decodeGitCreateBranchResult(
+                sendRequest(
+                    "git/createBranch",
+                    gitParams(workingDirectory).put("name", name.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun gitCreateWorktree(
+        workingDirectory: String,
+        name: String,
+        baseBranch: String,
+        changeTransfer: GitWorktreeChangeTransferMode,
+    ): GitCreateWorktreeResult {
+        return runGitRequest {
+            decodeGitCreateWorktreeResult(
+                sendRequest(
+                    "git/createWorktree",
+                    gitParams(workingDirectory)
+                        .put("name", name.trim())
+                        .put("baseBranch", baseBranch.trim())
+                        .put("changeTransfer", changeTransfer.wireValue),
+                )
+            )
+        }
+    }
+
+    suspend fun gitRemoveWorktree(
+        workingDirectory: String,
+        branch: String,
+    ): GitRemoveWorktreeResult {
+        return runGitRequest {
+            decodeGitRemoveWorktreeResult(
+                sendRequest(
+                    "git/removeWorktree",
+                    gitParams(workingDirectory).put("branch", branch.trim()),
+                )
+            )
+        }
+    }
+
+    suspend fun loadThread(threadId: String): ThreadLoadResult {
         resumeThread(threadId)
         return try {
             val result = sendRequest(
@@ -220,37 +584,180 @@ class AndrodexClient(
             val threadObject = result.optJSONObject("thread") ?: JSONObject()
             val summary = decodeThreadSummary(threadObject)
             val messages = decodeMessagesFromThreadRead(threadId, threadObject)
-            updatesFlow.emit(ClientUpdate.ThreadLoaded(summary, messages))
-            summary to messages
+            ThreadLoadResult(
+                thread = summary,
+                messages = messages,
+                runSnapshot = decodeThreadRunSnapshot(threadObject),
+            )
         } catch (error: RpcException) {
             val lowered = error.message.lowercase(Locale.US)
             if (
                 lowered.contains("not materialized yet")
                 || lowered.contains("includeturns is unavailable before first user message")
             ) {
-                updatesFlow.emit(ClientUpdate.ThreadLoaded(null, emptyList()))
-                null to emptyList()
+                ThreadLoadResult(
+                    thread = null,
+                    messages = emptyList(),
+                    runSnapshot = ThreadRunSnapshot(
+                        interruptibleTurnId = null,
+                        hasInterruptibleTurnWithoutId = false,
+                        latestTurnId = null,
+                        latestTurnTerminalState = null,
+                        shouldAssumeRunningFromLatestTurn = false,
+                    ),
+                )
             } else {
                 throw error
             }
         }
     }
 
-    suspend fun startTurn(threadId: String, userInput: String) {
+    suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
         resumeThread(threadId)
-        val params = JSONObject()
-            .put("threadId", threadId)
-            .put(
-                "input",
-                JSONArray().put(
-                    JSONObject()
-                        .put("type", "text")
-                        .put("text", userInput.trim())
-                )
+        val result = sendRequest(
+            "thread/read",
+            JSONObject()
+                .put("threadId", threadId)
+                .put("includeTurns", true),
+        )
+        val threadObject = result.optJSONObject("thread") ?: JSONObject()
+        return decodeThreadRunSnapshot(threadObject)
+    }
+
+    suspend fun startTurn(
+        threadId: String,
+        userInput: String,
+        attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
+        skillMentions: List<TurnSkillMention> = emptyList(),
+        collaborationMode: CollaborationModeKind? = null,
+    ) {
+        resumeThread(threadId)
+        var compatibility = TurnRequestCompatibilityState(
+            includeStructuredFileItems = fileMentions.isNotEmpty(),
+            includeStructuredSkillItems = skillMentions.isNotEmpty(),
+            collaborationMode = collaborationMode?.takeIf { it in collaborationModes },
+            includesServiceTier = supportsServiceTier,
+        )
+        while (true) {
+            val params = buildTurnStartParams(
+                threadId = threadId,
+                userInput = userInput,
+                attachments = attachments,
+                fileMentions = fileMentions,
+                skillMentions = skillMentions,
+                imageUrlKey = compatibility.imageUrlKey,
+                includeStructuredFileItems = compatibility.includeStructuredFileItems,
+                includeStructuredSkillItems = compatibility.includeStructuredSkillItems,
+                model = runtimeModelIdentifierForTurn(),
+                reasoningEffort = selectedReasoningEffortForThread(threadId),
+                serviceTier = if (compatibility.includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                collaborationMode = compatibility.collaborationMode,
             )
-        runtimeModelIdentifierForTurn()?.let { params.put("model", it) }
-        selectedReasoningEffortForSelectedModel()?.let { params.put("effort", it) }
-        sendRequest("turn/start", params)
+            try {
+                sendRequestWithAccessModeFallback("turn/start", params)
+                return
+            } catch (error: RpcException) {
+                compatibility.nextRetryState(error.message)?.let { nextCompatibility ->
+                    compatibility = nextCompatibility
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, compatibility.includesServiceTier)) {
+                    compatibility = compatibility.copy(includesServiceTier = false)
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    suspend fun startReview(
+        threadId: String,
+        target: ComposerReviewTarget,
+        baseBranch: String? = null,
+    ) {
+        resumeThread(threadId)
+        val params = buildReviewStartParams(
+            threadId = threadId,
+            target = target,
+            baseBranch = baseBranch,
+        )
+        sendRequestWithAccessModeFallback("review/start", params)
+    }
+
+    suspend fun steerTurn(
+        threadId: String,
+        expectedTurnId: String,
+        userInput: String,
+        attachments: List<ImageAttachment> = emptyList(),
+        fileMentions: List<TurnFileMention> = emptyList(),
+        skillMentions: List<TurnSkillMention> = emptyList(),
+        collaborationMode: CollaborationModeKind? = null,
+    ) {
+        resumeThread(threadId)
+        var compatibility = TurnRequestCompatibilityState(
+            includeStructuredFileItems = fileMentions.isNotEmpty(),
+            includeStructuredSkillItems = skillMentions.isNotEmpty(),
+            collaborationMode = collaborationMode?.takeIf { it in collaborationModes },
+            includesServiceTier = supportsServiceTier,
+        )
+        while (true) {
+            val params = buildTurnSteerParams(
+                threadId = threadId,
+                expectedTurnId = expectedTurnId,
+                userInput = userInput,
+                attachments = attachments,
+                fileMentions = fileMentions,
+                skillMentions = skillMentions,
+                imageUrlKey = compatibility.imageUrlKey,
+                includeStructuredFileItems = compatibility.includeStructuredFileItems,
+                includeStructuredSkillItems = compatibility.includeStructuredSkillItems,
+                model = runtimeModelIdentifierForTurn(),
+                reasoningEffort = selectedReasoningEffortForThread(threadId),
+                serviceTier = if (compatibility.includesServiceTier) runtimeServiceTierForThread(threadId) else null,
+                collaborationMode = compatibility.collaborationMode,
+            )
+            try {
+                sendRequestWithAccessModeFallback("turn/steer", params)
+                return
+            } catch (error: RpcException) {
+                compatibility.nextRetryState(error.message)?.let { nextCompatibility ->
+                    compatibility = nextCompatibility
+                    continue
+                }
+                if (consumeUnsupportedServiceTier(error, compatibility.includesServiceTier)) {
+                    compatibility = compatibility.copy(includesServiceTier = false)
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    suspend fun interruptTurn(threadId: String, turnId: String) {
+        sendRequest(
+            "turn/interrupt",
+            JSONObject()
+                .put("threadId", threadId)
+                .put("turnId", turnId),
+        )
+    }
+
+    suspend fun registerPushNotifications(
+        deviceToken: String,
+        alertsEnabled: Boolean,
+        authorizationStatus: String,
+        appEnvironment: String,
+    ) {
+        sendRequest(
+            "notifications/push/register",
+            JSONObject()
+                .put("deviceToken", deviceToken.trim())
+                .put("alertsEnabled", alertsEnabled)
+                .put("authorizationStatus", authorizationStatus.trim())
+                .put("devicePlatform", "android")
+                .put("appEnvironment", appEnvironment.trim())
+        )
     }
 
     suspend fun loadRuntimeConfig() {
@@ -266,6 +773,14 @@ class AndrodexClient(
         persistence.saveSelectedModelId(selectedModelId)
         persistence.saveSelectedReasoningEffort(selectedReasoningEffortForSelectedModel())
         emitRuntimeConfig()
+        val bridgeSnapshot = runCatching {
+            decodeHostAccountSnapshot(sendRequest("account/status/read", JSONObject()))
+        }.getOrNull()
+        hostAccountSnapshot = resolveInitialHostAccountSnapshot(
+            currentSnapshot = hostAccountSnapshot,
+            bridgeSnapshot = bridgeSnapshot,
+        )
+        emitAccountStatus()
     }
 
     suspend fun setSelectedModelId(modelId: String?) {
@@ -283,14 +798,56 @@ class AndrodexClient(
         emitRuntimeConfig()
     }
 
+    suspend fun setSelectedAccessMode(accessMode: AccessMode) {
+        selectedAccessMode = accessMode
+        persistence.saveSelectedAccessMode(accessMode)
+        emitRuntimeConfig()
+    }
+
+    suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) {
+        selectedServiceTier = serviceTier
+        persistence.saveSelectedServiceTier(serviceTier)
+        emitRuntimeConfig()
+    }
+
+    suspend fun setThreadRuntimeOverride(
+        threadId: String,
+        runtimeOverride: ThreadRuntimeOverride?,
+    ) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val normalizedOverride = runtimeOverride?.normalized()
+        if (normalizedOverride == null) {
+            threadRuntimeOverridesByThread = threadRuntimeOverridesByThread - normalizedThreadId
+        } else {
+            threadRuntimeOverridesByThread = threadRuntimeOverridesByThread + (normalizedThreadId to normalizedOverride)
+        }
+        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
+        emitRuntimeConfig()
+    }
+
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         sendResponse(request.idValue, if (accept) "accept" else "decline")
         updatesFlow.emit(ClientUpdate.ApprovalCleared)
     }
 
+    suspend fun respondToToolUserInput(
+        request: ToolUserInputRequest,
+        response: ToolUserInputResponse,
+    ) {
+        sendResponse(request.idValue, response.toJson())
+    }
+
+    suspend fun rejectToolUserInput(
+        request: ToolUserInputRequest,
+        message: String,
+    ) {
+        sendErrorResponse(request.idValue, -32602, message)
+    }
+
     private suspend fun connect(pairing: PairingPayload) {
         connectionLifecycleMutex.withLock {
             disconnectInternal(clearSavedPairing = false)
+            resetMaintenanceActionCapabilityDowngrades()
             updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTING, "Connecting to relay..."))
 
             val relayUrl = pairing.relay.trimEnd('/')
@@ -410,32 +967,27 @@ class AndrodexClient(
     }
 
     private suspend fun initializeSession() {
-        val clientInfo = JSONObject()
-            .put("name", "androdex_android")
-            .put("title", "Androdex Android")
-            .put("version", "0.1.0")
-
-        val modernParams = JSONObject()
-            .put("clientInfo", clientInfo)
-            .put(
-                "capabilities",
-                JSONObject().put("experimentalApi", true)
-            )
-
-        try {
-            sendRequest("initialize", modernParams)
-        } catch (error: RpcException) {
-            val lowered = error.message.lowercase(Locale.US)
-            if (
-                !lowered.contains("capabilities")
-                && !lowered.contains("experimentalapi")
-            ) {
-                throw error
-            }
-            sendRequest("initialize", JSONObject().put("clientInfo", clientInfo))
-        }
-
+        performInitializeSessionRequest { params -> sendRequest("initialize", params) }
         sendNotification("initialized", null)
+        refreshCollaborationModes()
+    }
+
+    private fun resetMaintenanceActionCapabilityDowngrades() {
+        val (nextSupportsThreadCompaction, nextSupportsThreadRollback, nextSupportsBackgroundTerminalCleanup) =
+            resetMaintenanceActionCapabilityFlags(
+                supportsThreadCompaction = supportsThreadCompaction,
+                supportsThreadRollback = supportsThreadRollback,
+                supportsBackgroundTerminalCleanup = supportsBackgroundTerminalCleanup,
+            )
+        val changed = nextSupportsThreadCompaction != supportsThreadCompaction
+            || nextSupportsThreadRollback != supportsThreadRollback
+            || nextSupportsBackgroundTerminalCleanup != supportsBackgroundTerminalCleanup
+        supportsThreadCompaction = nextSupportsThreadCompaction
+        supportsThreadRollback = nextSupportsThreadRollback
+        supportsBackgroundTerminalCleanup = nextSupportsBackgroundTerminalCleanup
+        if (changed) {
+            emitRuntimeConfig()
+        }
     }
 
     private suspend fun resumeThread(threadId: String) {
@@ -744,42 +1296,253 @@ class AndrodexClient(
     }
 
     private suspend fun handleServerRequest(method: String, idValue: Any, params: JSONObject?) {
-        if (
-            method == "item/commandExecution/requestApproval"
-            || method == "item/fileChange/requestApproval"
-            || method.endsWith("requestApproval")
-        ) {
-            updatesFlow.emit(
-                ClientUpdate.ApprovalRequested(
-                    ApprovalRequest(
-                        idValue = idValue,
-                        method = method,
-                        command = params?.stringOrNull("command"),
-                        reason = params?.stringOrNull("reason"),
-                        threadId = params?.stringOrNull("threadId", "thread_id"),
-                        turnId = params?.stringOrNull("turnId", "turn_id"),
+        when {
+            isApprovalRequestMethod(method) -> {
+                updatesFlow.emit(
+                    ClientUpdate.ApprovalRequested(
+                        ApprovalRequest(
+                            idValue = idValue,
+                            method = method,
+                            command = params?.stringOrNull("command"),
+                            reason = params?.stringOrNull("reason"),
+                            threadId = params?.stringOrNull("threadId", "thread_id"),
+                            turnId = params?.stringOrNull("turnId", "turn_id"),
+                        )
                     )
                 )
+            }
+
+            isToolUserInputRequestMethod(method) -> {
+                updatesFlow.emit(
+                    ClientUpdate.ToolUserInputRequested(
+                        decodeToolUserInputRequest(
+                            method = method,
+                            idValue = idValue,
+                            params = params,
+                        )
+                    )
+                )
+            }
+
+            else -> sendErrorResponse(idValue, -32601, "Unsupported request method: $method")
+        }
+    }
+
+    private fun decodeToolUserInputRequest(
+        method: String,
+        idValue: Any,
+        params: JSONObject?,
+    ): ToolUserInputRequest {
+        val candidateContainers = listOfNotNull(
+            params,
+            params?.objectOrNull("input"),
+            params?.objectOrNull("schema"),
+            params?.objectOrNull("request"),
+            params?.objectOrNull("input")?.objectOrNull("schema"),
+            params?.objectOrNull("msg", "event"),
+        )
+        val questions = candidateContainers.firstNotNullOfOrNull { container ->
+            container.arrayOrNull("questions")
+        }?.let(::decodeToolUserInputQuestions).orEmpty()
+
+        return ToolUserInputRequest(
+            idValue = idValue,
+            method = method,
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = extractItemId(params),
+            title = candidateContainers.firstNotNullOfOrNull { container ->
+                container.stringOrNull("title", "label", "prompt", "question")
+            },
+            message = candidateContainers.firstNotNullOfOrNull { container ->
+                container.stringOrNull("message", "description", "reason", "text")
+            },
+            questions = questions,
+            rawPayload = params?.toString() ?: "{}",
+        )
+    }
+
+    private fun decodeToolUserInputQuestions(questions: JSONArray): List<ToolUserInputQuestion> {
+        val decoded = mutableListOf<ToolUserInputQuestion>()
+        for (index in 0 until questions.length()) {
+            val candidate = questions.optJSONObject(index) ?: continue
+            val questionId = candidate.stringOrNull("id", "key", "name") ?: continue
+            val questionText = candidate.stringOrNull("question", "prompt", "label", "title") ?: continue
+            decoded += ToolUserInputQuestion(
+                id = questionId,
+                header = candidate.stringOrNull("header"),
+                question = questionText,
+                options = decodeToolUserInputOptions(candidate.arrayOrNull("options")),
+                isOther = candidate.booleanLikeOrFalse("isOther", "other", "allowOther"),
+                isSecret = candidate.booleanLikeOrFalse("isSecret", "secret"),
             )
-            return
+        }
+        return decoded
+    }
+
+    private fun decodeToolUserInputOptions(options: JSONArray?): List<ToolUserInputOption> {
+        if (options == null) {
+            return emptyList()
         }
 
-        sendErrorResponse(idValue, -32601, "Unsupported request method: $method")
+        val decoded = mutableListOf<ToolUserInputOption>()
+        for (index in 0 until options.length()) {
+            val optionObject = options.optJSONObject(index)
+            if (optionObject != null) {
+                val label = optionObject.stringOrNull("label") ?: continue
+                decoded += ToolUserInputOption(
+                    label = label,
+                    description = optionObject.stringOrNull("description"),
+                )
+                continue
+            }
+
+            val label = options.optString(index).trim()
+            if (label.isNotEmpty()) {
+                decoded += ToolUserInputOption(label = label)
+            }
+        }
+        return decoded
     }
 
     private suspend fun handleNotification(method: String, params: JSONObject?) {
-        when (method) {
+        if (handleThreadLifecycleNotification(method, params)) {
+            return
+        }
+        if (handleTurnLifecycleNotification(method, params)) {
+            return
+        }
+        if (handleRuntimeStatusNotification(method, params)) {
+            return
+        }
+        handleItemProtocolNotification(method, params)
+    }
+
+    private suspend fun handleThreadLifecycleNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
             "thread/started", "thread/name/updated", "thread/status/changed" -> {
+                if (method == "thread/started") {
+                    updatesFlow.emit(
+                        ClientUpdate.TurnStarted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                        )
+                    )
+                } else if (method == "thread/status/changed") {
+                    updatesFlow.emit(
+                        ClientUpdate.ThreadStatusChanged(
+                            threadId = extractThreadId(params),
+                            status = extractThreadStatus(params),
+                        )
+                    )
+                }
                 try {
                     listThreads()
                 } catch (_: Throwable) {
                 }
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private suspend fun handleTurnLifecycleNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
+            "turn/started" -> {
+                updatesFlow.emit(
+                    ClientUpdate.TurnStarted(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                    )
+                )
+                true
             }
 
             "turn/completed", "turn/failed", "error" -> {
-                updatesFlow.emit(ClientUpdate.TurnCompleted(extractThreadId(params)))
+                val threadId = extractThreadId(params)
+                val turnId = extractTurnId(params)
+                if (method == "error" && threadId.isNullOrBlank() && turnId.isNullOrBlank()) {
+                    extractTurnErrorMessage(params)?.let { updatesFlow.emit(ClientUpdate.Error(it)) }
+                    return true
+                }
+                val terminalState = when (method) {
+                    "turn/failed" -> TurnTerminalState.FAILED
+                    "error" -> if (extractWillRetry(params)) null else TurnTerminalState.FAILED
+                    else -> extractTurnTerminalState(params)
+                } ?: return true
+                updatesFlow.emit(
+                    ClientUpdate.TurnCompleted(
+                        threadId = threadId,
+                        turnId = turnId,
+                        terminalState = terminalState,
+                        errorMessage = extractTurnErrorMessage(params),
+                        willRetry = extractWillRetry(params),
+                    )
+                )
+                true
             }
 
+            "turn/plan/updated" -> {
+                val steps = extractPlanSteps(params)
+                if (steps.isNotEmpty()) {
+                    updatesFlow.emit(
+                        ClientUpdate.PlanUpdated(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            explanation = extractPlanExplanation(params),
+                            steps = steps,
+                        )
+                    )
+                }
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private suspend fun handleRuntimeStatusNotification(method: String, params: JSONObject?): Boolean {
+        return when (method) {
+            "thread/tokenUsage/updated" -> {
+                decodeThreadTokenUsage(params ?: JSONObject())?.let { usage ->
+                    updatesFlow.emit(
+                        ClientUpdate.TokenUsageUpdated(
+                            threadId = extractThreadId(params),
+                            usage = usage,
+                        )
+                    )
+                }
+                true
+            }
+
+            "account/updated", "account/login/completed", "account/rateLimits/updated" -> {
+                applyLiveHostAccountUpdate(extractHostAccountSnapshotPayload(params))
+                true
+            }
+
+            "skills/changed" -> {
+                updatesFlow.emit(
+                    ClientUpdate.SkillsChanged(
+                        cwds = extractSkillChangeCwds(params),
+                    )
+                )
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private suspend fun handleItemProtocolNotification(method: String, params: JSONObject?) {
+        if (emitSubagentActionUpdateIfPresent(method, params)) {
+            return
+        }
+        extractExecutionProtocolUpdate(method, params)?.let { update ->
+            updatesFlow.emit(update)
+            return
+        }
+        when (method) {
             "item/agentMessage/delta",
             "codex/event/agent_message_content_delta",
             "codex/event/agent_message_delta" -> {
@@ -794,7 +1557,55 @@ class AndrodexClient(
                 )
             }
 
+            "item/plan/delta" -> {
+                val delta = extractPlanDeltaText(params) ?: return
+                updatesFlow.emit(
+                    ClientUpdate.PlanDelta(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                        itemId = extractItemId(params),
+                        delta = delta,
+                    )
+                )
+            }
+
+            "item/reasoning/textDelta" -> {
+                val delta = extractReasoningDeltaText(params) ?: return
+                updatesFlow.emit(
+                    ClientUpdate.ReasoningDelta(
+                        threadId = extractThreadId(params),
+                        turnId = extractTurnId(params),
+                        itemId = extractItemId(params),
+                        delta = delta,
+                    )
+                )
+            }
+
             "item/completed", "codex/event/item_completed", "codex/event/agent_message" -> {
+                extractReasoningCompletedText(params)?.let { text ->
+                    updatesFlow.emit(
+                        ClientUpdate.ReasoningCompleted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            itemId = extractItemId(params),
+                            text = text,
+                        )
+                    )
+                    return
+                }
+                extractPlanCompletedContent(params)?.let { content ->
+                    updatesFlow.emit(
+                        ClientUpdate.PlanCompleted(
+                            threadId = extractThreadId(params),
+                            turnId = extractTurnId(params),
+                            itemId = extractItemId(params),
+                            text = content.text,
+                            explanation = content.explanation,
+                            steps = content.steps,
+                        )
+                    )
+                    return
+                }
                 val text = extractAssistantCompletedText(params) ?: return
                 updatesFlow.emit(
                     ClientUpdate.AssistantCompleted(
@@ -806,6 +1617,50 @@ class AndrodexClient(
                 )
             }
         }
+    }
+
+    private suspend fun emitSubagentActionUpdateIfPresent(method: String, params: JSONObject?): Boolean {
+        val action = extractSubagentAction(params) ?: return false
+        val normalizedMethod = normalizeItemType(method)
+        val isStreaming = !(
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || method == "codex/event/agent_message"
+        )
+        updatesFlow.emit(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = extractThreadId(params),
+                turnId = extractTurnId(params),
+                itemId = extractItemId(params),
+                action = action,
+                isStreaming = isStreaming,
+            )
+        )
+        return true
+    }
+
+    private suspend fun applyLiveHostAccountUpdate(payload: JSONObject?) {
+        val nativeSnapshot = payload?.let { rawPayload ->
+            applyHostAccountUpdatePayload(
+                currentSnapshot = hostAccountSnapshot,
+                payload = rawPayload,
+                origin = HostAccountSnapshotOrigin.NATIVE_LIVE,
+            )
+        }
+        val resolvedSnapshot = nativeSnapshot ?: run {
+            val bridgePayload = runCatching {
+                sendRequest("account/status/read", JSONObject())
+            }.getOrNull()
+            val bridgeSnapshot = bridgePayload?.let(::decodeHostAccountSnapshot)
+            resolveLiveHostAccountSnapshot(
+                currentSnapshot = hostAccountSnapshot,
+                bridgePayload = bridgePayload,
+                bridgeSnapshot = bridgeSnapshot,
+            )
+        }
+        hostAccountSnapshot = resolvedSnapshot
+        updatesFlow.emit(ClientUpdate.AccountStatusLoaded(snapshot = resolvedSnapshot))
     }
 
     private suspend fun sendRequest(method: String, params: JSONObject?): JSONObject {
@@ -832,6 +1687,57 @@ class AndrodexClient(
         return response.optJSONObject("result") ?: JSONObject()
     }
 
+    private suspend fun sendRequestWithApprovalPolicyFallback(
+        method: String,
+        baseParams: JSONObject,
+        context: String,
+    ): JSONObject {
+        var lastError: RpcException? = null
+        val policies = selectedAccessMode.approvalPolicyCandidates
+        for ((index, policy) in policies.withIndex()) {
+            val params = clonedJson(baseParams).put("approvalPolicy", policy)
+            try {
+                return sendRequest(method, params)
+            } catch (error: RpcException) {
+                lastError = error
+                if (index < policies.lastIndex && shouldRetryWithApprovalPolicyFallback(error.message)) {
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?: IllegalStateException("$method $context failed without a response.")
+    }
+
+    private suspend fun sendRequestWithAccessModeFallback(
+        method: String,
+        baseParams: JSONObject,
+    ): JSONObject {
+        var sandboxMode = AccessModeSandboxMode.SANDBOX_POLICY
+        while (true) {
+            val params = applyAccessModeParams(baseParams, selectedAccessMode, sandboxMode)
+            try {
+                return sendRequestWithApprovalPolicyFallback(
+                    method = method,
+                    baseParams = params,
+                    context = sandboxMode.name.lowercase(Locale.US),
+                )
+            } catch (error: RpcException) {
+                sandboxMode = when {
+                    sandboxMode == AccessModeSandboxMode.SANDBOX_POLICY && shouldFallbackFromSandboxPolicy(error.message) -> {
+                        AccessModeSandboxMode.LEGACY_SANDBOX
+                    }
+
+                    sandboxMode == AccessModeSandboxMode.LEGACY_SANDBOX && shouldFallbackFromSandboxPolicy(error.message) -> {
+                        AccessModeSandboxMode.MINIMAL
+                    }
+
+                    else -> throw error
+                }
+            }
+        }
+    }
+
     private suspend fun sendNotification(method: String, params: JSONObject?) {
         val payload = JSONObject().put("method", method)
         if (params != null) {
@@ -840,11 +1746,11 @@ class AndrodexClient(
         sendMessage(payload)
     }
 
-    private suspend fun sendResponse(idValue: Any, resultValue: String) {
+    private suspend fun sendResponse(idValue: Any, resultValue: Any?) {
         sendMessage(
             JSONObject()
                 .put("id", idValue)
-                .put("result", resultValue)
+                .put("result", resultValue.toJsonValue())
         )
     }
 
@@ -1005,6 +1911,45 @@ class AndrodexClient(
                 models = availableModels,
                 selectedModelId = selectedModelOption()?.stableIdentifier ?: selectedModelId,
                 selectedReasoningEffort = selectedReasoningEffortForSelectedModel(),
+                selectedAccessMode = selectedAccessMode,
+                selectedServiceTier = selectedServiceTier,
+                supportsServiceTier = supportsServiceTier,
+                supportsThreadCompaction = supportsThreadCompaction,
+                supportsThreadRollback = supportsThreadRollback,
+                supportsBackgroundTerminalCleanup = supportsBackgroundTerminalCleanup,
+                supportsThreadFork = supportsThreadFork,
+                collaborationModes = collaborationModes,
+                threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
+            )
+        )
+    }
+
+    private suspend fun refreshCollaborationModes() {
+        collaborationModes = try {
+            decodeCollaborationModes(sendRequest("collaborationMode/list", JSONObject()))
+        } catch (error: Throwable) {
+            val resolvedModes = resolveCollaborationModesAfterProbeFailure(
+                currentModes = collaborationModes,
+                failure = error,
+            )
+            if (resolvedModes == collaborationModes) {
+                Log.w(
+                    logTag,
+                    "collaborationMode/list probe failed; preserving ${collaborationModes.size} previously discovered mode(s)",
+                    error,
+                )
+            } else {
+                Log.i(logTag, "collaborationMode/list unsupported; clearing discovered collaboration modes")
+            }
+            resolvedModes
+        }
+        emitRuntimeConfig()
+    }
+
+    private fun emitAccountStatus() {
+        updatesFlow.tryEmit(
+            ClientUpdate.AccountStatusLoaded(
+                snapshot = hostAccountSnapshot,
             )
         )
     }
@@ -1057,10 +2002,107 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.let(::extractItemId)
     }
 
+    private fun extractExecutionProtocolUpdate(method: String, params: JSONObject?): ClientUpdate? {
+        return extractCommandExecutionUpdate(method, params)
+            ?: extractExecutionStyleUpdate(method, params)
+    }
+
+    private fun extractCommandExecutionUpdate(method: String, params: JSONObject?): ClientUpdate.CommandExecutionUpdate? {
+        val normalizedMethod = normalizeItemType(method)
+        val item = extractProtocolItemCandidate(params)
+        val methodLooksCommandLike = normalizedMethod.contains("commandexecution")
+            || normalizedMethod.contains("commandexec")
+            || normalizedMethod.contains("terminalcommand")
+        val itemLooksCommandLike = item?.let { isCommandExecutionItemType(it.optString("type")) } == true
+        if (!methodLooksCommandLike && !itemLooksCommandLike) {
+            return null
+        }
+
+        val source = item
+            ?: params?.objectOrNull("msg", "event")
+            ?: params
+            ?: return null
+        val commandData = decodeCommandExecutionContent(source)
+        val isStreaming = when {
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || normalizedMethod == "itemcompleted"
+                || normalizedMethod == "codexeventitemcompleted"
+                || normalizedMethod == "codexeventagentmessage" -> false
+            normalizedMethod.contains("delta") || normalizedMethod.contains("updated") -> true
+            else -> !isTerminalCommandStatus(commandData.status)
+        }
+        return ClientUpdate.CommandExecutionUpdate(
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = resolveExecutionUpdateItemId(params, item),
+            command = commandData.command,
+            status = commandData.status,
+            text = commandData.text,
+            isStreaming = isStreaming,
+            execution = commandData.execution,
+        )
+    }
+
+    private fun extractExecutionStyleUpdate(method: String, params: JSONObject?): ClientUpdate.ExecutionUpdate? {
+        val item = extractProtocolItemCandidate(params) ?: return null
+        if (!isExecutionStyleItemType(item.optString("type"))) {
+            return null
+        }
+
+        val normalizedMethod = normalizeItemType(method)
+        val executionData = decodeExecutionStyleContent(item)
+        val isStreaming = when {
+            normalizedMethod.contains("completed")
+                || normalizedMethod.contains("finished")
+                || normalizedMethod.contains("done")
+                || normalizedMethod == "itemcompleted"
+                || normalizedMethod == "codexeventitemcompleted"
+                || normalizedMethod == "codexeventagentmessage" -> false
+            normalizedMethod.contains("delta") || normalizedMethod.contains("updated") -> true
+            else -> !isTerminalCommandStatus(executionData.status)
+        }
+        return ClientUpdate.ExecutionUpdate(
+            threadId = extractThreadId(params),
+            turnId = extractTurnId(params),
+            itemId = resolveExecutionUpdateItemId(params, item),
+            text = executionData.text,
+            isStreaming = isStreaming,
+            execution = executionData.execution,
+        )
+    }
+
     private fun extractAssistantDeltaText(params: JSONObject?): String? {
         if (params == null) return null
         return params.stringOrNull("delta")
             ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
+    private fun extractPlanDeltaText(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("delta")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
+    private fun extractReasoningDeltaText(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("delta")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("delta")
+    }
+
+    private fun extractSubagentAction(params: JSONObject?): io.androdex.android.model.SubagentAction? {
+        if (params == null) return null
+        val candidateItems = listOfNotNull(
+            extractProtocolItemCandidate(params),
+            params.objectOrNull("msg", "event"),
+            params.objectOrNull("event"),
+            params,
+        )
+        candidateItems.forEach { candidate ->
+            decodeSubagentActionItem(candidate.toRawMap())?.let { return it }
+        }
+        return null
     }
 
     private fun extractAssistantCompletedText(params: JSONObject?): String? {
@@ -1077,6 +2119,153 @@ class AndrodexClient(
         }
         return params.stringOrNull("message")
             ?: params.objectOrNull("msg", "event")?.stringOrNull("message")
+    }
+
+    private fun extractReasoningCompletedText(params: JSONObject?): String? {
+        if (params == null) return null
+        val item = params.objectOrNull("item")
+            ?: params.objectOrNull("msg", "event")?.optJSONObject("item")
+            ?: return null
+        if (normalizeItemType(item.optString("type")) != "reasoning") {
+            return null
+        }
+        return decodeReasoningText(item)
+    }
+
+    private fun extractPlanCompletedContent(params: JSONObject?): DecodedPlanContent? {
+        if (params == null) return null
+        val item = params.objectOrNull("item")
+            ?: params.objectOrNull("msg", "event")?.optJSONObject("item")
+            ?: return null
+        if (normalizeItemType(item.optString("type")) != "plan") {
+            return null
+        }
+        return decodePlanContent(item)
+    }
+
+    private fun extractPlanExplanation(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("explanation")
+            ?: params.objectOrNull("msg", "event")?.stringOrNull("explanation")
+    }
+
+    private fun extractPlanSteps(params: JSONObject?): List<PlanStep> {
+        if (params == null) return emptyList()
+        val plan = params.optJSONArray("plan")
+            ?: params.objectOrNull("msg", "event")?.optJSONArray("plan")
+            ?: return emptyList()
+        return decodePlanSteps(plan)
+    }
+
+    private fun extractThreadStatus(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.objectOrNull("status")?.stringOrNull("type", "status")
+            ?: params.stringOrNull("status")
+            ?: params.objectOrNull("msg", "event")?.let(::extractThreadStatus)
+    }
+
+    private fun extractTurnErrorMessage(params: JSONObject?): String? {
+        if (params == null) return null
+        return params.stringOrNull("message", "error")
+            ?: params.objectOrNull("msg", "event")?.let(::extractTurnErrorMessage)
+    }
+
+    private fun extractWillRetry(params: JSONObject?): Boolean {
+        if (params == null) return false
+        return params.optBoolean("willRetry", params.optBoolean("will_retry", false))
+            || params.objectOrNull("msg", "event")?.let(::extractWillRetry) == true
+    }
+
+    private fun extractTurnTerminalState(params: JSONObject?): TurnTerminalState? {
+        val normalizedStatus = normalizeTurnStatus(
+            params?.objectOrNull("status")?.stringOrNull("type", "status")
+                ?: params?.stringOrNull("status")
+                ?: params?.objectOrNull("turn")?.stringOrNull("status")
+        )
+        return when {
+            normalizedStatus == null -> TurnTerminalState.COMPLETED
+            isStoppedTurnStatus(normalizedStatus) -> TurnTerminalState.STOPPED
+            isFailedTurnStatus(normalizedStatus) -> TurnTerminalState.FAILED
+            isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
+            else -> TurnTerminalState.COMPLETED
+        }
+    }
+
+    private fun extractHostAccountSnapshotPayload(params: JSONObject?): JSONObject? {
+        if (params == null) {
+            return null
+        }
+        val event = params.objectOrNull("msg", "event")
+        val candidates = listOfNotNull(
+            params.objectOrNull("account", "snapshot", "result"),
+            event?.objectOrNull("account", "snapshot", "result"),
+            params.takeIf(::looksLikeHostAccountSnapshot),
+            event?.takeIf(::looksLikeHostAccountSnapshot),
+        )
+        return candidates.firstOrNull()
+    }
+
+    private fun extractSkillChangeCwds(params: JSONObject?): List<String> {
+        if (params == null) {
+            return emptyList()
+        }
+        val event = params.objectOrNull("msg", "event")
+        val roots = params.arrayOrNull("cwds", "roots", "workspaces")
+            ?: event?.arrayOrNull("cwds", "roots", "workspaces")
+        if (roots != null) {
+            val decoded = mutableListOf<String>()
+            for (index in 0 until roots.length()) {
+                val value = roots.optString(index).trim()
+                if (value.isNotEmpty() && value !in decoded) {
+                    decoded += value
+                }
+            }
+            if (decoded.isNotEmpty()) {
+                return decoded
+            }
+        }
+        return listOfNotNull(
+            params.stringOrNull("cwd", "root", "workspace"),
+            event?.stringOrNull("cwd", "root", "workspace"),
+        ).distinct()
+    }
+
+    private fun isApprovalRequestMethod(method: String): Boolean {
+        return method == "item/commandExecution/requestApproval"
+            || method == "item/fileChange/requestApproval"
+            || method.endsWith("requestApproval")
+    }
+
+    private fun isToolUserInputRequestMethod(method: String): Boolean {
+        return normalizeItemType(method) == "itemtoolrequestuserinput"
+    }
+
+    private fun looksLikeHostAccountSnapshot(candidate: JSONObject): Boolean {
+        return listOf(
+            "status",
+            "state",
+            "email",
+            "authMethod",
+            "auth_method",
+            "planType",
+            "plan_type",
+            "loginInFlight",
+            "login_in_flight",
+            "needsReauth",
+            "needs_reauth",
+            "tokenReady",
+            "token_ready",
+            "rateLimits",
+            "rate_limits",
+            "limits",
+        ).any(candidate::has)
+    }
+
+    private fun isTerminalCommandStatus(status: String?): Boolean {
+        val normalizedStatus = status?.trim()?.lowercase(Locale.US) ?: return false
+        return isCompletedTurnStatus(normalizedStatus)
+            || isFailedTurnStatus(normalizedStatus)
+            || isStoppedTurnStatus(normalizedStatus)
     }
 
     private fun decodeThreadReadAssistantContent(item: JSONObject): String? {
@@ -1165,6 +2354,29 @@ class AndrodexClient(
         return selectedModelOption()?.model ?: fallbackModel()?.model
     }
 
+    private fun threadRuntimeOverrideFor(threadId: String?): ThreadRuntimeOverride? {
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return threadRuntimeOverridesByThread[normalizedThreadId]
+    }
+
+    private fun selectedReasoningEffortForThread(threadId: String?): String? {
+        val model = selectedModelOption() ?: fallbackModel() ?: return null
+        val supported = model.supportedReasoningEfforts.map { it.reasoningEffort }.toSet()
+        if (supported.isEmpty()) {
+            return null
+        }
+
+        val threadOverride = threadRuntimeOverrideFor(threadId)
+        val overriddenReasoning = threadOverride?.reasoningEffort
+            ?.trim()
+            ?.takeIf { threadOverride.overridesReasoning && it.isNotEmpty() && supported.contains(it) }
+        if (overriddenReasoning != null) {
+            return overriddenReasoning
+        }
+
+        return selectedReasoningEffortForSelectedModel()
+    }
+
     private fun selectedReasoningEffortForSelectedModel(): String? {
         val model = selectedModelOption() ?: fallbackModel() ?: return null
         val supported = model.supportedReasoningEfforts.map { it.reasoningEffort }.toSet()
@@ -1180,8 +2392,108 @@ class AndrodexClient(
         }
     }
 
+    private fun runtimeServiceTierForThread(threadId: String? = null): String? {
+        if (!supportsServiceTier) {
+            return null
+        }
+
+        val threadOverride = threadRuntimeOverrideFor(threadId)
+        if (threadOverride?.overridesServiceTier == true) {
+            return threadOverride.serviceTier?.wireValue
+        }
+
+        return selectedServiceTier?.wireValue
+    }
+
+    private fun inheritThreadRuntimeOverrides(
+        fromThreadId: String,
+        toThreadId: String,
+    ) {
+        val normalizedSourceThreadId = fromThreadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val normalizedDestinationThreadId = toThreadId.trim().takeIf { it.isNotEmpty() } ?: return
+        if (normalizedSourceThreadId == normalizedDestinationThreadId) {
+            return
+        }
+
+        val sourceOverride = threadRuntimeOverridesByThread[normalizedSourceThreadId]?.normalized()
+        threadRuntimeOverridesByThread = if (sourceOverride == null) {
+            threadRuntimeOverridesByThread - normalizedDestinationThreadId
+        } else {
+            threadRuntimeOverridesByThread + (normalizedDestinationThreadId to sourceOverride)
+        }
+        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
+        emitRuntimeConfig()
+    }
+
+    private fun consumeUnsupportedServiceTier(
+        error: RpcException,
+        includesServiceTier: Boolean,
+    ): Boolean {
+        if (!includesServiceTier || !shouldRetryWithoutServiceTier(error.code, error.message)) {
+            return false
+        }
+        supportsServiceTier = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadForkOverrides(
+        error: RpcException,
+        usesMinimalForkParams: Boolean,
+    ): Boolean {
+        return !usesMinimalForkParams && shouldRetryThreadForkWithoutOverrides(error.code, error.message)
+    }
+
+    private fun consumeUnsupportedThreadFork(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadFork(error.code, error.message)) {
+            return false
+        }
+        supportsThreadFork = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadCompaction(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadCompaction(error.code, error.message)) {
+            return false
+        }
+        supportsThreadCompaction = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedThreadRollback(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedThreadRollback(error.code, error.message)) {
+            return false
+        }
+        supportsThreadRollback = false
+        emitRuntimeConfig()
+        return true
+    }
+
+    private fun consumeUnsupportedBackgroundTerminalCleanup(error: RpcException): Boolean {
+        if (!shouldTreatAsUnsupportedBackgroundTerminalCleanup(error.code, error.message)) {
+            return false
+        }
+        supportsBackgroundTerminalCleanup = false
+        emitRuntimeConfig()
+        return true
+    }
+
     private suspend fun isCurrentSocket(candidate: WebSocket): Boolean {
         return socketMutex.withLock { webSocket === candidate }
+    }
+
+    private fun gitParams(workingDirectory: String): JSONObject {
+        return JSONObject().put("cwd", workingDirectory.trim())
+    }
+
+    private suspend fun <T> runGitRequest(block: suspend () -> T): T {
+        return try {
+            block()
+        } catch (error: RpcException) {
+            throw error.toGitOperationException()
+        }
     }
 
     private fun timeoutForMethod(method: String): Long {
@@ -1242,6 +2554,16 @@ class AndrodexClient(
     )
 }
 
+private fun AndrodexClient.RpcException.toGitOperationException(): GitOperationException {
+    val errorCode = data?.optString("errorCode")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: data?.optString("code")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: message.substringBefore(':').trim().takeIf { it.matches(Regex("[a-z0-9_]+")) }
+    return GitOperationException(
+        code = errorCode,
+        message = message.ifBlank { "Git operation failed." },
+    )
+}
+
 internal fun secureErrorConnectionUpdate(code: String, message: String): ClientUpdate.Connection {
     val status = when (code) {
         "update_required" -> ConnectionStatus.UPDATE_REQUIRED
@@ -1278,6 +2600,658 @@ internal fun connectionUpdateForSocketClose(
     }
 }
 
+internal fun buildTurnInputPayloadSpec(
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+): List<Map<String, Any?>> {
+    val payload = mutableListOf<Map<String, Any?>>()
+    attachments.forEach { attachment ->
+        val payloadDataUrl = attachment.payloadDataUrl?.trim()
+        if (payloadDataUrl.isNullOrEmpty()) {
+            return@forEach
+        }
+        payload += linkedMapOf(
+            "type" to "image",
+            imageUrlKey to payloadDataUrl,
+        )
+    }
+
+    val trimmedInput = userInput.trim()
+    if (trimmedInput.isNotEmpty()) {
+        payload += mapOf(
+            "type" to "text",
+            "text" to trimmedInput,
+        )
+    }
+
+    if (includeStructuredFileItems) {
+        fileMentions.forEach { mention ->
+            val normalizedPath = mention.path.trim()
+            if (normalizedPath.isEmpty()) {
+                return@forEach
+            }
+            val item = linkedMapOf<String, Any?>(
+                "type" to "file",
+                "path" to normalizedPath,
+            )
+            mention.name?.trim()?.takeIf { it.isNotEmpty() }?.let { item["name"] = it }
+            payload += item
+        }
+    }
+
+    if (includeStructuredSkillItems) {
+        skillMentions.forEach { mention ->
+            val normalizedSkillId = mention.id.trim()
+            if (normalizedSkillId.isEmpty()) {
+                return@forEach
+            }
+            val item = linkedMapOf<String, Any?>(
+                "type" to "skill",
+                "id" to normalizedSkillId,
+            )
+            mention.name?.trim()?.takeIf { it.isNotEmpty() }?.let { item["name"] = it }
+            mention.path?.trim()?.takeIf { it.isNotEmpty() }?.let { item["path"] = it }
+            payload += item
+        }
+    }
+    return payload
+}
+
+internal fun buildTurnInputPayload(
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+): JSONArray {
+    return buildTurnInputPayloadSpec(
+        userInput = userInput,
+        attachments = attachments,
+        fileMentions = fileMentions,
+        skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
+        includeStructuredSkillItems = includeStructuredSkillItems,
+    ).toJsonArray()
+}
+
+internal fun buildThreadStartParams(
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+): JSONObject {
+    return buildThreadStartPayloadSpec(
+        preferredProjectPath = preferredProjectPath,
+        model = model,
+        serviceTier = serviceTier,
+    ).toJsonObject()
+}
+
+internal fun buildThreadStartPayloadSpec(
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>()
+    preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params["cwd"] = it }
+    model?.trim()?.takeIf { it.isNotEmpty() }?.let { params["model"] = it }
+    serviceTier?.trim()?.takeIf { it.isNotEmpty() }?.let { params["serviceTier"] = it }
+    return params
+}
+
+internal fun buildThreadForkParams(
+    sourceThreadId: String,
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+    includeSandbox: Boolean = true,
+    usesMinimalForkParams: Boolean = false,
+    accessMode: AccessMode = AccessMode.ON_REQUEST,
+): JSONObject {
+    return buildThreadForkPayloadSpec(
+        sourceThreadId = sourceThreadId,
+        preferredProjectPath = preferredProjectPath,
+        model = model,
+        serviceTier = serviceTier,
+        includeSandbox = includeSandbox,
+        usesMinimalForkParams = usesMinimalForkParams,
+        accessMode = accessMode,
+    ).toJsonObject()
+}
+
+internal fun buildThreadForkPayloadSpec(
+    sourceThreadId: String,
+    preferredProjectPath: String? = null,
+    model: String? = null,
+    serviceTier: String? = null,
+    includeSandbox: Boolean = true,
+    usesMinimalForkParams: Boolean = false,
+    accessMode: AccessMode = AccessMode.ON_REQUEST,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to sourceThreadId,
+    )
+    if (usesMinimalForkParams) {
+        return params
+    }
+    preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }?.let { params["cwd"] = it }
+    model?.trim()?.takeIf { it.isNotEmpty() }?.let { params["model"] = it }
+    serviceTier?.trim()?.takeIf { it.isNotEmpty() }?.let { params["serviceTier"] = it }
+    if (includeSandbox) {
+        params["sandbox"] = accessMode.sandboxLegacyValue
+    }
+    return params
+}
+
+internal fun buildTurnStartParams(
+    threadId: String,
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+    model: String?,
+    reasoningEffort: String?,
+    serviceTier: String?,
+    collaborationMode: CollaborationModeKind?,
+): JSONObject {
+    return buildTurnStartPayloadSpec(
+        threadId = threadId,
+        userInput = userInput,
+        attachments = attachments,
+        fileMentions = fileMentions,
+        skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
+        includeStructuredSkillItems = includeStructuredSkillItems,
+        model = model,
+        reasoningEffort = reasoningEffort,
+        serviceTier = serviceTier,
+        collaborationMode = collaborationMode,
+    ).toJsonObject()
+}
+
+internal fun buildTurnStartPayloadSpec(
+    threadId: String,
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+    model: String?,
+    reasoningEffort: String?,
+    serviceTier: String?,
+    collaborationMode: CollaborationModeKind?,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to threadId,
+        "input" to buildTurnInputPayloadSpec(
+            userInput = userInput,
+            attachments = attachments,
+            fileMentions = fileMentions,
+            skillMentions = skillMentions,
+            imageUrlKey = imageUrlKey,
+            includeStructuredFileItems = includeStructuredFileItems,
+            includeStructuredSkillItems = includeStructuredSkillItems,
+        ),
+    )
+    model?.let { params["model"] = it }
+    reasoningEffort?.let { params["effort"] = it }
+    serviceTier?.let { params["serviceTier"] = it }
+    buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.let { params["collaborationMode"] = it }
+    return params
+}
+
+internal fun buildTurnSteerParams(
+    threadId: String,
+    expectedTurnId: String,
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+    model: String?,
+    reasoningEffort: String?,
+    serviceTier: String?,
+    collaborationMode: CollaborationModeKind?,
+): JSONObject {
+    return buildTurnSteerPayloadSpec(
+        threadId = threadId,
+        expectedTurnId = expectedTurnId,
+        userInput = userInput,
+        attachments = attachments,
+        fileMentions = fileMentions,
+        skillMentions = skillMentions,
+        imageUrlKey = imageUrlKey,
+        includeStructuredFileItems = includeStructuredFileItems,
+        includeStructuredSkillItems = includeStructuredSkillItems,
+        model = model,
+        reasoningEffort = reasoningEffort,
+        serviceTier = serviceTier,
+        collaborationMode = collaborationMode,
+    ).toJsonObject()
+}
+
+internal fun buildTurnSteerPayloadSpec(
+    threadId: String,
+    expectedTurnId: String,
+    userInput: String,
+    attachments: List<ImageAttachment> = emptyList(),
+    fileMentions: List<TurnFileMention> = emptyList(),
+    skillMentions: List<TurnSkillMention> = emptyList(),
+    imageUrlKey: String = "url",
+    includeStructuredFileItems: Boolean = true,
+    includeStructuredSkillItems: Boolean = true,
+    model: String?,
+    reasoningEffort: String?,
+    serviceTier: String?,
+    collaborationMode: CollaborationModeKind?,
+): Map<String, Any?> {
+    val params = linkedMapOf<String, Any?>(
+        "threadId" to threadId,
+        "expectedTurnId" to expectedTurnId,
+        "input" to buildTurnInputPayloadSpec(
+            userInput = userInput,
+            attachments = attachments,
+            fileMentions = fileMentions,
+            skillMentions = skillMentions,
+            imageUrlKey = imageUrlKey,
+            includeStructuredFileItems = includeStructuredFileItems,
+            includeStructuredSkillItems = includeStructuredSkillItems,
+        ),
+    )
+    reasoningEffort?.let { params["effort"] = it }
+    serviceTier?.let { params["serviceTier"] = it }
+    buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.let { params["collaborationMode"] = it }
+    return params
+}
+
+internal fun buildReviewStartParams(
+    threadId: String,
+    target: ComposerReviewTarget,
+    baseBranch: String? = null,
+): JSONObject {
+    return buildReviewStartPayloadSpec(
+        threadId = threadId,
+        target = target,
+        baseBranch = baseBranch,
+    ).toJsonObject()
+}
+
+internal fun buildReviewStartPayloadSpec(
+    threadId: String,
+    target: ComposerReviewTarget,
+    baseBranch: String? = null,
+): Map<String, Any?> {
+    val targetObject = linkedMapOf<String, Any?>(
+        "type" to when (target) {
+            ComposerReviewTarget.UNCOMMITTED_CHANGES -> "uncommittedChanges"
+            ComposerReviewTarget.BASE_BRANCH -> "baseBranch"
+        },
+    )
+    if (target == ComposerReviewTarget.BASE_BRANCH) {
+        val normalizedBaseBranch = baseBranch?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: throw IllegalArgumentException("Choose a base branch before starting this review.")
+        targetObject["branch"] = normalizedBaseBranch
+    }
+    return linkedMapOf(
+        "threadId" to threadId,
+        "delivery" to "inline",
+        "target" to targetObject,
+    )
+}
+
+internal fun buildCollaborationModePayload(
+    collaborationMode: CollaborationModeKind?,
+    model: String?,
+    reasoningEffort: String?,
+): JSONObject? {
+    return buildCollaborationModePayloadSpec(
+        collaborationMode = collaborationMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+    )?.toJsonObject()
+}
+
+internal fun buildInitializePayload(includeCapabilities: Boolean): JSONObject {
+    val clientInfo = JSONObject()
+        .put("name", "androdex_android")
+        .put("title", "Androdex Android")
+        .put("version", "0.1.0")
+    return JSONObject().put("clientInfo", clientInfo).apply {
+        if (includeCapabilities) {
+            put(
+                "capabilities",
+                JSONObject().put("experimentalApi", true)
+            )
+        }
+    }
+}
+
+internal suspend fun performInitializeSessionRequest(
+    sendInitializeRequest: suspend (JSONObject) -> Unit,
+) {
+    try {
+        sendInitializeRequest(buildInitializePayload(includeCapabilities = true))
+    } catch (error: AndrodexClient.RpcException) {
+        if (!shouldRetryInitializeWithoutCapabilities(error.message)) {
+            throw error
+        }
+        sendInitializeRequest(buildInitializePayload(includeCapabilities = false))
+    }
+}
+
+internal fun buildCollaborationModePayloadSpec(
+    collaborationMode: CollaborationModeKind?,
+    model: String?,
+    reasoningEffort: String?,
+): Map<String, Any?>? {
+    if (collaborationMode == null) {
+        return null
+    }
+    val resolvedModel = model?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw IllegalStateException("Plan mode requires an available model before starting a plan turn.")
+    return linkedMapOf(
+        "mode" to collaborationMode.wireValue,
+        "settings" to linkedMapOf(
+            "model" to resolvedModel,
+            "reasoning_effort" to reasoningEffort,
+            "developer_instructions" to null,
+        )
+    )
+}
+
+internal fun applyAccessModeParams(
+    baseParams: JSONObject,
+    accessMode: AccessMode,
+    sandboxMode: AccessModeSandboxMode,
+): JSONObject {
+    val params = clonedJson(baseParams)
+    when (sandboxMode) {
+        AccessModeSandboxMode.SANDBOX_POLICY -> {
+            params.put("sandboxPolicy", buildSandboxPolicyPayloadSpec(accessMode).toJsonObject())
+        }
+
+        AccessModeSandboxMode.LEGACY_SANDBOX -> {
+            params.put("sandbox", accessMode.sandboxLegacyValue)
+        }
+
+        AccessModeSandboxMode.MINIMAL -> Unit
+    }
+    return params
+}
+
+internal fun buildSandboxPolicyPayloadSpec(accessMode: AccessMode): Map<String, Any?> {
+    return when (accessMode) {
+        AccessMode.ON_REQUEST -> linkedMapOf(
+            "type" to "workspaceWrite",
+            "networkAccess" to true,
+        )
+
+        AccessMode.FULL_ACCESS -> linkedMapOf(
+            "type" to "dangerFullAccess",
+        )
+    }
+}
+
+internal enum class AccessModeSandboxMode {
+    SANDBOX_POLICY,
+    LEGACY_SANDBOX,
+    MINIMAL,
+}
+
+internal fun shouldRetryInitializeWithoutCapabilities(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsCapabilitiesField = normalizedMessage.contains("capabilities")
+        || normalizedMessage.contains("experimentalapi")
+    if (!mentionsCapabilitiesField) {
+        return false
+    }
+    return normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
+}
+
+internal fun resolveCollaborationModesAfterProbeFailure(
+    currentModes: Set<CollaborationModeKind>,
+    failure: Throwable,
+): Set<CollaborationModeKind> {
+    if (failure is AndrodexClient.RpcException &&
+        shouldTreatAsUnsupportedCollaborationModeList(failure.code, failure.message)
+    ) {
+        return emptySet()
+    }
+    return currentModes
+}
+
+internal fun shouldTreatAsUnsupportedCollaborationModeList(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode == -32601) {
+        return true
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsCollaborationModeList = normalizedMessage.contains("collaborationmode/list")
+        || normalizedMessage.contains("collaborationmode list")
+        || normalizedMessage.contains("collaboration mode list")
+        || normalizedMessage.contains("collaborationmode")
+        || normalizedMessage.contains("collaboration mode")
+    if (!mentionsCollaborationModeList) {
+        return false
+    }
+
+    val mentionsUnsupportedMethod = normalizedMessage.contains("method not found")
+        || normalizedMessage.contains("unknown method")
+        || normalizedMessage.contains("not implemented")
+        || normalizedMessage.contains("does not support")
+    val mentionsUnsupportedField = normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("not supported")
+
+    return mentionsUnsupportedMethod || mentionsUnsupportedField
+}
+
+internal fun shouldRetryWithApprovalPolicyFallback(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("approval")
+        || normalizedMessage.contains("unknown variant")
+        || normalizedMessage.contains("expected one of")
+        || normalizedMessage.contains("onrequest")
+        || normalizedMessage.contains("on-request")
+}
+
+internal fun shouldFallbackFromSandboxPolicy(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    if (normalizedMessage.contains("thread not found") || normalizedMessage.contains("unknown thread")) {
+        return false
+    }
+    if (!(normalizedMessage.contains("sandbox") || normalizedMessage.contains("sandboxpolicy"))) {
+        return false
+    }
+    return normalizedMessage.contains("invalid params")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("failed to parse")
+        || normalizedMessage.contains("unsupported")
+}
+
+private fun shouldRetrySkillsListWithCwdFallback(errorMessage: String?): Boolean {
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("cwds")
+        && (normalizedMessage.contains("unknown")
+        || normalizedMessage.contains("unsupported")
+        || normalizedMessage.contains("invalid")
+        || normalizedMessage.contains("field")
+        || normalizedMessage.contains("param"))
+}
+
+internal fun shouldRetryWithoutServiceTier(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode != -32600 && errorCode != -32602) {
+        return false
+    }
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    return normalizedMessage.contains("servicetier")
+        || normalizedMessage.contains("service tier")
+        || normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+        || normalizedMessage.contains("invalid param")
+        || normalizedMessage.contains("invalid params")
+}
+
+internal fun shouldRetryThreadForkWithoutOverrides(errorCode: Int, errorMessage: String?): Boolean {
+    if (errorCode != -32600 && errorCode != -32602 && errorCode != -32000) {
+        return false
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsUnknownField = normalizedMessage.contains("unknown field")
+        || normalizedMessage.contains("unexpected field")
+        || normalizedMessage.contains("unrecognized field")
+    val mentionsInvalidNamedField = (normalizedMessage.contains("invalid param") || normalizedMessage.contains("invalid params"))
+        && (normalizedMessage.contains("field") || normalizedMessage.contains("parameter") || normalizedMessage.contains("param"))
+    val mentionsForkOverride = normalizedMessage.contains("cwd")
+        || normalizedMessage.contains("modelprovider")
+        || normalizedMessage.contains("model provider")
+        || normalizedMessage.contains("model")
+        || normalizedMessage.contains("sandbox")
+        || normalizedMessage.contains("servicetier")
+        || normalizedMessage.contains("service tier")
+
+    return (mentionsUnknownField || mentionsInvalidNamedField) && mentionsForkOverride
+}
+
+internal fun shouldTreatAsUnsupportedThreadFork(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/fork", "thread fork"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedThreadCompaction(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/compact/start", "thread compact", "context compaction", "compaction"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedThreadRollback(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf("thread/rollback", "thread rollback", "rollback"),
+    )
+}
+
+internal fun shouldTreatAsUnsupportedBackgroundTerminalCleanup(errorCode: Int, errorMessage: String?): Boolean {
+    return shouldTreatAsUnsupportedThreadMethod(
+        errorCode = errorCode,
+        errorMessage = errorMessage,
+        methodHints = listOf(
+            "thread/backgroundterminals/clean",
+            "background terminals",
+            "background terminal",
+            "terminal cleanup",
+            "terminal clean",
+        ),
+    )
+}
+
+private fun shouldTreatAsUnsupportedThreadMethod(
+    errorCode: Int,
+    errorMessage: String?,
+    methodHints: List<String>,
+): Boolean {
+    if (errorCode == -32601) {
+        return true
+    }
+
+    val normalizedMessage = errorMessage?.lowercase(Locale.US).orEmpty()
+    val mentionsUnsupportedMethod = normalizedMessage.contains("method not found")
+        || normalizedMessage.contains("unknown method")
+        || normalizedMessage.contains("not implemented")
+        || normalizedMessage.contains("does not support")
+    val mentionsSpecificUnsupported = methodHints.any { normalizedMessage.contains(it) }
+        && (normalizedMessage.contains("unsupported") || normalizedMessage.contains("not supported"))
+
+    if (errorCode != -32600 && errorCode != -32602 && errorCode != -32000) {
+        return mentionsUnsupportedMethod || mentionsSpecificUnsupported
+    }
+
+    return mentionsUnsupportedMethod || mentionsSpecificUnsupported
+}
+
+private fun Map<String, Any?>.toJsonObject(): JSONObject {
+    val jsonObject = JSONObject()
+    entries.forEach { (key, value) ->
+        jsonObject.put(key, value.toJsonValue())
+    }
+    return jsonObject
+}
+
+private fun clonedJson(value: JSONObject): JSONObject {
+    return JSONObject(value.toString())
+}
+
+private fun List<*>.toJsonArray(): JSONArray {
+    val jsonArray = JSONArray()
+    forEach { item ->
+        jsonArray.put(item.toJsonValue())
+    }
+    return jsonArray
+}
+
+private fun Any?.toJsonValue(): Any {
+    return when (this) {
+        null -> JSONObject.NULL
+        is Map<*, *> -> {
+            val normalizedMap = linkedMapOf<String, Any?>()
+            entries.forEach { (key, value) ->
+                if (key is String) {
+                    normalizedMap[key] = value
+                }
+            }
+            normalizedMap.toJsonObject()
+        }
+
+        is List<*> -> toJsonArray()
+        else -> this
+    }
+}
+
 internal fun connectionUpdateForSocketFailure(
     savedPairingAvailable: Boolean,
     errorMessage: String?,
@@ -1298,4 +3272,293 @@ internal fun connectionUpdateForSocketFailure(
             errorMessage ?: "Relay connection failed."
         },
     )
+}
+
+private fun decodeThreadRunSnapshot(threadObject: JSONObject): ThreadRunSnapshot {
+    val turns = threadObject.optJSONArray("turns") ?: JSONArray()
+    var interruptibleTurnId: String? = null
+    var hasInterruptibleTurnWithoutId = false
+    var latestTurnId: String? = null
+    var latestTurnTerminalState: TurnTerminalState? = null
+    var shouldAssumeRunningFromLatestTurn = false
+
+    for (index in turns.length() - 1 downTo 0) {
+        val turnObject = turns.optJSONObject(index) ?: continue
+        val turnId = turnObject.stringOrNull("id", "turnId", "turn_id")
+        val normalizedStatus = normalizeTurnStatus(
+            turnObject.stringOrNull("status")
+                ?: turnObject.optJSONObject("status")?.stringOrNull("type", "status")
+        )
+
+        if (latestTurnId == null && !turnId.isNullOrBlank()) {
+            latestTurnId = turnId
+            latestTurnTerminalState = terminalStateForStatus(normalizedStatus)
+            shouldAssumeRunningFromLatestTurn = normalizedStatus == null
+        }
+
+        if (normalizedStatus == null) {
+            continue
+        }
+        if (!isInterruptibleTurnStatus(normalizedStatus)) {
+            continue
+        }
+
+        if (!turnId.isNullOrBlank()) {
+            interruptibleTurnId = turnId
+            break
+        }
+        hasInterruptibleTurnWithoutId = true
+    }
+
+    return ThreadRunSnapshot(
+        interruptibleTurnId = interruptibleTurnId,
+        hasInterruptibleTurnWithoutId = hasInterruptibleTurnWithoutId,
+        latestTurnId = latestTurnId,
+        latestTurnTerminalState = latestTurnTerminalState,
+        shouldAssumeRunningFromLatestTurn = shouldAssumeRunningFromLatestTurn,
+    )
+}
+
+internal fun resolveExecutionUpdateItemId(
+    params: JSONObject?,
+    item: JSONObject?,
+): String? {
+    val directItemId = params?.stringOrNull("itemId", "item_id", "messageId", "message_id")
+        ?: params?.optJSONObject("item")?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+        ?: params?.objectOrNull("msg", "event")?.let { nested ->
+            nested.stringOrNull("itemId", "item_id", "messageId", "message_id")
+                ?: nested.optJSONObject("item")?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+        }
+    return directItemId
+        ?: item?.stringOrNull("id", "itemId", "item_id", "messageId", "message_id")
+}
+
+internal fun resolveInitialHostAccountSnapshot(
+    currentSnapshot: HostAccountSnapshot?,
+    bridgeSnapshot: HostAccountSnapshot?,
+): HostAccountSnapshot {
+    return when {
+        bridgeSnapshot != null -> bridgeSnapshot.copy(origin = HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP)
+        currentSnapshot != null -> currentSnapshot
+        else -> HostAccountSnapshot(
+            status = HostAccountStatus.UNAVAILABLE,
+            origin = HostAccountSnapshotOrigin.BRIDGE_BOOTSTRAP,
+        )
+    }
+}
+
+internal fun resolveLiveHostAccountSnapshot(
+    currentSnapshot: HostAccountSnapshot?,
+    bridgePayload: JSONObject?,
+    bridgeSnapshot: HostAccountSnapshot?,
+): HostAccountSnapshot? {
+    return when {
+        bridgeSnapshot != null -> mergeHostAccountSnapshot(
+            base = bridgeSnapshot.copy(origin = HostAccountSnapshotOrigin.BRIDGE_FALLBACK),
+            fallback = currentSnapshot,
+            sparseBridgePayload = bridgePayload,
+        )
+        else -> currentSnapshot
+    }
+}
+
+internal fun applyHostAccountUpdatePayload(
+    currentSnapshot: HostAccountSnapshot?,
+    payload: JSONObject,
+    origin: HostAccountSnapshotOrigin,
+): HostAccountSnapshot? {
+    val decodedSnapshot = decodeHostAccountSnapshot(payload)
+    val decodedStatus = payload.decodedHostAccountStatusOrNull()
+    val canSeedFromPayload = currentSnapshot != null || payload.hasAnyKey(
+        "status",
+        "state",
+        "email",
+        "authMethod",
+        "auth_method",
+        "planType",
+        "plan_type",
+        "loginInFlight",
+        "login_in_flight",
+        "needsReauth",
+        "needs_reauth",
+        "tokenReady",
+        "token_ready",
+    )
+    val canSeedDecodedSnapshot = canSeedFromPayload && (!payload.hasAnyKey("status", "state") || decodedStatus != null)
+    val seed = currentSnapshot ?: decodedSnapshot?.takeIf { canSeedDecodedSnapshot } ?: return null
+    val resolvedStatus = if (payload.hasAnyKey("status", "state")) {
+        decodedStatus ?: seed.status
+    } else {
+        seed.status
+    }
+
+    return seed.copy(
+        status = resolvedStatus,
+        authMethod = if (payload.hasAnyKey("authMethod", "auth_method")) {
+            payload.stringOrNull("authMethod", "auth_method")
+        } else {
+            seed.authMethod
+        },
+        email = if (payload.has("email")) {
+            payload.stringOrNull("email")
+        } else {
+            seed.email
+        },
+        planType = if (payload.hasAnyKey("planType", "plan_type")) {
+            payload.stringOrNull("planType", "plan_type")
+        } else {
+            seed.planType
+        },
+        loginInFlight = if (payload.hasAnyKey("loginInFlight", "login_in_flight")) {
+            payload.booleanValueOrDefault(
+                defaultValue = seed.loginInFlight,
+                names = arrayOf("loginInFlight", "login_in_flight"),
+            )
+        } else {
+            seed.loginInFlight
+        },
+        needsReauth = if (payload.hasAnyKey("needsReauth", "needs_reauth")) {
+            payload.booleanValueOrDefault(
+                defaultValue = seed.needsReauth,
+                names = arrayOf("needsReauth", "needs_reauth"),
+            )
+        } else {
+            seed.needsReauth
+        },
+        tokenReady = if (payload.hasAnyKey("tokenReady", "token_ready")) {
+            payload.optionalBooleanValue("tokenReady", "token_ready")
+        } else {
+            seed.tokenReady
+        },
+        expiresAtEpochMs = if (payload.hasAnyKey("expiresAt", "expires_at")) {
+            decodedSnapshot?.expiresAtEpochMs
+        } else {
+            seed.expiresAtEpochMs
+        },
+        bridgeVersion = if (
+            payload.hasAnyKey("bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version")
+        ) {
+            payload.stringOrNull("bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version")
+        } else {
+            seed.bridgeVersion
+        },
+        bridgeLatestVersion = if (
+            payload.hasAnyKey(
+                "bridgeLatestVersion",
+                "bridge_latest_version",
+                "bridgePublishedVersion",
+                "bridge_published_version",
+            )
+        ) {
+            payload.stringOrNull(
+                "bridgeLatestVersion",
+                "bridge_latest_version",
+                "bridgePublishedVersion",
+                "bridge_published_version",
+            )
+        } else {
+            seed.bridgeLatestVersion
+        },
+        rateLimits = if (payload.hasAnyKey("rateLimits", "rate_limits", "limits", "buckets")) {
+            decodeHostRateLimitBuckets(payload)
+        } else {
+            seed.rateLimits
+        },
+        origin = origin,
+    )
+}
+
+internal fun mergeHostAccountSnapshot(
+    base: HostAccountSnapshot?,
+    fallback: HostAccountSnapshot?,
+    sparseBridgePayload: JSONObject? = null,
+): HostAccountSnapshot? {
+    if (base == null) {
+        return fallback
+    }
+    if (fallback == null) {
+        return base
+    }
+
+    val preserveLoginInFlight = sparseBridgePayload?.hasAnyKey("loginInFlight", "login_in_flight") != true
+    val preserveNeedsReauth = sparseBridgePayload?.hasAnyKey("needsReauth", "needs_reauth") != true
+    val preserveTokenReady = sparseBridgePayload?.hasAnyKey("tokenReady", "token_ready") != true
+
+    return base.copy(
+        status = if (base.status == HostAccountStatus.UNKNOWN) fallback.status else base.status,
+        authMethod = base.authMethod ?: fallback.authMethod,
+        email = base.email ?: fallback.email,
+        planType = base.planType ?: fallback.planType,
+        loginInFlight = if (preserveLoginInFlight) fallback.loginInFlight else base.loginInFlight,
+        needsReauth = if (preserveNeedsReauth) fallback.needsReauth else base.needsReauth,
+        tokenReady = if (preserveTokenReady) fallback.tokenReady else base.tokenReady,
+        expiresAtEpochMs = base.expiresAtEpochMs ?: fallback.expiresAtEpochMs,
+        bridgeVersion = base.bridgeVersion ?: fallback.bridgeVersion,
+        bridgeLatestVersion = base.bridgeLatestVersion ?: fallback.bridgeLatestVersion,
+        rateLimits = if (base.rateLimits.isNotEmpty()) base.rateLimits else fallback.rateLimits,
+    )
+}
+
+private fun normalizeTurnStatus(rawStatus: String?): String? {
+    return rawStatus?.trim()?.lowercase(Locale.US)?.takeIf { it.isNotEmpty() }
+}
+
+private fun isInterruptibleTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("in_progress", "running", "active", "queued")
+        || normalizedStatus.contains("progress")
+        || normalizedStatus.contains("running")
+}
+
+private fun isCompletedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("completed", "complete", "done", "success", "succeeded")
+        || normalizedStatus.contains("complete")
+        || normalizedStatus.contains("success")
+}
+
+private fun isFailedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("failed", "error")
+        || normalizedStatus.contains("fail")
+        || normalizedStatus.contains("error")
+    }
+
+private fun isStoppedTurnStatus(normalizedStatus: String): Boolean {
+    return normalizedStatus in setOf("stopped", "interrupted", "cancelled", "canceled")
+        || normalizedStatus.contains("stop")
+        || normalizedStatus.contains("interrupt")
+        || normalizedStatus.contains("cancel")
+}
+
+private fun terminalStateForStatus(normalizedStatus: String?): TurnTerminalState? {
+    return when {
+        normalizedStatus == null -> null
+        isStoppedTurnStatus(normalizedStatus) -> TurnTerminalState.STOPPED
+        isFailedTurnStatus(normalizedStatus) -> TurnTerminalState.FAILED
+        isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
+        else -> null
+    }
+}
+
+private fun JSONObject.hasAnyKey(vararg names: String): Boolean {
+    return names.any(::has)
+}
+
+private fun JSONObject.booleanValueOrDefault(
+    defaultValue: Boolean,
+    names: Array<String>,
+): Boolean {
+    val firstKey = names.firstOrNull { has(it) } ?: return defaultValue
+    return optBoolean(firstKey, defaultValue)
+}
+
+private fun JSONObject.optionalBooleanValue(vararg names: String): Boolean? {
+    val firstKey = names.firstOrNull { has(it) } ?: return null
+    val rawValue = opt(firstKey)
+    return when (rawValue) {
+        null,
+        JSONObject.NULL -> null
+        is Boolean -> rawValue
+        is String -> rawValue.equals("true", ignoreCase = true)
+        is Number -> rawValue.toInt() != 0
+        else -> null
+    }
 }
