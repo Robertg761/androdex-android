@@ -26,19 +26,20 @@ This file records the verified Android-side screenshots gathered during the live
 
 | Android artifact | What it shows | Notes |
 | --- | --- | --- |
-| `android-device-captures/phase1/phase1-pairing-refresh.png` | Pairing / saved-reconnect shell after the semantic token pass | Captured from a cold app launch while the saved reconnect handshake was still in progress, so the refreshed pairing hero, buttons, status capsule, and recovery cards are all visible together. |
+| `android-device-captures/phase1/phase1-pairing-refresh.png` | Pairing / saved-reconnect shell after the semantic token pass | Accepted as the Phase 1 visual anchor for the refreshed pairing shell. Its paired UI dump can be re-captured later without blocking the design-system phase sign-off. |
 | `android-device-captures/phase1/phase1-home-refresh.png` | Connected home shell after the semantic token pass | Captured after the reconnect settled, showing the refreshed landing hero, status capsule, project card, and recent-thread styling on the live device. |
-| `android-device-captures/phase1/phase1-sidebar-open-refresh.png` | Sidebar open state after the semantic token pass | Captured from the refreshed build with the drawer open so the updated header, search shell, grouped rows, and footer chrome are anchored to the same phase 1 token and primitive pass. |
+| `android-device-captures/phase1/phase1-sidebar-open-refresh.png` | Sidebar open state after the semantic token pass | Re-captured live from the verified Androdex drawer state after the earlier saved artifact drifted out of app context. This is the current Phase 1 sidebar reference for the refreshed header, search shell, grouped rows, and footer chrome. |
 
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
-- The Phase 1 refresh pass also added `android-device-captures/phase1/phase1-pairing-refresh.xml`, `android-device-captures/phase1/phase1-home-refresh.xml`, and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
+- Verified Phase 1 refresh dumps currently include `android-device-captures/phase1/phase1-home-refresh.xml` and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
+- `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
 
 ## Notes
 
-- Two earlier captures drifted into Google Messages and were removed from the reference set instead of being reused.
+- A stale Phase 1 sidebar refresh artifact drifted out of app context and was replaced with a live Androdex recapture; earlier non-Androdex captures remain excluded from the reference set.
 - The Android captures are counterpart references for Androdex, not canonical Remodex screenshots.
-- We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants.
+- We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 1 blockers.
