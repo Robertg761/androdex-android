@@ -76,6 +76,7 @@ data class AndrodexServiceState(
     val connectionDetail: String? = null,
     val secureFingerprint: String? = null,
     val threads: List<ThreadSummary> = emptyList(),
+    val hasLoadedThreadList: Boolean = false,
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
     val timelineByThread: Map<String, List<ConversationMessage>> = emptyMap(),
@@ -185,6 +186,14 @@ class AndrodexService(
     suspend fun connectWithPairingPayload(rawPayload: String) {
         suppressSavedReconnect = false
         cancelSavedReconnectRetry()
+        stateFlow.update {
+            it.copy(
+                threads = emptyList(),
+                hasLoadedThreadList = false,
+                selectedThreadId = null,
+                selectedThreadTitle = null,
+            )
+        }
         repository.connectWithPairingPayload(rawPayload)
         refreshThreadsInternal()
         loadWorkspaceState()
@@ -805,6 +814,8 @@ class AndrodexService(
                         hasSavedPairing = update.hasSavedPairing,
                         trustedPairSnapshot = repository.currentTrustedPairSnapshot(),
                         secureFingerprint = update.fingerprint,
+                        threads = if (update.hasSavedPairing) it.threads else emptyList(),
+                        hasLoadedThreadList = if (update.hasSavedPairing) it.hasLoadedThreadList else false,
                     )
                 }
                 if (!update.hasSavedPairing) {
@@ -818,6 +829,7 @@ class AndrodexService(
                 stateFlow.update { current ->
                     current.copy(
                         threads = update.threads,
+                        hasLoadedThreadList = true,
                         selectedThreadTitle = update.threads.firstOrNull { it.id == current.selectedThreadId }?.title
                             ?: current.selectedThreadTitle,
                     )

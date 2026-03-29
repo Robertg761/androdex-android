@@ -103,6 +103,7 @@ class AndrodexFeatureStateTest {
     fun homeRoute_formatsThreadListAndProjectPickerState() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,
+            hasLoadedThreadList = true,
             trustedPairSnapshot = TrustedPairSnapshot(
                 deviceId = "host-1234",
                 relayUrl = "wss://relay.example.com/socket",
@@ -159,6 +160,36 @@ class AndrodexFeatureStateTest {
             WorkspaceRowAction.ACTIVATE,
             route.state.projectPicker?.browserEntries?.single()?.action,
         )
+    }
+
+    @Test
+    fun homeRoute_keepsThreadListInLoadingStateUntilFirstSuccessfulThreadSync() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            threads = emptyList(),
+            hasLoadedThreadList = false,
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Home
+
+        assertTrue(route.state.threadList.isLoading)
+        assertEquals(null, route.state.threadList.emptyState)
+    }
+
+    @Test
+    fun homeRoute_showsEmptyStateAfterLoadedEmptyThreadSync() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            threads = emptyList(),
+            hasLoadedThreadList = true,
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Home
+
+        assertFalse(route.state.threadList.isLoading)
+        assertEquals("No conversations yet", route.state.threadList.emptyState?.title)
     }
 
     @Test
