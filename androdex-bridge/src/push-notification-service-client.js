@@ -9,6 +9,7 @@ const DEFAULT_PUSH_SERVICE_TIMEOUT_MS = 10_000;
 function createPushNotificationServiceClient({
   baseUrl = "",
   sessionId,
+  notificationSecret = "",
   fetchImpl = globalThis.fetch,
   logPrefix = "[androdex]",
   requestTimeoutMs = DEFAULT_PUSH_SERVICE_TIMEOUT_MS,
@@ -23,6 +24,7 @@ function createPushNotificationServiceClient({
   } = {}) {
     return postJSON("/v1/push/session/register-device", {
       sessionId,
+      ...(notificationSecret ? { notificationSecret } : {}),
       deviceToken,
       alertsEnabled,
       devicePlatform,
@@ -40,6 +42,7 @@ function createPushNotificationServiceClient({
   } = {}) {
     return postJSON("/v1/push/session/notify-completion", {
       sessionId,
+      ...(notificationSecret ? { notificationSecret } : {}),
       threadId,
       turnId,
       result,

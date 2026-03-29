@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
+COPY push-service.js ./push-service.js
 COPY relay.js ./relay.js
 COPY server.js ./server.js
 

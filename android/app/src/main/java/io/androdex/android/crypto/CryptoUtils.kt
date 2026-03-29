@@ -18,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec
 const val secureProtocolVersion = 1
 const val pairingQrVersion = 3
 const val secureHandshakeTag = "androdex-e2ee-v1"
+const val trustedSessionResolveTag = "androdex-trusted-session-resolve-v1"
 private const val secureHandshakeLabel = "client-auth"
 const val secureClockSkewToleranceSeconds = 60L
 
@@ -68,6 +69,23 @@ fun buildTranscriptBytes(
 
 fun buildClientAuthTranscript(transcriptBytes: ByteArray): ByteArray {
     return transcriptBytes + encodeLengthPrefixedUtf8(secureHandshakeLabel)
+}
+
+fun buildTrustedSessionResolveTranscript(
+    macDeviceId: String,
+    phoneDeviceId: String,
+    phoneIdentityPublicKey: String,
+    nonce: String,
+    timestamp: Long,
+): ByteArray {
+    return buildList {
+        add(encodeLengthPrefixedUtf8(trustedSessionResolveTag))
+        add(encodeLengthPrefixedUtf8(macDeviceId))
+        add(encodeLengthPrefixedUtf8(phoneDeviceId))
+        add(encodeLengthPrefixedBuffer(decodeBase64(phoneIdentityPublicKey)))
+        add(encodeLengthPrefixedUtf8(nonce))
+        add(encodeLengthPrefixedUtf8(timestamp.toString()))
+    }.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
 }
 
 fun generateX25519PrivateKey(): X25519PrivateKeyParameters = X25519PrivateKeyParameters(secureRandom)

@@ -5,6 +5,7 @@ import io.androdex.android.crypto.aesGcmDecrypt
 import io.androdex.android.crypto.aesGcmEncrypt
 import io.androdex.android.crypto.buildClientAuthTranscript
 import io.androdex.android.crypto.buildTranscriptBytes
+import io.androdex.android.crypto.buildTrustedSessionResolveTranscript
 import io.androdex.android.crypto.decodeBase64
 import io.androdex.android.crypto.deriveSharedSecret
 import io.androdex.android.crypto.encodeBase64
@@ -78,8 +79,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -87,6 +90,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URI
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
@@ -96,6 +100,7 @@ private const val handshakeModeQrBootstrap = "qr_bootstrap"
 private const val handshakeModeTrustedReconnect = "trusted_reconnect"
 private const val relayOpenTimeoutMs = 12_000L
 private const val secureHandshakeTimeoutMs = 20_000L
+private const val trustedSessionResolveTimeoutMs = 8_000L
 private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
@@ -191,7 +196,7 @@ class AndrodexClient(
 
     suspend fun reconnectSaved() {
         val pairing = savedPairingPayload ?: throw IllegalStateException("No saved pairing is available.")
-        connect(pairing)
+        connect(resolveTrustedPairing(pairing))
     }
 
     suspend fun disconnect(clearSavedPairing: Boolean = false) {
@@ -943,6 +948,88 @@ class AndrodexClient(
                 )
             )
         }
+    }
+
+    private suspend fun resolveTrustedPairing(pairing: PairingPayload): PairingPayload {
+        val trustedMac = trustedMacRegistry.records[pairing.macDeviceId] ?: return pairing
+        val resolveUrl = trustedSessionResolveUrl(pairing.relay) ?: return pairing
+        return runCatching {
+            withTimeout(trustedSessionResolveTimeoutMs) {
+                val timestamp = System.currentTimeMillis()
+                val nonce = encodeBase64(randomNonce(16))
+                val transcriptBytes = buildTrustedSessionResolveTranscript(
+                    macDeviceId = pairing.macDeviceId,
+                    phoneDeviceId = phoneIdentityState.phoneDeviceId,
+                    phoneIdentityPublicKey = phoneIdentityState.phoneIdentityPublicKey,
+                    nonce = nonce,
+                    timestamp = timestamp,
+                )
+                val signature = encodeBase64(
+                    signEd25519(
+                        privateKeyBase64 = phoneIdentityState.phoneIdentityPrivateKey,
+                        payload = transcriptBytes,
+                    )
+                )
+                val requestBody = JSONObject()
+                    .put("macDeviceId", pairing.macDeviceId)
+                    .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
+                    .put("phoneIdentityPublicKey", phoneIdentityState.phoneIdentityPublicKey)
+                    .put("nonce", nonce)
+                    .put("timestamp", timestamp)
+                    .put("signature", signature)
+                val request = Request.Builder()
+                    .url(resolveUrl)
+                    .post(
+                        requestBody
+                            .toString()
+                            .toRequestBody("application/json; charset=utf-8".toMediaType())
+                    )
+                    .build()
+                val responseBody = withContext(Dispatchers.IO) {
+                    okHttpClient.newCall(request).execute().use { response ->
+                        val bodyText = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) {
+                            throw IOException(
+                                buildString {
+                                    append("Trusted-session resolve failed")
+                                    append(" (")
+                                    append(response.code)
+                                    append(")")
+                                    val detail = runCatching {
+                                        JSONObject(bodyText).optString("error").trim()
+                                    }.getOrNull()
+                                    if (!detail.isNullOrEmpty()) {
+                                        append(": ")
+                                        append(detail)
+                                    }
+                                }
+                            )
+                        }
+                        bodyText
+                    }
+                }
+                val responseJson = JSONObject(responseBody)
+                val resolvedSessionId = responseJson.optString("sessionId").trim()
+                if (resolvedSessionId.isEmpty()) {
+                    throw IOException("Trusted-session resolve response omitted the live session ID.")
+                }
+                pairing.copy(
+                    hostId = resolvedSessionId,
+                    sessionId = resolvedSessionId,
+                    macIdentityPublicKey = responseJson
+                        .optString("macIdentityPublicKey")
+                        .trim()
+                        .ifEmpty { trustedMac.macIdentityPublicKey },
+                    bootstrapToken = null,
+                    expiresAt = 0L,
+                )
+            }
+        }.onFailure { error ->
+            Log.w(
+                logTag,
+                "trusted-session resolve fallback host=${pairing.macDeviceId.take(8)} relay=$resolveUrl error=${error.message}",
+            )
+        }.getOrDefault(pairing)
     }
 
     private suspend fun disconnectInternal(clearSavedPairing: Boolean) {
@@ -2580,14 +2667,15 @@ internal fun connectionUpdateForSocketClose(
     if (pendingTerminalUpdate != null) {
         return null
     }
-    return if (code in setOf(4000, 4001, 4002, 4003)) {
+    return if (code in setOf(4000, 4001, 4002, 4003, 4004)) {
         ClientUpdate.Connection(
             status = when (code) {
-                4002 -> ConnectionStatus.RETRYING_SAVED_PAIRING
+                4002, 4004 -> ConnectionStatus.RETRYING_SAVED_PAIRING
                 else -> ConnectionStatus.RECONNECT_REQUIRED
             },
             detail = when (code) {
                 4002 -> "Host offline, retrying saved pairing until the daemon reconnects."
+                4004 -> "Host temporarily unavailable, retrying saved pairing."
                 4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
                 else -> "The relay connection closed (code $code). Reconnect from saved pairing."
             }
@@ -2598,6 +2686,40 @@ internal fun connectionUpdateForSocketClose(
             "Relay disconnected (code $code)."
         )
     }
+}
+
+internal fun trustedSessionResolveUrl(relayUrl: String): String? {
+    val relayUri = runCatching { URI(relayUrl.trim()) }.getOrNull() ?: return null
+    val normalizedScheme = when (relayUri.scheme?.lowercase(Locale.US)) {
+        "ws" -> "http"
+        "wss" -> "https"
+        "http", "https" -> relayUri.scheme.lowercase(Locale.US)
+        else -> return null
+    }
+    val host = relayUri.host ?: return null
+    val baseSegments = relayUri.path
+        .orEmpty()
+        .split('/')
+        .filter { it.isNotBlank() }
+        .dropLastWhile { it == "relay" }
+    val resolvePath = buildString {
+        append('/')
+        if (baseSegments.isNotEmpty()) {
+            append(baseSegments.joinToString("/"))
+            append('/')
+        }
+        append("v1/trusted/session/resolve")
+    }
+    return URI(
+        normalizedScheme,
+        relayUri.userInfo,
+        host,
+        relayUri.port,
+        resolvePath,
+        null,
+        null,
+    )
+        .toString()
 }
 
 internal fun buildTurnInputPayloadSpec(

@@ -6,6 +6,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   CodexDesktopRefresher,
@@ -13,6 +15,8 @@ const {
 } = require("../src/codex-desktop-refresher");
 const { createDesktopLaunchPlan } = require("../src/codex-desktop-launcher");
 const { createThreadRolloutActivityWatcher } = require("../src/rollout-watch");
+
+const MAC_REFRESH_SCRIPT_PATH = path.join(__dirname, "..", "src", "scripts", "codex-refresh.applescript");
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,14 +52,30 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     },
     platform: "darwin",
   });
+  const explicitDefaultRelayConfig = readBridgeConfig({
+    env: {
+      ANDRODEX_DEFAULT_RELAY_URL: "wss://managed.example/relay",
+    },
+    platform: "darwin",
+  });
+  const explicitRelayOverrideConfig = readBridgeConfig({
+    env: {
+      ANDRODEX_RELAY: "ws://192.168.1.20:8787/relay",
+      ANDRODEX_DEFAULT_RELAY_URL: "wss://managed.example/relay",
+    },
+    platform: "darwin",
+  });
 
-  assert.equal(macConfig.refreshEnabled, false);
-  assert.equal(macEndpointConfig.refreshEnabled, false);
+  assert.equal(macConfig.relayUrl, "wss://relay.androdex.xyz/relay");
+  assert.equal(macConfig.refreshEnabled, true);
+  assert.equal(macEndpointConfig.refreshEnabled, true);
   assert.equal(linuxConfig.refreshEnabled, false);
   assert.equal(windowsConfig.refreshEnabled, true);
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
+  assert.equal(explicitDefaultRelayConfig.relayUrl, "wss://managed.example/relay");
+  assert.equal(explicitRelayOverrideConfig.relayUrl, "ws://192.168.1.20:8787/relay");
   assert.equal(windowsConfig.codexWindowsRemoteDebuggingPort, 9333);
   assert.equal(windowsCustomPortConfig.codexWindowsRemoteDebuggingPort, 9444);
 });
@@ -115,6 +135,11 @@ test("createDesktopLaunchPlan opens the app directly when no target URL is provi
 
   assert.equal(launchPlan.command, "open");
   assert.deepEqual(launchPlan.args, ["-a", "/Applications/Codex.app"]);
+});
+
+test("macOS refresh AppleScript does not bounce through Settings", () => {
+  const script = fs.readFileSync(MAC_REFRESH_SCRIPT_PATH, "utf8");
+  assert.doesNotMatch(script, /codex:\/\/settings/);
 });
 
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
@@ -351,6 +376,142 @@ test("thread state sync runs before a concrete thread refresh", async () => {
 
   assert.deepEqual(syncCalls, ["thread-sync"]);
   assert.deepEqual(refreshCalls, ["codex://threads/thread-sync"]);
+});
+
+test("macOS applescript refresh opens the thread directly without sync or settings bounce", async () => {
+  const syncCalls = [];
+  const openCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "darwin",
+    refreshBackend: "applescript",
+    threadStateSyncExecutor: async ({ threadId }) => {
+      syncCalls.push(threadId);
+    },
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      openCalls.push(targetUrl);
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-sync-macos",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(syncCalls, []);
+  assert.deepEqual(openCalls, ["codex://threads/thread-sync-macos"]);
+});
+
+test("macOS rollout watcher avoids repeated mid-run refresh flicker", async () => {
+  let watcherHooks = null;
+  const refreshCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "darwin",
+    refreshBackend: "applescript",
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: (hooks) => {
+      watcherHooks = hooks;
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-macos-rollout",
+    },
+  }));
+  await wait(10);
+  refreshCalls.length = 0;
+
+  watcherHooks.onEvent({
+    reason: "materialized",
+    threadId: "thread-macos-rollout",
+    size: 10,
+  });
+  watcherHooks.onEvent({
+    reason: "growth",
+    threadId: "thread-macos-rollout",
+    size: 20,
+  });
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, []);
+});
+
+test("macOS completion refresh can escalate to a hard relaunch for the concrete thread", async () => {
+  const relaunchCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "darwin",
+    refreshBackend: "applescript",
+    refreshExecutor: async () => {},
+    macCompletionRefreshExecutor: async ({ targetUrl }) => {
+      relaunchCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-macos-complete",
+    },
+  }));
+  await wait(10);
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-macos-complete",
+      turnId: "turn-macos-complete",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(relaunchCalls, ["codex://threads/thread-macos-complete"]);
+});
+
+test("macOS applescript refresh does not reopen non-concrete targets after the bounce", async () => {
+  const refreshCalls = [];
+  const reopenCalls = [];
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    platform: "darwin",
+    refreshBackend: "applescript",
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+    protocolRefreshExecutor: async ({ targetUrl }) => {
+      reopenCalls.push(targetUrl);
+    },
+    sleepFn: async () => {
+      throw new Error("sleep should not run for non-concrete targets");
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "thread/start",
+    params: {},
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, []);
+  assert.deepEqual(reopenCalls, []);
 });
 
 test("thread state sync failures fall back to the existing desktop refresh", async () => {

@@ -5,7 +5,9 @@
 // Depends on: fs, ws, ./codex-desktop-refresher, ./codex-transport, ./rollout-watch, ./session-state, ./secure-device-state, ./secure-transport
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { randomBytes } = require("crypto");
 const WebSocket = require("ws");
 const {
   CodexDesktopRefresher,
@@ -51,15 +53,21 @@ class HostRuntime {
     this.relayBaseUrl = this.config.relayUrl.replace(/\/+$/, "");
     this.deviceState = loadOrCreateBridgeDeviceState();
     this.hostId = this.deviceState.hostId;
+    this.notificationSecret = randomBytes(24).toString("hex");
     this.relayHostUrl = `${this.relayBaseUrl}/${this.hostId}`;
     this.secureTransport = createBridgeSecureTransport({
       hostId: this.hostId,
       relayUrl: this.relayBaseUrl,
       deviceState: this.deviceState,
+      onTrustedPhoneUpdate: (nextDeviceState) => {
+        this.deviceState = nextDeviceState;
+        this.sendRelayRegistrationUpdate(nextDeviceState);
+      },
     });
     this.pushServiceClient = createPushNotificationServiceClient({
       baseUrl: this.config.pushServiceUrl,
       sessionId: this.hostId,
+      notificationSecret: this.notificationSecret,
     });
     this.notificationsHandler = createNotificationsHandler({
       pushServiceClient: this.pushServiceClient,
@@ -257,7 +265,11 @@ class HostRuntime {
     this.relayStatus = "connecting";
     const connectGeneration = ++this.connectGeneration;
     const nextSocket = new this.WebSocketImpl(this.relayHostUrl, {
-      headers: { "x-role": "mac" },
+      headers: {
+        "x-role": "mac",
+        "x-notification-secret": this.notificationSecret,
+        ...buildMacRegistrationHeaders(this.deviceState),
+      },
     });
     this.socket = nextSocket;
     this.clearConnectTimeout();
@@ -281,10 +293,13 @@ class HostRuntime {
       this.relayStatus = "connected";
       this.supportsNativeTokenUsageUpdates = false;
       this.secureTransport.bindLiveSendWireMessage((wireMessage) => {
-        if (nextSocket.readyState === this.WebSocketImpl.OPEN) {
-          nextSocket.send(wireMessage);
+        if (nextSocket.readyState !== this.WebSocketImpl.OPEN) {
+          return false;
         }
+        nextSocket.send(wireMessage);
+        return true;
       });
+      this.sendRelayRegistrationUpdate(this.deviceState);
       this.resumeContextUsageWatcherIfNeeded();
     });
 
@@ -491,8 +506,22 @@ class HostRuntime {
     this.secureTransport.queueOutboundApplicationMessage(rawMessage, (wireMessage) => {
       if (this.socket?.readyState === WebSocket.OPEN) {
         this.socket.send(wireMessage);
+        return true;
       }
+      return false;
     });
+  }
+
+  sendRelayRegistrationUpdate(nextDeviceState = this.deviceState) {
+    this.deviceState = nextDeviceState;
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.socket.send(JSON.stringify({
+      kind: "relayMacRegistration",
+      registration: buildMacRegistration(nextDeviceState),
+    }));
   }
 
   rememberThreadFromMessage(source, rawMessage) {
@@ -875,6 +904,31 @@ function isExistingDirectory(targetPath) {
   } catch {
     return false;
   }
+}
+
+function buildMacRegistrationHeaders(deviceState) {
+  const registration = buildMacRegistration(deviceState);
+  const headers = {
+    "x-mac-device-id": registration.macDeviceId,
+    "x-mac-identity-public-key": registration.macIdentityPublicKey,
+    "x-machine-name": registration.displayName,
+  };
+  if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
+    headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
+    headers["x-trusted-phone-public-key"] = registration.trustedPhonePublicKey;
+  }
+  return headers;
+}
+
+function buildMacRegistration(deviceState) {
+  const trustedPhoneEntry = Object.entries(deviceState?.trustedPhones || {})[0] || null;
+  return {
+    macDeviceId: normalizeNonEmptyString(deviceState?.macDeviceId),
+    macIdentityPublicKey: normalizeNonEmptyString(deviceState?.macIdentityPublicKey),
+    displayName: normalizeNonEmptyString(os.hostname()),
+    trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
+    trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
+  };
 }
 
 module.exports = {

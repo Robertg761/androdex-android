@@ -2,7 +2,7 @@
 
 This file explains what the public Androdex repository is for, what it includes, and what it does not include.
 
-If you cloned Androdex from GitHub, the intended path is to run Codex on your own host machine and connect to it remotely through relay infrastructure you control or configure.
+If you cloned Androdex from GitHub, the intended path is to run Codex on your own host machine and connect to it remotely through the default public relay or a relay you control.
 
 ## What the Public Repo Includes
 
@@ -13,7 +13,7 @@ The public repository includes:
 - the public relay code
 - relay configuration and self-hosting documentation
 
-The public repository is meant to be usable without private hosted dependencies baked into the source tree.
+The public repository is meant to be usable without private hosted dependencies or secrets baked into the source tree.
 
 ## What the Public Repo Does Not Include
 
@@ -26,14 +26,15 @@ The public repository does not include:
 - private Android push service endpoints or FCM secrets
 - private deployment secrets
 
-If you are running from source, assume you should provide your own relay setup or use the defaults exposed by the public bridge package.
+If you are running from source, the bridge defaults to `wss://relay.androdex.xyz/relay`, and you can still override it with your own relay when needed.
 
 ## The Self-Hosting Path
 
 If you use the public repo, expect one of these flows:
 
-1. local LAN pairing on your own machine
-2. a self-hosted relay on your own VPS, passed in through `ANDRODEX_RELAY`
+1. the public hosted relay at `wss://relay.androdex.xyz/relay`
+2. local LAN pairing on your own machine, passed in through `ANDRODEX_RELAY`
+3. a self-hosted relay on your own VPS, passed in through `ANDRODEX_RELAY`
 
 That means:
 
@@ -44,22 +45,23 @@ That means:
 
 The practical split is:
 
+- default workflow: use the public hosted relay
 - local-only workflow: use a local relay URL on your LAN for testing
-- cross-network workflow: run a public `wss://` relay on infrastructure you control
-- managed builds: inject `ANDRODEX_DEFAULT_RELAY_URL` at build or release time, while still honoring `ANDRODEX_RELAY`
+- self-hosted cross-network workflow: run a public `wss://` relay on infrastructure you control
+- alternate managed builds: set `ANDRODEX_DEFAULT_RELAY_URL`, while still honoring `ANDRODEX_RELAY`
 
-For relay details, read [relay/README.md](G:\Projects\Androdex\relay\README.md).
+For relay details, read `relay/README.md`.
 
-## Why the Repo Stays Generic
+## Why the Repo Still Avoids Private Defaults
 
-The public repo stays generic on purpose.
+The public repo still avoids private defaults on purpose.
 
 That keeps the self-host path honest:
 
 - people can inspect the transport and pairing code
 - people can run Codex on their own host
 - people can self-host their own relay
-- people are not silently tied to someone else's hosted infrastructure
+- people can override the hosted relay with their own infrastructure at any time
 
 ## What to Keep Private
 
@@ -72,13 +74,13 @@ If you fork or self-host Androdex, keep these things out of the public repo:
 - any private build overrides
 - any publish-time package defaults
 
-If you ship managed builds for end users, prefer injecting the hosted relay URL at build or release time through `ANDRODEX_DEFAULT_RELAY_URL`, while continuing to honor explicit self-host overrides through `ANDRODEX_RELAY`.
+If you ship managed builds for end users, you can keep using the built-in hosted relay or override it through `ANDRODEX_DEFAULT_RELAY_URL`, while continuing to honor explicit self-host overrides through `ANDRODEX_RELAY`.
 
 If you offer Android completion notifications, inject the bridge-facing push endpoint through `ANDRODEX_PUSH_SERVICE_URL` in your own environment or release pipeline. Keep the hosted service, credentials, and routing secrets out of the public repo.
 
 Those belong in your own environment, private config, or release pipeline.
 
-## Public Relay Checklist
+## Self-Hosted Relay Checklist
 
 If you want pairing to work when the phone is not on the same network as the host, your relay needs:
 

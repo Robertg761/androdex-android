@@ -47,4 +47,29 @@ class AndrodexClientConnectionPolicyTest {
             update?.detail,
         )
     }
+
+    @Test
+    fun socketClose_retriesSavedPairingWhenHostIsTemporarilyUnavailable() {
+        val update = connectionUpdateForSocketClose(
+            code = 4004,
+            pendingTerminalUpdate = null,
+        )
+
+        assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, update?.status)
+        assertEquals("Host temporarily unavailable, retrying saved pairing.", update?.detail)
+    }
+
+    @Test
+    fun trustedSessionResolveUrl_rewritesRelaySocketPathToHttpsEndpoint() {
+        val resolveUrl = trustedSessionResolveUrl("wss://relay.androdex.xyz/relay")
+
+        assertEquals("https://relay.androdex.xyz/v1/trusted/session/resolve", resolveUrl)
+    }
+
+    @Test
+    fun trustedSessionResolveUrl_preservesBasePathBeforeRelaySegment() {
+        val resolveUrl = trustedSessionResolveUrl("ws://localhost:8787/custom/relay")
+
+        assertEquals("http://localhost:8787/custom/v1/trusted/session/resolve", resolveUrl)
+    }
 }

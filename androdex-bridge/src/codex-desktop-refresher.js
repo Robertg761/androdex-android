@@ -7,6 +7,7 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const { openCodexDesktopTarget } = require("./codex-desktop-launcher");
+const { continueOnMacDesktop } = require("./codex-desktop-macos-handoff");
 const {
   DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
   navigateCodexDesktopRendererToRouteViaTrustedRenderer,
@@ -17,12 +18,14 @@ const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
 const DEFAULT_APP_PATH = "/Applications/Codex.app";
+const PUBLIC_DEFAULT_RELAY_URL = "wss://relay.androdex.xyz/relay";
 const DEFAULT_DEBOUNCE_MS = 1200;
 const DEFAULT_FALLBACK_NEW_THREAD_MS = 2_000;
 const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_APPLESCRIPT_TARGET_RETRY_DELAY_MS = 220;
 const DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS = 120;
 const DEFAULT_WINDOWS_TRUSTED_RESTART_WAIT_MS = 800;
 const DEFAULT_WINDOWS_TRUSTED_REOPEN_RETRY_DELAY_MS = 700;
@@ -48,6 +51,7 @@ class CodexDesktopRefresher {
     rolloutIdleTimeoutMs = DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS,
     now = () => Date.now(),
     refreshExecutor = null,
+    macCompletionRefreshExecutor = null,
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
     protocolRefreshExecutor = openCodexDesktopTarget,
     hardRefreshExecutor = null,
@@ -57,6 +61,7 @@ class CodexDesktopRefresher {
     threadStateSyncExecutor = null,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    applescriptTargetRetryDelayMs = DEFAULT_APPLESCRIPT_TARGET_RETRY_DELAY_MS,
     windowsRemoteDebuggingPort = DEFAULT_WINDOWS_REMOTE_DEBUGGING_PORT,
     windowsThreadBounceDelayMs = DEFAULT_WINDOWS_THREAD_BOUNCE_DELAY_MS,
     windowsTrustedRestartWaitMs = DEFAULT_WINDOWS_TRUSTED_RESTART_WAIT_MS,
@@ -77,6 +82,7 @@ class CodexDesktopRefresher {
     this.rolloutIdleTimeoutMs = rolloutIdleTimeoutMs;
     this.now = now;
     this.refreshExecutor = refreshExecutor;
+    this.macCompletionRefreshExecutor = macCompletionRefreshExecutor;
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
     this.protocolRefreshExecutor = protocolRefreshExecutor;
     this.hardRefreshExecutor = hardRefreshExecutor;
@@ -91,6 +97,7 @@ class CodexDesktopRefresher {
           ? "command"
           : (this.platform === "darwin" ? "applescript" : "protocol")));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.applescriptTargetRetryDelayMs = applescriptTargetRetryDelayMs;
     this.windowsRemoteDebuggingPort = resolveWindowsRemoteDebuggingPort(windowsRemoteDebuggingPort);
     this.windowsThreadBounceDelayMs = windowsThreadBounceDelayMs;
     this.windowsTrustedRestartWaitMs = windowsTrustedRestartWaitMs;
@@ -319,11 +326,13 @@ class CodexDesktopRefresher {
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
-        await this.syncThreadState(targetThreadId, {
-          targetUrl,
-          refreshKinds: pendingRefreshKinds,
-          isCompletionRun,
-        });
+        if (!this.usesRemodexMacRefreshPath()) {
+          await this.syncThreadState(targetThreadId, {
+            targetUrl,
+            refreshKinds: pendingRefreshKinds,
+            isCompletionRun,
+          });
+        }
         await this.executeRefresh(targetUrl, {
           refreshKinds: pendingRefreshKinds,
           isCompletionRun,
@@ -356,6 +365,10 @@ class CodexDesktopRefresher {
     }
   }
 
+  usesRemodexMacRefreshPath() {
+    return this.platform === "darwin" && this.refreshBackend === "applescript";
+  }
+
   async syncThreadState(threadId, options = {}) {
     if (!threadId || typeof this.threadStateSyncExecutor !== "function") {
       return;
@@ -373,35 +386,105 @@ class CodexDesktopRefresher {
     }
   }
 
-  executeRefresh(targetUrl, options = {}) {
+  async executeRefresh(targetUrl, options = {}) {
+    const refreshTarget = targetUrl || "";
+    const useRemodexMacRefreshPath = this.usesRemodexMacRefreshPath();
+    const isMacCompletionRefresh = useRemodexMacRefreshPath
+      && options.isCompletionRun
+      && isConcreteThreadDeepLink(refreshTarget);
+
+    if (isMacCompletionRefresh) {
+      await this.executeMacCompletionRefresh(refreshTarget);
+      return;
+    }
+
     if (this.refreshExecutor) {
-      return this.refreshExecutor(targetUrl || "");
+      await this.refreshExecutor(refreshTarget);
+      if (!useRemodexMacRefreshPath) {
+        await this.retryAppleScriptThreadOpen(refreshTarget);
+      }
+      return;
     }
 
     if (this.refreshCommand) {
       if (this.platform === "win32") {
-        return execFilePromise("cmd.exe", ["/d", "/c", this.refreshCommand], {
+        await execFilePromise("cmd.exe", ["/d", "/c", this.refreshCommand], {
           windowsHide: true,
         });
+        return;
       }
 
-      return execFilePromise("/bin/sh", ["-lc", this.refreshCommand]);
+      await execFilePromise("/bin/sh", ["-lc", this.refreshCommand]);
+      return;
+    }
+
+    if (useRemodexMacRefreshPath && !options.isCompletionRun) {
+      await this.protocolRefreshExecutor({
+        targetUrl: refreshTarget,
+        bundleId: this.bundleId,
+        appPath: this.appPath,
+        platformAdapter: this.platformAdapter,
+        platform: this.platform,
+        windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
+      });
+      return;
     }
 
     if (this.refreshBackend === "applescript") {
-      return execFilePromise("osascript", [
+      await execFilePromise("osascript", [
         REFRESH_SCRIPT_PATH,
         this.bundleId,
         this.appPath,
-        targetUrl || "",
+        refreshTarget,
       ]);
+      if (!useRemodexMacRefreshPath) {
+        await this.retryAppleScriptThreadOpen(refreshTarget);
+      }
+      return;
     }
 
     if (this.refreshBackend === "protocol") {
-      return this.executeProtocolRefresh(targetUrl, options);
+      await this.executeProtocolRefresh(refreshTarget, options);
+      return;
     }
 
-    return openCodexDesktopTarget({
+    await openCodexDesktopTarget({
+      targetUrl: refreshTarget,
+      bundleId: this.bundleId,
+      appPath: this.appPath,
+      platformAdapter: this.platformAdapter,
+      platform: this.platform,
+      windowsRemoteDebuggingPort: this.windowsRemoteDebuggingPort,
+    });
+  }
+
+  async executeMacCompletionRefresh(targetUrl) {
+    if (typeof this.macCompletionRefreshExecutor === "function") {
+      await this.macCompletionRefreshExecutor({
+        targetUrl,
+        bundleId: this.bundleId,
+        appPath: this.appPath,
+      });
+      return;
+    }
+
+    await continueOnMacDesktop(extractThreadIdFromTargetUrl(targetUrl), {
+      bundleId: this.bundleId,
+      appPath: this.appPath,
+      sleepFn: this.sleepFn,
+      executor: execFilePromise,
+    });
+  }
+
+  async retryAppleScriptThreadOpen(targetUrl) {
+    if (this.refreshBackend !== "applescript" || !isConcreteThreadDeepLink(targetUrl)) {
+      return;
+    }
+
+    // Newer Codex desktop builds occasionally coalesce the first thread deep
+    // link after the Remodex-style settings bounce, so reopen the target once.
+    await this.sleepFn(this.applescriptTargetRetryDelayMs);
+    await this.protocolRefreshExecutor({
       targetUrl,
       bundleId: this.bundleId,
       appPath: this.appPath,
@@ -679,6 +762,10 @@ class CodexDesktopRefresher {
       url: buildThreadDeepLink(event.threadId),
     });
 
+    if (this.usesRemodexMacRefreshPath()) {
+      return;
+    }
+
     if (event.reason === "materialized") {
       this.queueRefresh("rollout_materialized", {
         threadId: event.threadId,
@@ -771,13 +858,12 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
   const relayUrl = readFirstDefinedEnv(
     ["ANDRODEX_RELAY", "ANDRODEX_DEFAULT_RELAY_URL"],
-    "",
+    PUBLIC_DEFAULT_RELAY_URL,
     env
   );
-  // Windows uses protocol deep links to keep the desktop client aligned with
-  // phone-authored activity. macOS keeps the more conservative opt-in default
-  // because it still depends on the AppleScript workaround.
-  const defaultRefreshEnabled = platform === "win32";
+  // Windows and macOS both need an explicit desktop refresh/remount path when
+  // phone-authored activity should become visible in Codex.app.
+  const defaultRefreshEnabled = platform === "win32" || platform === "darwin";
   return {
     relayUrl,
     refreshEnabled: explicitRefreshEnabled == null
@@ -941,6 +1027,14 @@ function isConcreteThreadDeepLink(targetUrl) {
   return typeof targetUrl === "string"
     && targetUrl.startsWith("codex://threads/")
     && targetUrl !== NEW_THREAD_DEEP_LINK;
+}
+
+function extractThreadIdFromTargetUrl(targetUrl) {
+  if (!isConcreteThreadDeepLink(targetUrl)) {
+    return "";
+  }
+
+  return String(targetUrl).slice("codex://threads/".length).trim();
 }
 
 function waitForDelay(delayMs) {

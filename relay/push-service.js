@@ -33,6 +33,7 @@ function createPushSessionService({
 
   async function registerDevice({
     sessionId,
+    notificationSecret,
     deviceToken,
     alertsEnabled,
     devicePlatform,
@@ -51,7 +52,10 @@ function createPushSessionService({
       );
     }
 
-    if (!await canRegisterSession({ sessionId: normalizedSessionId })) {
+    if (!await canRegisterSession({
+      sessionId: normalizedSessionId,
+      notificationSecret: readString(notificationSecret),
+    })) {
       throw pushServiceError(
         "session_unavailable",
         "Push registration requires an active relay session.",
@@ -72,6 +76,7 @@ function createPushSessionService({
 
   async function notifyCompletion({
     sessionId,
+    notificationSecret,
     threadId,
     turnId,
     result,
@@ -92,7 +97,10 @@ function createPushSessionService({
       );
     }
 
-    if (!await resolvedCanNotifyCompletion({ sessionId: normalizedSessionId })) {
+    if (!await resolvedCanNotifyCompletion({
+      sessionId: normalizedSessionId,
+      notificationSecret: readString(notificationSecret),
+    })) {
       throw pushServiceError(
         "session_unavailable",
         "Push completion requires an active relay session.",

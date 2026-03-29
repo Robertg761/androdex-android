@@ -8,7 +8,7 @@ plugins {
 val defaultRelayUrlProvider = providers
     .gradleProperty("ANDRODEX_DEFAULT_RELAY_URL")
     .orElse(providers.environmentVariable("ANDRODEX_DEFAULT_RELAY_URL"))
-    .orElse("")
+    .orElse("wss://relay.androdex.xyz/relay")
 val fcmApplicationIdProvider = providers
     .gradleProperty("ANDRODEX_FCM_APPLICATION_ID")
     .orElse(providers.environmentVariable("ANDRODEX_FCM_APPLICATION_ID"))

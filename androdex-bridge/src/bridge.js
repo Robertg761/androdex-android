@@ -6,6 +6,8 @@
 
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const { randomBytes } = require("crypto");
+const os = require("os");
 const { createHostPlatform } = require("./platform");
 const {
   CodexDesktopRefresher,
@@ -38,12 +40,13 @@ function startBridge() {
   const platformAdapter = createHostPlatform();
   const config = readBridgeConfig({ platformAdapter });
   if (!config.relayUrl) {
-    throw new Error("Set ANDRODEX_RELAY to a reachable relay URL before pairing or starting the bridge.");
+    throw new Error("No relay URL is configured for the bridge.");
   }
   const sessionId = uuidv4();
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
-  const deviceState = loadOrCreateBridgeDeviceState({ platformAdapter });
+  let deviceState = loadOrCreateBridgeDeviceState({ platformAdapter });
+  const notificationSecret = randomBytes(24).toString("hex");
 
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
@@ -68,10 +71,15 @@ function startBridge() {
     relayUrl: relayBaseUrl,
     deviceState,
     platformAdapter,
+    onTrustedPhoneUpdate(nextDeviceState) {
+      deviceState = nextDeviceState;
+      sendRelayRegistrationUpdate(nextDeviceState);
+    },
   });
   const pushServiceClient = createPushNotificationServiceClient({
     baseUrl: config.pushServiceUrl,
     sessionId,
+    notificationSecret,
   });
   const notificationsHandler = createNotificationsHandler({
     pushServiceClient,
@@ -180,7 +188,11 @@ function startBridge() {
 
     logConnectionStatus("connecting");
     const nextSocket = new WebSocket(relaySessionUrl, {
-      headers: { "x-role": "mac" },
+      headers: {
+        "x-role": "mac",
+        "x-notification-secret": notificationSecret,
+        ...buildMacRegistrationHeaders(deviceState),
+      },
     });
     socket = nextSocket;
 
@@ -190,10 +202,13 @@ function startBridge() {
       logConnectionStatus("connected");
       supportsNativeTokenUsageUpdates = false;
       secureTransport.bindLiveSendWireMessage((wireMessage) => {
-        if (nextSocket.readyState === WebSocket.OPEN) {
-          nextSocket.send(wireMessage);
+        if (nextSocket.readyState !== WebSocket.OPEN) {
+          return false;
         }
+        nextSocket.send(wireMessage);
+        return true;
       });
+      sendRelayRegistrationUpdate(deviceState);
       resumeContextUsageWatcherIfNeeded();
     });
 
@@ -306,8 +321,22 @@ function startBridge() {
     secureTransport.queueOutboundApplicationMessage(rawMessage, (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(wireMessage);
+        return true;
       }
+      return false;
     });
+  }
+
+  function sendRelayRegistrationUpdate(nextDeviceState = deviceState) {
+    deviceState = nextDeviceState;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    socket.send(JSON.stringify({
+      kind: "relayMacRegistration",
+      registration: buildMacRegistration(nextDeviceState),
+    }));
   }
 
   function rememberThreadFromMessage(source, rawMessage) {
@@ -542,6 +571,35 @@ function safeParseJSON(value) {
   } catch {
     return null;
   }
+}
+
+function buildMacRegistrationHeaders(deviceState) {
+  const registration = buildMacRegistration(deviceState);
+  const headers = {
+    "x-mac-device-id": registration.macDeviceId,
+    "x-mac-identity-public-key": registration.macIdentityPublicKey,
+    "x-machine-name": registration.displayName,
+  };
+  if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
+    headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
+    headers["x-trusted-phone-public-key"] = registration.trustedPhonePublicKey;
+  }
+  return headers;
+}
+
+function buildMacRegistration(deviceState) {
+  const trustedPhoneEntry = Object.entries(deviceState?.trustedPhones || {})[0] || null;
+  return {
+    macDeviceId: normalizeNonEmptyString(deviceState?.macDeviceId),
+    macIdentityPublicKey: normalizeNonEmptyString(deviceState?.macIdentityPublicKey),
+    displayName: normalizeNonEmptyString(os.hostname()),
+    trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
+    trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
+  };
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 module.exports = {

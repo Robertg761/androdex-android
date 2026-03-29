@@ -2,7 +2,7 @@
 
 This folder contains the thin WebSocket relay used by the durable Androdex pairing flow.
 
-This repository does not assume a hosted relay you do not control. If you use this relay, run it on infrastructure you control and point the bridge at it explicitly.
+The bridge defaults to the public hosted relay at `wss://relay.androdex.xyz/relay`. If you want to run your own relay instead, use this folder and point the bridge at it explicitly with `ANDRODEX_RELAY`.
 
 ## What It Does
 

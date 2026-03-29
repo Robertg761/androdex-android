@@ -377,6 +377,60 @@ test("qr bootstrap starts a fresh replay window instead of leaking buffered mess
   assert.equal(wireMessages.length, 1);
 });
 
+test("secure transport replays buffered outbound messages after the relay sender is rebound", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const phoneIdentity = createOkpKeyPair("ed25519");
+  const phoneEphemeral = createOkpKeyPair("x25519");
+  const firstWireMessages = [];
+  const reboundWireMessages = [];
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-5",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "mac-5",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {
+        "phone-5": phoneIdentity.publicKey,
+      },
+    },
+  });
+
+  secureTransport.bindLiveSendWireMessage((message) => {
+    firstWireMessages.push(message);
+    return true;
+  });
+
+  finishHandshake({
+    secureTransport,
+    sessionId: "session-5",
+    macDeviceId: "mac-5",
+    phoneDeviceId: "phone-5",
+    macIdentity,
+    phoneIdentity,
+    phoneEphemeral,
+    handshakeMode: HANDSHAKE_MODE_TRUSTED_RECONNECT,
+    lastAppliedBridgeOutboundSeq: 0,
+  });
+
+  secureTransport.queueOutboundApplicationMessage(
+    JSON.stringify({ id: "response-5", result: { ok: true } }),
+    () => false
+  );
+
+  assert.equal(firstWireMessages.length, 1);
+
+  secureTransport.bindLiveSendWireMessage((message) => {
+    reboundWireMessages.push(message);
+    return true;
+  });
+
+  assert.equal(reboundWireMessages.length, 1);
+  const replayEnvelope = JSON.parse(reboundWireMessages[0]);
+  assert.equal(replayEnvelope.kind, "encryptedEnvelope");
+  assert.equal(replayEnvelope.sessionId, "session-5");
+});
+
 function finishHandshake({
   secureTransport,
   sessionId,

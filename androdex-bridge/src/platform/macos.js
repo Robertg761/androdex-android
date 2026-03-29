@@ -26,7 +26,7 @@ function createMacOSHostPlatform({
       return "darwin";
     },
     getRefreshDefaults() {
-      return { enabled: false };
+      return { enabled: true };
     },
     createCodexLaunchPlan({ cwd = "" } = {}) {
       return {

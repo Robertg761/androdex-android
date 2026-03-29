@@ -6,7 +6,12 @@ const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const { WebSocketServer } = require("ws");
-const { setupRelay, getRelayStats, hasLiveSession } = require("./relay");
+const {
+  setupRelay,
+  getRelayStats,
+  hasAuthenticatedMacSession,
+  resolveTrustedMacSession,
+} = require("./relay");
 const {
   createPushSessionService,
   createWebhookPushClient,
@@ -34,11 +39,11 @@ function createRelayServer({
           pathname: pushWebhookPath,
           requestTimeoutMs: pushWebhookTimeoutMs,
         }),
-        canRegisterSession({ sessionId }) {
-          return hasLiveSession(sessionId);
+        canRegisterSession({ sessionId, notificationSecret }) {
+          return hasAuthenticatedMacSession(sessionId, notificationSecret);
         },
-        canNotifyCompletion({ sessionId }) {
-          return hasLiveSession(sessionId);
+        canNotifyCompletion({ sessionId, notificationSecret }) {
+          return hasAuthenticatedMacSession(sessionId, notificationSecret);
         },
       })
       : createDisabledPushSessionService());
@@ -69,7 +74,7 @@ function createServer({
 }) {
   const requestListener = (req, res) => {
     const pathname = safePathname(req.url);
-    if (req.method === "GET" && pathname === "/healthz") {
+    if (req.method === "GET" && (pathname === "/health" || pathname === "/healthz")) {
       writeJson(res, 200, {
         ok: true,
         protocol: isTlsEnabled ? "https" : "http",
@@ -86,6 +91,10 @@ function createServer({
 
     if (pushServiceEnabled && req.method === "POST" && pathname === "/v1/push/session/notify-completion") {
       return handleJSONRoute(req, res, async (body) => pushSessionService.notifyCompletion(body));
+    }
+
+    if (req.method === "POST" && pathname === "/v1/trusted/session/resolve") {
+      return handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
     }
 
     writeJson(res, 404, { ok: false, error: "Not found" });

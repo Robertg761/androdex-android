@@ -21,7 +21,7 @@ Androdex is maintained as a fork focused on the Windows host + Android client wo
 ## Changes to avoid
 
 - large speculative refactors
-- hosted-service integrations baked into public defaults without explicit config
+- hosted-service integrations that require private domains, private credentials, or repo-local secrets
 - duplicate logic across views and services
 - repo-specific hacks that make the public fork harder to understand
 
@@ -44,7 +44,7 @@ gradlew assembleDebug
 
 ## Notes
 
-- Set `ANDRODEX_RELAY` explicitly when testing relay-based flows.
+- Set `ANDRODEX_RELAY` explicitly when testing local or self-hosted relay flows.
 - Do not commit private relay hostnames, credentials, signing secrets, or device-specific overrides.
 - If you touch docs, keep the distinction clear between the host-local Codex runtime and remote relay-backed device access.
 - Keep local scratch files and one-off generated outputs under `tmp/` or `tmp-gh-artifact/`; those paths are intentionally gitignored.

@@ -66,9 +66,9 @@ Tails the rollout log for the selected thread in real time.
 Useful variables:
 
 - `ANDRODEX_RELAY`: set the relay URL explicitly and override any packaged default
-- `ANDRODEX_DEFAULT_RELAY_URL`: set the default relay URL for managed builds when no explicit override is present
+- `ANDRODEX_DEFAULT_RELAY_URL`: override the built-in default relay URL when no explicit override is present
 - `ANDRODEX_CODEX_ENDPOINT`: connect to an existing Codex WebSocket instead of spawning a local runtime
-- `ANDRODEX_REFRESH_ENABLED`: enable or disable desktop refresh explicitly. Windows defaults on, macOS stays opt-in
+- `ANDRODEX_REFRESH_ENABLED`: enable or disable desktop refresh explicitly. Windows and macOS default on
 - `ANDRODEX_REFRESH_DEBOUNCE_MS`: adjust refresh debounce timing
 - `ANDRODEX_REFRESH_COMMAND`: override desktop refresh with a custom command
 
@@ -82,12 +82,16 @@ The bridge resolves relay configuration in this order:
 
 1. `ANDRODEX_RELAY`
 2. `ANDRODEX_DEFAULT_RELAY_URL`
+3. `wss://relay.androdex.xyz/relay`
 
-That lets release builds ship with a managed relay while still preserving self-host overrides.
+That means the public hosted relay works out of the box, while self-host overrides still take precedence.
 
 Common relay patterns:
 
 ```sh
+# Built-in public relay
+androdex daemon start
+
 # Local relay on your own network
 ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex daemon start
 

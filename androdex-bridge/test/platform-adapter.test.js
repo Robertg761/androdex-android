@@ -11,11 +11,11 @@ test("createHostPlatform returns the Windows adapter with refresh enabled", () =
   assert.equal(platform.getRefreshDefaults().enabled, true);
 });
 
-test("createHostPlatform returns the macOS adapter with refresh disabled", () => {
+test("createHostPlatform returns the macOS adapter with refresh enabled", () => {
   const platform = createHostPlatform({ processPlatform: "darwin" });
 
   assert.equal(platform.getPlatformId(), "darwin");
-  assert.equal(platform.getRefreshDefaults().enabled, false);
+  assert.equal(platform.getRefreshDefaults().enabled, true);
 });
 
 test("Windows platform adapter preserves the remote debugging port launch plan", () => {
