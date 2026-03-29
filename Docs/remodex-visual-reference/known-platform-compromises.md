@@ -1,0 +1,126 @@
+# Known Platform Compromises
+
+These are the places where Android cannot be a literal 1:1 copy of Remodex because the canonical app is an iPhone SwiftUI app.
+
+The rule is not "ignore the difference." The rule is "match the perceptual result as closely as possible and keep the difference explicit."
+
+## 1. Liquid Glass vs Android Surface Rendering
+
+Remodex uses adaptive glass:
+
+- `glassEffect` on supported iOS versions
+- `.thinMaterial` on fallback paths
+
+Android Compose has no direct equivalent to iOS liquid glass. The closest acceptable compromise is:
+
+- translucent surfaces with carefully tuned blur/tint where possible
+- otherwise low-contrast layered fills that preserve the same floating separation and corner geometry
+
+We should not substitute opaque Material cards just because they are easier.
+
+## 2. iOS Semantic Fills vs Material 3 Tokens
+
+Remodex leans on:
+
+- `systemBackground`
+- `tertiarySystemFill`
+- `placeholderText`
+- `secondary` and `tertiary` foreground styles
+
+Android Material 3 colors are not a drop-in replacement for those semantics. The compromise should be a custom Android token set that matches the visual output of those fills, not the naming of Material roles.
+
+## 3. SF Pro Metrics vs Android Font Availability
+
+Remodex defaults to the native iOS system font via `AppFont`, not to Geist. Android cannot use SF Pro as a normal system dependency.
+
+Closest acceptable compromise:
+
+- match Remodex text sizes, hierarchy, and density first
+- use the closest legal/available Android font family only after size and rhythm are correct
+
+This is why copying the current Geist-based theme is not enough.
+
+## 4. SwiftUI Navigation Bars And Toolbar Items
+
+Remodex relies on:
+
+- `.navigationBarTitleDisplayMode(.inline)`
+- principal-title layouts
+- adaptive toolbar items with compact circular affordances
+
+Compose top app bars tend to read larger and heavier by default. The compromise should preserve:
+
+- inline title density
+- compact trailing controls
+- smaller toolbar affordances
+- title plus subtitle stacking behavior
+
+## 5. iOS Sheets And Detents
+
+Remodex sheets use native iOS presentation detents and drag behavior. Android bottom sheets will never behave identically.
+
+Closest acceptable compromise:
+
+- match corner radius, top handle geometry, background treatment, and content padding
+- keep sheet heights perceptually aligned with the Remodex detent usage
+
+## 6. Keyboard And Safe-Area Behavior
+
+SwiftUI and Android Compose differ on:
+
+- keyboard lift timing
+- safe-area inset defaults
+- toolbar overlap
+- gesture/nav bar padding
+
+The Android version should preserve the visual resting positions from Remodex even if the implementation mechanics differ.
+
+## 7. SF Symbols Rendering
+
+Remodex uses Apple symbol sizing and weight behavior in many places. Android icons will need manual tuning for:
+
+- stroke weight
+- optical size
+- padding inside circular buttons
+
+Using stock Material icon sizes will not match the Remodex result.
+
+## 8. Camera Pairing Flow
+
+The Remodex pairing surface is driven by AVFoundation camera preview and iOS permission UX. Android camera permissions and preview layers differ structurally.
+
+Compromise target:
+
+- keep the same full-screen black stage
+- keep the same scan-frame sizing and instruction placement
+- keep the same simple permission fallback hierarchy
+
+## 9. Alert And Confirmation UI
+
+SwiftUI confirmation dialogs and alerts do not map 1:1 to Material dialogs. The Android port should preserve:
+
+- text density
+- action ordering where platform conventions allow
+- calm low-noise presentation
+
+It should avoid heavy, card-like dialogs unless the Remodex state actually reads that way.
+
+## 10. Motion Curves
+
+Only a few timings are explicit in source, and many native iOS transitions come from platform defaults. Android cannot perfectly replicate those defaults.
+
+The acceptable compromise is:
+
+- use short ease-in-out curves for search/composer state changes
+- avoid springy or highly expressive Material motion that makes the app feel like a different product
+
+## Non-Compromises
+
+These are not valid reasons to diverge from Remodex:
+
+- "Material looks more Android-native"
+- "the current Androdex cards already work"
+- "the colors are close enough"
+- "Compose defaults are easier"
+
+If Android can visually match the Remodex result, we should match it.

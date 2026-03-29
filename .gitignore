@@ -64,6 +64,7 @@ keystore.properties
 /tmp-gh-artifact/
 /.asar-installed/
 /androdex_ui.xml
+/Docs/remodex-visual-clone-plan.md
 
 # Claude project config (local only)
 .claude/

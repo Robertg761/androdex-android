@@ -1,0 +1,56 @@
+# Parity Board
+
+This board is the screen-by-screen mapping from canonical Remodex state to the Androdex surface that must visually converge on it.
+
+## Legend
+
+- `Remodex evidence`: the upstream screen, component, or test that defines the state
+- `Androdex target`: the Android file that must match the state visually
+- `Board status`: whether we already have a named capture slot and enough source evidence to begin implementation
+
+## Board
+
+| Area | Remodex state | Remodex evidence | Androdex target | Board status |
+| --- | --- | --- | --- | --- |
+| Pairing | QR scanner idle / overlay / permission states | `Views/QRScannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready |
+| Onboarding | Welcome hero and feature pages | `Views/Onboarding/OnboardingWelcomePage.swift`, `Views/Onboarding/OnboardingFeaturesPage.swift`, `Views/Onboarding/OnboardingStepPage.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready |
+| Home | Offline / connected / syncing empty state | `Views/Home/HomeEmptyStateView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready |
+| Home | Trusted pair summary and completion banner | `Views/Shared/TrustedPairSummaryView.swift`, `Views/Home/ThreadCompletionBannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready |
+| Sidebar | Header, search, new chat, grouped threads | `Views/SidebarView.swift`, `Views/Sidebar/SidebarHeaderView.swift`, `Views/Sidebar/SidebarSearchField.swift`, `Views/Sidebar/SidebarThreadRowView.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
+| Sidebar | Grouping, expansion, archived bucket, worktree labeling | `Views/Sidebar/SidebarThreadGrouping.swift`, `CodexMobileTests/SidebarThreadGroupingTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
+| Sidebar | Initial loading overlay behavior | `Views/SidebarView.swift`, `CodexMobileTests/SidebarThreadsLoadingPresentationTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
+| Thread shell | Navigation title, subtitle, thread actions, git pills | `Views/Turn/TurnView.swift`, `Views/Turn/TurnToolbarContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
+| Thread timeline | Empty state, scroll container, pinned plan accessory | `Views/Turn/TurnConversationContainerView.swift`, `Views/Turn/TurnTimelineView.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
+| Thread messages | User / assistant / system / thinking / file-change / execution / review content | `Views/Turn/TurnMessageComponents.swift`, `Views/Turn/CommandExecutionViews.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
+| Composer | Floating shell, placeholder, chips, attachments, send / stop controls | `Views/Turn/TurnComposerView.swift`, `Views/Turn/ComposerBottomBar.swift`, `Views/Turn/ComposerAttachmentsPreview.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
+| Composer | File / skill / slash autocomplete panels | `Views/Turn/FileAutocompletePanel.swift`, `Views/Turn/SkillAutocompletePanel.swift`, `Views/Turn/SlashCommandAutocompletePanel.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
+| Composer | Review and subagents armed states | `Views/Turn/TurnComposerView.swift`, `CodexMobileTests/TurnComposerReviewModeTests.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
+| Composer | Queued drafts and voice recording | `Views/Turn/QueuedDraftsPanel.swift`, `Views/Turn/VoiceRecordingCapsule.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
+| Git | Toolbar actions, branch selector, diff sheet, worktree handoff | `Views/Turn/TurnGitActionsToolbar.swift`, `Views/Turn/TurnGitBranchSelector.swift`, `Views/Turn/TurnDiffSheet.swift`, `Views/Turn/TurnWorktreeHandoffOverlay.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/GitSheet.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
+| Runtime | Status sheet and usage summary | `Views/Turn/TurnStatusSheet.swift`, `Views/Shared/UsageStatusSummaryContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadRuntimeSheet.kt` | ready |
+| Project picker | New chat project chooser | `Views/SidebarView.swift`, `Views/Sidebar/SidebarThreadGrouping.swift` | `android/app/src/main/java/io/androdex/android/ui/home/ProjectPickerSheet.kt` | ready |
+| Settings | Settings cards, trusted Mac card, runtime defaults | `Views/SettingsView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/RuntimeSettingsSheet.kt` | ready |
+| About | Editorial about screen and architecture diagram | `Views/AboutRemodexView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/AboutAndrodexSheet.kt` | ready |
+| Dialogs | Confirmation dialogs and alerts | `Views/SidebarView.swift`, `Views/Turn/TurnViewAlertModifier.swift` | thread and sidebar alert surfaces in Android | ready |
+| Recovery | Missing thread, reconnect fallback, notification-open states | `CodexMobileTests/CodexPushNotificationRegistrationTests.swift`, app runtime flow plus push/open navigation behavior | `android/app/src/main/java/io/androdex/android/MainViewModel.kt`, pairing/home/thread recovery surfaces | runtime capture backlog only |
+
+## Android Capture Anchors
+
+The March 29, 2026 real-device pass gives us verified Android-side anchors for these board areas:
+
+- Pairing: `android-device-captures/pairing--qr-scanner-idle--androdex.png`
+- Recovery: `android-device-captures/recovery--repair-pairing-required--androdex.png`
+- Sidebar shell: `android-device-captures/sidebar--closed--androdex.png`
+- Sidebar open/search/grouping: `android-device-captures/sidebar--open-default--androdex.png`, `android-device-captures/sidebar--search-focused--androdex.png`, `android-device-captures/sidebar--groups-expanded--androdex.png`
+- Thread/composer shell: `android-device-captures/thread--streaming--androdex.png`
+- Settings: `android-device-captures/settings--root--androdex.png`
+
+The remaining Android capture gaps are now limited to runtime-driven recovery flows that cannot be derived from static source alone: notification-open success/fallback and the missing-thread prompt family.
+
+## Highest-Risk Visual Mismatches To Fix First
+
+1. Home screen composition. Androdex currently uses a custom landing-card layout, while Remodex is much flatter and more centered around a single empty-state shell.
+2. Sidebar density. Remodex uses tighter row spacing, lighter fills, smaller type, and more native-looking list grouping than the current Compose drawer.
+3. Composer shell. Remodex uses a floating glass composer with a large `28` corner radius and layered autocomplete/voice overlays.
+4. Toolbar chrome. Remodex relies on compact principal-title layout plus small adaptive toolbar affordances, not a standard Material top app bar.
+5. Color semantics. Remodex leans on iOS semantic fills and glass/translucency; Androdex still reads like Material 3 with iOS-colored paint on top.
