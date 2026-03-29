@@ -8,6 +8,8 @@ const http = require("http");
 const { clearDaemonControlState, createDaemonControlToken, writeDaemonControlState } = require("./daemon-store");
 const { HostRuntime } = require("./host-runtime");
 
+const PAIRING_RELAY_READY_TIMEOUT_MS = 15_000;
+
 async function runDaemonProcess() {
   const runtime = new HostRuntime();
   const controlToken = createDaemonControlToken();
@@ -36,6 +38,7 @@ async function runDaemonProcess() {
       }
 
       if (req.method === "POST" && url.pathname === "/pair") {
+        await runtime.waitForRelayReady({ timeoutMs: PAIRING_RELAY_READY_TIMEOUT_MS });
         writeJson(res, 200, {
           ok: true,
           pairingPayload: runtime.getPairingPayload(),

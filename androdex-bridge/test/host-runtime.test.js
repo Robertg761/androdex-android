@@ -258,6 +258,46 @@ test("treats mac replacement close as recoverable and retries the relay", () => 
   assert.equal(runtime.relayStatus, "connecting");
 });
 
+test("waitForRelayReady resolves once the relay socket opens", async () => {
+  const { HostRuntime } = loadHostRuntime();
+  const timerHarness = createTimerHarness();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+    setTimeoutFn: timerHarness.setTimeoutFn,
+    clearTimeoutFn: timerHarness.clearTimeoutFn,
+  });
+
+  runtime.connectRelay();
+  const waiter = runtime.waitForRelayReady({ timeoutMs: 50 });
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+
+  await waiter;
+});
+
+test("waitForRelayReady times out when the relay never opens", async () => {
+  const { HostRuntime } = loadHostRuntime();
+  const timerHarness = createTimerHarness();
+  const runtime = new HostRuntime({
+    env: { ANDRODEX_RELAY: "wss://relay.example/relay" },
+    WebSocketImpl: FakeWebSocket,
+    setTimeoutFn: timerHarness.setTimeoutFn,
+    clearTimeoutFn: timerHarness.clearTimeoutFn,
+  });
+
+  const waiter = runtime.waitForRelayReady({ timeoutMs: 25 });
+  const timeoutTimer = timerHarness.nextTimer(25);
+  assert.ok(timeoutTimer, "expected a relay-ready timeout to be armed");
+
+  timeoutTimer.fn();
+
+  await assert.rejects(
+    waiter,
+    /Timed out while waiting for the host daemon to connect to the relay/
+  );
+});
+
 test("stops emitting rollout-derived token usage once native updates are observed", () => {
   const { HostRuntime } = loadHostRuntime();
   const runtime = new HostRuntime({

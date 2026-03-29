@@ -178,6 +178,12 @@ Tails the rollout log for a thread in real time.
 
 The desktop Codex app can still read persisted sessions from `~/.codex/sessions` when available.
 
+On macOS, Androdex now follows a simpler Codex desktop handoff path:
+
+- phone-authored mid-run activity opens the concrete `codex://threads/<id>` target directly instead of bouncing through Settings
+- completion refreshes can relaunch Codex onto the concrete thread when a plain deep link is not enough
+- rollout watcher refreshes stay quiet on macOS so the desktop does not flicker back and forth while a run is still growing
+
 On Windows, the bridge also includes a desktop refresh workaround for phone-authored activity. It targets the installed Codex desktop executable directly instead of falling back to the raw `codex://...` protocol handler, because a misregistered protocol handler can open the wrong Codex build and break live thread sync.
 
 ## Project Structure
@@ -309,6 +315,9 @@ Yes. This fork is currently aimed at the host-machine-plus-Android workflow, wit
 
 **How does desktop sync work on Windows?**  
 The bridge watches phone-authored thread activity and nudges the installed Codex desktop app onto the same thread. For repeated phone activity on an already-open thread, the Windows path may use a stronger refresh or relaunch workaround so the desktop transcript catches up without reopening the wrong Electron build through a stale `codex://` registration.
+
+**How does desktop sync work on macOS?**  
+The bridge opens the target `codex://threads/<id>` route directly for live phone activity and only escalates to a Codex relaunch on completion when the desktop needs a stronger remount. It intentionally avoids the older Settings-page bounce so macOS does not flicker away from the active thread during phone-authored runs.
 
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.

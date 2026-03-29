@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -401,6 +400,7 @@ private fun SidebarThreadRow(
     }
 
     Surface(
+        onClick = { onOpenThread(thread.id) },
         modifier = Modifier.fillMaxWidth(),
         color = if (isSelected)
             MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -411,7 +411,6 @@ private fun SidebarThreadRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onOpenThread(thread.id) }
                 .padding(horizontal = 16.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -254,5 +254,6 @@ private fun AboutLinkButton(
         )
         Spacer(modifier = Modifier.width(10.dp))
         Text(label)
+        Spacer(modifier = Modifier.weight(1f))
     }
 }

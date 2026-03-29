@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.androdex.android.R
 import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.ui.shared.connectionStatusDotColor
 import io.androdex.android.ui.state.PairingScreenUiState
 
 @Composable
@@ -69,17 +70,10 @@ internal fun PairingScreen(
     onReconnectSaved: () -> Unit,
 ) {
     val isConnecting = state.connection.status == ConnectionStatus.CONNECTING ||
-        state.connection.status == ConnectionStatus.HANDSHAKING
+        state.connection.status == ConnectionStatus.HANDSHAKING ||
+        state.connection.status == ConnectionStatus.RETRYING_SAVED_PAIRING
 
-    val statusDotColor = when (state.connection.status) {
-        ConnectionStatus.CONNECTED -> Color(0xFF30D158)
-        ConnectionStatus.CONNECTING,
-        ConnectionStatus.HANDSHAKING,
-        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFFF9F0A)
-        ConnectionStatus.RECONNECT_REQUIRED,
-        ConnectionStatus.UPDATE_REQUIRED -> Color(0xFFFF453A)
-        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-    }
+    val statusDotColor = connectionStatusDotColor(state.connection.status)
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -99,7 +93,7 @@ internal fun PairingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .safeDrawingPadding()
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

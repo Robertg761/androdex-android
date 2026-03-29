@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import io.androdex.android.R
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.shared.connectionStatusDotColor
 import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.HomeScreenUiState
 import io.androdex.android.ui.state.TrustedPairUiState
@@ -129,21 +130,15 @@ private fun HomeEmptyState(
         connection.status == ConnectionStatus.HANDSHAKING ||
         connection.status == ConnectionStatus.RETRYING_SAVED_PAIRING
 
-    val (dotColor, statusText) = when (connection.status) {
-        ConnectionStatus.CONNECTED ->
-            Color(0xFF30D158) to "Connected"
-        ConnectionStatus.CONNECTING ->
-            Color(0xFFFF9F0A) to "Connecting..."
-        ConnectionStatus.HANDSHAKING ->
-            Color(0xFFFF9F0A) to "Handshaking..."
-        ConnectionStatus.RETRYING_SAVED_PAIRING ->
-            Color(0xFFFF9F0A) to "Waiting for host..."
-        ConnectionStatus.RECONNECT_REQUIRED ->
-            Color(0xFFFF453A) to "Reconnect required"
-        ConnectionStatus.UPDATE_REQUIRED ->
-            Color(0xFFFF453A) to "Update required"
-        ConnectionStatus.DISCONNECTED ->
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) to "Offline"
+    val dotColor = connectionStatusDotColor(connection.status)
+    val statusText = when (connection.status) {
+        ConnectionStatus.CONNECTED -> "Connected"
+        ConnectionStatus.CONNECTING -> "Connecting..."
+        ConnectionStatus.HANDSHAKING -> "Handshaking..."
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting for host..."
+        ConnectionStatus.RECONNECT_REQUIRED -> "Reconnect required"
+        ConnectionStatus.UPDATE_REQUIRED -> "Update required"
+        ConnectionStatus.DISCONNECTED -> "Offline"
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")

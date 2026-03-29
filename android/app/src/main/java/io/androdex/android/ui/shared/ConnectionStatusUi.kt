@@ -51,18 +51,30 @@ import io.androdex.android.ui.state.HostAccountUiState
 import io.androdex.android.ui.state.TrustedPairUiState
 
 @Composable
+internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (status) {
+    ConnectionStatus.CONNECTED -> MaterialTheme.colorScheme.tertiary
+    ConnectionStatus.CONNECTING,
+    ConnectionStatus.HANDSHAKING,
+    ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFFF9F0A)
+    ConnectionStatus.RECONNECT_REQUIRED,
+    ConnectionStatus.UPDATE_REQUIRED -> MaterialTheme.colorScheme.error
+    ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+}
+
+@Composable
 internal fun StatusCapsule(
     state: ConnectionBannerUiState,
     modifier: Modifier = Modifier,
 ) {
-    val (dotColor, label) = when (state.status) {
-        ConnectionStatus.CONNECTED -> Color(0xFF34D399) to "Connected"
-        ConnectionStatus.CONNECTING -> Color(0xFFFBBF24) to "Connecting"
-        ConnectionStatus.HANDSHAKING -> Color(0xFFFBBF24) to "Handshaking"
-        ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFF59E0B) to "Waiting For Host"
-        ConnectionStatus.RECONNECT_REQUIRED -> Color(0xFFF87171) to "Repair Pairing Required"
-        ConnectionStatus.UPDATE_REQUIRED -> Color(0xFFF87171) to "Update Required"
-        ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.outline to "Disconnected"
+    val dotColor = connectionStatusDotColor(state.status)
+    val label = when (state.status) {
+        ConnectionStatus.CONNECTED -> "Connected"
+        ConnectionStatus.CONNECTING -> "Connecting"
+        ConnectionStatus.HANDSHAKING -> "Handshaking"
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting for host"
+        ConnectionStatus.RECONNECT_REQUIRED -> "Repair Pairing Required"
+        ConnectionStatus.UPDATE_REQUIRED -> "Update Required"
+        ConnectionStatus.DISCONNECTED -> "Disconnected"
     }
     val guidance = when (state.status) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> {

@@ -326,7 +326,7 @@ class CodexDesktopRefresher {
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
-        if (!this.usesRemodexMacRefreshPath()) {
+        if (!this.usesMacThreadHandoffRefresh()) {
           await this.syncThreadState(targetThreadId, {
             targetUrl,
             refreshKinds: pendingRefreshKinds,
@@ -365,7 +365,7 @@ class CodexDesktopRefresher {
     }
   }
 
-  usesRemodexMacRefreshPath() {
+  usesMacThreadHandoffRefresh() {
     return this.platform === "darwin" && this.refreshBackend === "applescript";
   }
 
@@ -388,8 +388,8 @@ class CodexDesktopRefresher {
 
   async executeRefresh(targetUrl, options = {}) {
     const refreshTarget = targetUrl || "";
-    const useRemodexMacRefreshPath = this.usesRemodexMacRefreshPath();
-    const isMacCompletionRefresh = useRemodexMacRefreshPath
+    const useMacThreadHandoffRefresh = this.usesMacThreadHandoffRefresh();
+    const isMacCompletionRefresh = useMacThreadHandoffRefresh
       && options.isCompletionRun
       && isConcreteThreadDeepLink(refreshTarget);
 
@@ -400,7 +400,7 @@ class CodexDesktopRefresher {
 
     if (this.refreshExecutor) {
       await this.refreshExecutor(refreshTarget);
-      if (!useRemodexMacRefreshPath) {
+      if (!useMacThreadHandoffRefresh) {
         await this.retryAppleScriptThreadOpen(refreshTarget);
       }
       return;
@@ -418,7 +418,7 @@ class CodexDesktopRefresher {
       return;
     }
 
-    if (useRemodexMacRefreshPath && !options.isCompletionRun) {
+    if (useMacThreadHandoffRefresh && !options.isCompletionRun) {
       await this.protocolRefreshExecutor({
         targetUrl: refreshTarget,
         bundleId: this.bundleId,
@@ -437,7 +437,7 @@ class CodexDesktopRefresher {
         this.appPath,
         refreshTarget,
       ]);
-      if (!useRemodexMacRefreshPath) {
+      if (!useMacThreadHandoffRefresh) {
         await this.retryAppleScriptThreadOpen(refreshTarget);
       }
       return;
@@ -481,8 +481,8 @@ class CodexDesktopRefresher {
       return;
     }
 
-    // Newer Codex desktop builds occasionally coalesce the first thread deep
-    // link after the Remodex-style settings bounce, so reopen the target once.
+    // Some desktop builds occasionally coalesce the first deep link on the
+    // legacy AppleScript path, so reopen the concrete thread once.
     await this.sleepFn(this.applescriptTargetRetryDelayMs);
     await this.protocolRefreshExecutor({
       targetUrl,
@@ -762,7 +762,7 @@ class CodexDesktopRefresher {
       url: buildThreadDeepLink(event.threadId),
     });
 
-    if (this.usesRemodexMacRefreshPath()) {
+    if (this.usesMacThreadHandoffRefresh()) {
       return;
     }
 

@@ -7,6 +7,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -34,7 +39,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -99,15 +103,98 @@ import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
-import io.androdex.android.ui.shared.AgentActivityBanner
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.state.ThreadGitUiState
+import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
 import io.androdex.android.ui.state.ToolUserInputQuestionUiState
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
+
+private data class BubbleContext(
+    val message: ConversationMessage,
+    val isFirstInGroup: Boolean,
+    val isLastInGroup: Boolean,
+)
+
+@Composable
+private fun runStateDotColor(runState: ThreadRunBadgeUiState?): Color = when (runState) {
+    ThreadRunBadgeUiState.RUNNING -> MaterialTheme.colorScheme.primary
+    ThreadRunBadgeUiState.READY -> MaterialTheme.colorScheme.tertiary
+    ThreadRunBadgeUiState.FAILED -> MaterialTheme.colorScheme.error
+    null -> Color.Transparent
+}
+
+private fun buildBubbleContexts(messages: List<ConversationMessage>): List<BubbleContext> {
+    if (messages.isEmpty()) return emptyList()
+    val result = mutableListOf<BubbleContext>()
+    for (i in messages.indices) {
+        val msg = messages[i]
+        val isSystem = msg.role == ConversationRole.SYSTEM
+        if (isSystem) {
+            result.add(BubbleContext(message = msg, isFirstInGroup = true, isLastInGroup = true))
+            continue
+        }
+        val prev = messages.getOrNull(i - 1)
+        val next = messages.getOrNull(i + 1)
+        fun sameGroup(a: ConversationMessage, b: ConversationMessage): Boolean {
+            if (a.role == ConversationRole.SYSTEM || b.role == ConversationRole.SYSTEM) return false
+            if (a.role != b.role) return false
+            if (a.role == ConversationRole.ASSISTANT && (a.kind != ConversationKind.CHAT || b.kind != ConversationKind.CHAT)) return false
+            if ((b.createdAtEpochMs - a.createdAtEpochMs) > 180_000L) return false
+            return true
+        }
+        val isSameGroupAsPrev = prev != null && sameGroup(prev, msg)
+        val isSameGroupAsNext = next != null && sameGroup(msg, next)
+        result.add(
+            BubbleContext(
+                message = msg,
+                isFirstInGroup = !isSameGroupAsPrev,
+                isLastInGroup = !isSameGroupAsNext,
+            )
+        )
+    }
+    return result
+}
+
+private fun buildAgentActivityText(messages: List<ConversationMessage>): String? {
+    val isStreaming = messages.any { it.isStreaming }
+    if (!isStreaming) return null
+
+    val activeSystemMessage = messages.lastOrNull {
+        it.role == ConversationRole.SYSTEM && it.isStreaming
+    } ?: messages.lastOrNull { it.role == ConversationRole.SYSTEM }
+
+    return when {
+        activeSystemMessage == null -> "Agent is writing a response..."
+        activeSystemMessage.kind == ConversationKind.FILE_CHANGE -> {
+            val fileName = activeSystemMessage.filePath
+                ?.substringAfterLast('/')
+                ?.substringAfterLast('\\')
+            if (fileName != null) "Edited $fileName" else "Edited files"
+        }
+        activeSystemMessage.kind == ConversationKind.COMMAND -> {
+            val title = activeSystemMessage.execution?.title
+                ?: activeSystemMessage.command
+                ?: "command"
+            "Running: ${title.take(40)}"
+        }
+        activeSystemMessage.kind == ConversationKind.EXECUTION -> {
+            val execution = activeSystemMessage.execution
+            when {
+                execution == null -> "Running activity..."
+                execution.title.isBlank() -> "Running ${execution.label.lowercase()}..."
+                else -> "${execution.label}: ${execution.title.take(48)}"
+            }
+        }
+        activeSystemMessage.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
+        activeSystemMessage.kind == ConversationKind.THINKING -> "Thinking..."
+        activeSystemMessage.kind == ConversationKind.PLAN -> "Planning..."
+        else -> null
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -169,9 +256,9 @@ internal fun ThreadTimelineScreen(
     BackHandler(onBack = onBack)
     val listState = remember { LazyListState() }
     val coroutineScope = rememberCoroutineScope()
-    var overflowMenuExpanded by remember { mutableStateOf(false) }
-    var rollbackDialogOpen by remember { mutableStateOf(false) }
-    var cleanBackgroundTerminalsDialogOpen by remember { mutableStateOf(false) }
+    var overflowMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var rollbackDialogOpen by rememberSaveable { mutableStateOf(false) }
+    var cleanBackgroundTerminalsDialogOpen by rememberSaveable { mutableStateOf(false) }
     val showJumpToLatest by remember {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
@@ -189,17 +276,44 @@ internal fun ThreadTimelineScreen(
             listState.scrollToItem(state.messages.lastIndex)
         }
     }
+    val bubbleContexts = remember(state.messages) { buildBubbleContexts(state.messages) }
+    val agentActivityText = remember(state.messages) { buildAgentActivityText(state.messages) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = state.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    val dotColor = runStateDotColor(state.runState)
+                    val infiniteTransition = rememberInfiniteTransition(label = "runDot")
+                    val dotAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.4f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+                        label = "runDotAlpha",
                     )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (state.runState != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        dotColor.copy(
+                                            alpha = if (state.runState == ThreadRunBadgeUiState.RUNNING) dotAlpha else 1f
+                                        )
+                                    ),
+                            )
+                        }
+                        Text(
+                            text = state.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -210,12 +324,6 @@ internal fun ThreadTimelineScreen(
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = onOpenRuntime,
-                        enabled = state.composer.runtimeButtonEnabled,
-                    ) {
-                        Icon(Icons.Default.Tune, contentDescription = "Runtime")
-                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
@@ -337,7 +445,6 @@ internal fun ThreadTimelineScreen(
                 .imePadding(),
         ) {
             BusyIndicator(state = state.busy)
-            AgentActivityBanner(messages = state.messages)
             if (state.isForkedThread) {
                 ForkedThreadBanner(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -364,10 +471,13 @@ internal fun ThreadTimelineScreen(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(state.messages, key = { it.id }) { message ->
-                        MessageBubble(message = message)
+                    items(bubbleContexts, key = { it.message.id }) { ctx ->
+                        MessageBubble(
+                            message = ctx.message,
+                            isFirstInGroup = ctx.isFirstInGroup,
+                            isLastInGroup = ctx.isLastInGroup,
+                        )
                     }
                 }
 
@@ -420,6 +530,7 @@ internal fun ThreadTimelineScreen(
 
             ComposerBar(
                 state = state.composer,
+                activityText = agentActivityText,
                 onTextChange = onComposerChanged,
                 onPlanModeChanged = onPlanModeChanged,
                 onSubagentsModeChanged = onSubagentsModeChanged,
@@ -1330,28 +1441,44 @@ private fun GitAlertDialog(
 }
 
 @Composable
-private fun MessageBubble(message: ConversationMessage) {
+private fun MessageBubble(
+    message: ConversationMessage,
+    isFirstInGroup: Boolean = true,
+    isLastInGroup: Boolean = true,
+) {
     val isUser = message.role == ConversationRole.USER
     val isSystem = message.role == ConversationRole.SYSTEM
 
     if (isSystem) {
-        when (message.kind) {
-            ConversationKind.FILE_CHANGE -> FileChangeBubble(message)
-            ConversationKind.COMMAND -> CommandBubble(message)
-            ConversationKind.EXECUTION -> ExecutionBubble(message)
-            ConversationKind.SUBAGENT_ACTION -> SubagentActionBubble(message)
-            ConversationKind.PLAN -> PlanBubble(message)
-            ConversationKind.THINKING -> ThinkingBubble(message)
-            else -> SystemCapsule(message)
+        Box(modifier = Modifier.padding(top = if (isFirstInGroup) 10.dp else 2.dp)) {
+            when (message.kind) {
+                ConversationKind.FILE_CHANGE -> FileChangeBubble(message)
+                ConversationKind.COMMAND -> CommandBubble(message)
+                ConversationKind.EXECUTION -> ExecutionBubble(message)
+                ConversationKind.SUBAGENT_ACTION -> SubagentActionBubble(message)
+                ConversationKind.PLAN -> PlanBubble(message)
+                ConversationKind.THINKING -> ThinkingBubble(message)
+                else -> SystemCapsule(message)
+            }
         }
         return
     }
 
     val alignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleShape = if (isUser) {
-        RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
+        when {
+            isFirstInGroup && isLastInGroup -> RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
+            isFirstInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 20.dp)
+            isLastInGroup -> RoundedCornerShape(20.dp, 6.dp, 6.dp, 20.dp)
+            else -> RoundedCornerShape(20.dp, 6.dp, 6.dp, 20.dp)
+        }
     } else {
-        RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
+        when {
+            isFirstInGroup && isLastInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
+            isFirstInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 20.dp)
+            isLastInGroup -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp)
+            else -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp)
+        }
     }
     val containerColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -1375,7 +1502,9 @@ private fun MessageBubble(message: ConversationMessage) {
     }
 
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (isFirstInGroup) 10.dp else 2.dp),
         contentAlignment = alignment,
     ) {
         Surface(
@@ -1410,12 +1539,14 @@ private fun MessageBubble(message: ConversationMessage) {
                     )
                 }
 
-                Text(
-                    text = DateFormat.getTimeInstance(DateFormat.SHORT)
-                        .format(Date(message.createdAtEpochMs)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textColor.copy(alpha = 0.5f),
-                )
+                if (isLastInGroup) {
+                    Text(
+                        text = DateFormat.getTimeInstance(DateFormat.SHORT)
+                            .format(Date(message.createdAtEpochMs)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.5f),
+                    )
+                }
             }
         }
     }
@@ -1668,11 +1799,11 @@ private fun DiffView(
     diffText: String,
     modifier: Modifier = Modifier,
 ) {
-    val addedBg = Color(0xFF22C55E).copy(alpha = 0.12f)
-    val removedBg = Color(0xFFEF4444).copy(alpha = 0.12f)
-    val addedText = Color(0xFF16A34A)
-    val removedText = Color(0xFFDC2626)
-    val hunkText = Color(0xFF6366F1)
+    val addedBg = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+    val removedBg = MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+    val addedText = MaterialTheme.colorScheme.tertiary
+    val removedText = MaterialTheme.colorScheme.error
+    val hunkText = MaterialTheme.colorScheme.secondary
     val contextText = MaterialTheme.colorScheme.onSurfaceVariant
     val scrollState = rememberScrollState()
 
@@ -1723,14 +1854,23 @@ private fun CommandBubble(message: ConversationMessage) {
 
 @Composable
 private fun ExecutionBubble(message: ConversationMessage) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.1f
+    val terminalSurface = if (isDark) Color(0xFF1E1E2E) else MaterialTheme.colorScheme.surfaceContainerLowest
+    val terminalHeader = if (isDark) Color(0xFF313244) else MaterialTheme.colorScheme.surfaceContainerLow
+    val terminalText = if (isDark) Color(0xFFCDD6F4) else MaterialTheme.colorScheme.onSurface
+    val terminalSubtext = if (isDark) Color(0xFFBAC2DE) else MaterialTheme.colorScheme.onSurfaceVariant
+    val outputSurface = if (isDark) Color(0xFF111827) else MaterialTheme.colorScheme.surfaceContainerLowest
+    val outputText = if (isDark) Color(0xFFCBD5E1) else MaterialTheme.colorScheme.onSurfaceVariant
+    val labelPill = if (isDark) Color(0xFF313244) else MaterialTheme.colorScheme.surfaceContainerHighest
+    val labelPillText = if (isDark) Color(0xFFCDD6F4) else MaterialTheme.colorScheme.onSurfaceVariant
     val execution = remember(message) { message.execution ?: fallbackExecutionContent(message) }
     val normalizedStatus = execution.status.trim().lowercase()
     val isRunning = normalizedStatus == "running" || normalizedStatus == "in_progress"
     val isFailed = normalizedStatus == "failed" || normalizedStatus == "error"
     val statusColor = when {
         isRunning -> Color(0xFFFBBF24)
-        isFailed -> Color(0xFFEF4444)
-        else -> Color(0xFF34D399)
+        isFailed -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.tertiary
     }
     val titleStyle = if (execution.kind == ExecutionKind.COMMAND) {
         MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
@@ -1745,103 +1885,113 @@ private fun ExecutionBubble(message: ConversationMessage) {
     }
 
     Surface(
-        color = Color(0xFF1E1E2E),
+        color = terminalSurface,
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = hasDetails) { expanded = !expanded }
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+            Surface(
+                color = terminalHeader,
+                shape = if (expanded && hasDetails) {
+                    RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                } else {
+                    RoundedCornerShape(12.dp)
+                },
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = hasDetails) { expanded = !expanded }
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFF5F57)),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFFBD2E)),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF28C840)),
-                        )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFF5F57)),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFBD2E)),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF28C840)),
+                            )
+                        }
+
+                        Surface(
+                            color = labelPill,
+                            shape = RoundedCornerShape(999.dp),
+                        ) {
+                            Text(
+                                text = execution.label.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = labelPillText,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        Surface(
+                            color = statusColor.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(4.dp),
+                        ) {
+                            Text(
+                                text = execution.status.normalizedExecutionStatusLabel(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = statusColor,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
                     }
 
-                    Surface(
-                        color = Color(0xFF313244),
-                        shape = RoundedCornerShape(999.dp),
-                    ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = execution.label.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFCDD6F4),
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    Surface(
-                        color = statusColor.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(4.dp),
-                    ) {
-                        Text(
-                            text = execution.status.normalizedExecutionStatusLabel(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor,
+                            text = execution.title,
+                            style = titleStyle,
+                            color = terminalText,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
+
+                        execution.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                            Text(
+                                text = summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = terminalSubtext,
+                                maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
-                }
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = execution.title,
-                        style = titleStyle,
-                        color = Color(0xFFCDD6F4),
-                        fontWeight = FontWeight.SemiBold,
-                    )
-
-                    execution.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                    if (isRunning) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = statusColor,
+                            trackColor = terminalSurface,
+                        )
+                    } else if (hasDetails) {
                         Text(
-                            text = summary,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFBAC2DE),
-                            maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else 2,
-                            overflow = TextOverflow.Ellipsis,
+                            text = if (expanded) "Hide details" else "Show details",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = terminalSubtext,
                         )
                     }
-                }
-
-                if (isRunning) {
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = statusColor,
-                        trackColor = Color(0xFF313244),
-                    )
-                } else if (hasDetails) {
-                    Text(
-                        text = if (expanded) "Hide details" else "Show details",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF94A3B8),
-                    )
                 }
             }
 
@@ -1853,10 +2003,18 @@ private fun ExecutionBubble(message: ConversationMessage) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     execution.details.forEach { detail ->
-                        ExecutionDetailRow(detail = detail)
+                        ExecutionDetailRow(
+                            detail = detail,
+                            labelColor = terminalSubtext,
+                            textColor = terminalText,
+                        )
                     }
                     execution.output?.takeIf { it.isNotBlank() }?.let { output ->
-                        ExecutionOutputView(output = output)
+                        ExecutionOutputView(
+                            output = output,
+                            surfaceColor = outputSurface,
+                            textColor = outputText,
+                        )
                     }
                 }
             }
@@ -1866,6 +2024,19 @@ private fun ExecutionBubble(message: ConversationMessage) {
 
 @Composable
 private fun ExecutionDetailRow(detail: ExecutionDetail) {
+    ExecutionDetailRow(
+        detail = detail,
+        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        textColor = MaterialTheme.colorScheme.onSurface,
+    )
+}
+
+@Composable
+private fun ExecutionDetailRow(
+    detail: ExecutionDetail,
+    labelColor: Color,
+    textColor: Color,
+) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top,
@@ -1874,7 +2045,7 @@ private fun ExecutionDetailRow(detail: ExecutionDetail) {
         Text(
             text = detail.label,
             style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF94A3B8),
+            color = labelColor,
             modifier = Modifier.width(120.dp),
         )
         Text(
@@ -1884,17 +2055,21 @@ private fun ExecutionDetailRow(detail: ExecutionDetail) {
             } else {
                 MaterialTheme.typography.bodySmall
             },
-            color = Color(0xFFE2E8F0),
+            color = textColor,
             modifier = Modifier.weight(1f),
         )
     }
 }
 
 @Composable
-private fun ExecutionOutputView(output: String) {
+private fun ExecutionOutputView(
+    output: String,
+    surfaceColor: Color,
+    textColor: Color,
+) {
     val scrollState = rememberScrollState()
     Surface(
-        color = Color(0xFF111827),
+        color = surfaceColor,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1911,7 +2086,7 @@ private fun ExecutionOutputView(output: String) {
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                     ),
-                    color = Color(0xFFCBD5E1),
+                    color = textColor,
                     softWrap = false,
                 )
             }

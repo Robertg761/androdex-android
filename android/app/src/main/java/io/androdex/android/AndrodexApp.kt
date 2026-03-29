@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
@@ -36,7 +37,6 @@ import io.androdex.android.ui.sidebar.SidebarContent
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.HomeScreenUiState
 import io.androdex.android.ui.state.toAppUiState
-import androidx.compose.material3.MaterialTheme
 import io.androdex.android.ui.turn.ForkThreadSheet
 import io.androdex.android.ui.turn.ThreadRuntimeSheet
 import io.androdex.android.ui.turn.ThreadTimelineScreen

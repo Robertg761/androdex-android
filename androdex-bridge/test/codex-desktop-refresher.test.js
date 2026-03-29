@@ -137,7 +137,7 @@ test("createDesktopLaunchPlan opens the app directly when no target URL is provi
   assert.deepEqual(launchPlan.args, ["-a", "/Applications/Codex.app"]);
 });
 
-test("macOS refresh AppleScript does not bounce through Settings", () => {
+test("macOS refresh AppleScript does not route through Settings", () => {
   const script = fs.readFileSync(MAC_REFRESH_SCRIPT_PATH, "utf8");
   assert.doesNotMatch(script, /codex:\/\/settings/);
 });
@@ -378,7 +378,7 @@ test("thread state sync runs before a concrete thread refresh", async () => {
   assert.deepEqual(refreshCalls, ["codex://threads/thread-sync"]);
 });
 
-test("macOS applescript refresh opens the thread directly without sync or settings bounce", async () => {
+test("macOS applescript refresh opens the thread directly without sync or a Settings detour", async () => {
   const syncCalls = [];
   const openCalls = [];
 
@@ -449,7 +449,7 @@ test("macOS rollout watcher avoids repeated mid-run refresh flicker", async () =
   assert.deepEqual(refreshCalls, []);
 });
 
-test("macOS completion refresh can escalate to a hard relaunch for the concrete thread", async () => {
+test("macOS completion refresh can relaunch Codex for the concrete thread", async () => {
   const relaunchCalls = [];
 
   const refresher = new CodexDesktopRefresher({
@@ -484,7 +484,7 @@ test("macOS completion refresh can escalate to a hard relaunch for the concrete 
   assert.deepEqual(relaunchCalls, ["codex://threads/thread-macos-complete"]);
 });
 
-test("macOS applescript refresh does not reopen non-concrete targets after the bounce", async () => {
+test("macOS applescript refresh does not reopen non-concrete targets after the direct open", async () => {
   const refreshCalls = [];
   const reopenCalls = [];
 

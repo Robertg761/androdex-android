@@ -115,6 +115,7 @@ class HostRuntime {
     this.activationQueue = Promise.resolve();
     this.activationSequence = 0;
     this.relayStatus = "disconnected";
+    this.relayReadyWaiters = new Set();
     this.codexHandshakeState = "cold";
     this.forwardedInitializeRequestIds = new Set();
     this.relaySanitizedResponseMethodsById = new Map();
@@ -151,6 +152,7 @@ class HostRuntime {
     this.isStopping = true;
     this.clearReconnectTimer();
     this.clearConnectTimeout();
+    this.rejectRelayReadyWaiters(new Error("The Androdex daemon stopped before the relay connected."));
     this.clearCachedBridgeHandshakeState();
     this.stopContextUsageWatcher({ clearHint: false });
     this.rolloutLiveMirror?.stopAll();
@@ -189,6 +191,39 @@ class HostRuntime {
     return this.secureTransport.createPairingPayload();
   }
 
+  waitForRelayReady({ timeoutMs = this.relayConnectTimeoutMs } = {}) {
+    if (this.relayStatus === "connected") {
+      return Promise.resolve();
+    }
+
+    if (
+      this.socket?.readyState !== this.WebSocketImpl.OPEN
+      && this.socket?.readyState !== this.WebSocketImpl.CONNECTING
+    ) {
+      this.connectRelay();
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        timer: null,
+      };
+
+      if (timeoutMs > 0) {
+        waiter.timer = this.setTimeoutFn(() => {
+          this.relayReadyWaiters.delete(waiter);
+          reject(new Error(
+            "Timed out while waiting for the host daemon to connect to the relay. Check the relay URL and network, then try pairing again."
+          ));
+        }, timeoutMs);
+      }
+
+      this.relayReadyWaiters.add(waiter);
+      this.flushRelayReadyWaiters();
+    });
+  }
+
   getStatus() {
     const currentDeviceState = this.secureTransport.getCurrentDeviceState();
     return {
@@ -217,6 +252,34 @@ class HostRuntime {
     }
     this.clearTimeoutFn(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  flushRelayReadyWaiters() {
+    if (this.relayStatus !== "connected" || this.relayReadyWaiters.size === 0) {
+      return;
+    }
+
+    for (const waiter of this.relayReadyWaiters) {
+      if (waiter.timer) {
+        this.clearTimeoutFn(waiter.timer);
+      }
+      waiter.resolve();
+    }
+    this.relayReadyWaiters.clear();
+  }
+
+  rejectRelayReadyWaiters(error) {
+    if (this.relayReadyWaiters.size === 0) {
+      return;
+    }
+
+    for (const waiter of this.relayReadyWaiters) {
+      if (waiter.timer) {
+        this.clearTimeoutFn(waiter.timer);
+      }
+      waiter.reject(error);
+    }
+    this.relayReadyWaiters.clear();
   }
 
   clearConnectTimeout(timer = this.connectTimeoutTimer) {
@@ -291,6 +354,7 @@ class HostRuntime {
       this.clearConnectTimeout(connectTimeoutTimer);
       this.reconnectAttempt = 0;
       this.relayStatus = "connected";
+      this.flushRelayReadyWaiters();
       this.supportsNativeTokenUsageUpdates = false;
       this.secureTransport.bindLiveSendWireMessage((wireMessage) => {
         if (nextSocket.readyState !== this.WebSocketImpl.OPEN) {

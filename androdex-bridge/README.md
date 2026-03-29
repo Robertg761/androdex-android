@@ -78,6 +78,12 @@ Windows refresh notes:
 - this avoids opening the wrong Codex build if the machine has a stale or developer protocol registration
 - repeated phone activity on the same already-open thread may trigger a stronger refresh or relaunch workaround so the desktop transcript catches up
 
+macOS refresh notes:
+
+- mid-run phone activity opens the concrete thread route directly instead of detouring through Settings
+- completion refreshes can relaunch Codex onto the target thread when a plain deep link is not enough
+- rollout-derived mid-run refreshes stay suppressed on macOS to avoid visible Settings-page flicker while the transcript is still growing
+
 The bridge resolves relay configuration in this order:
 
 1. `ANDRODEX_RELAY`
@@ -118,7 +124,7 @@ Use this after bridge changes to confirm the host runtime still behaves on Windo
 1. Run `androdex pair` and confirm the relay pairing flow still succeeds.
 2. Run `androdex up`, pick a workspace, and confirm the host keeps Codex bound to that local project.
 3. From Android, open an existing thread and create a new one to confirm the remote client flow still works end to end.
-4. If desktop refresh is enabled, verify phone-authored thread activity updates the host Codex desktop as expected.
+4. If desktop refresh is enabled, verify phone-authored thread activity updates the host Codex desktop as expected and that macOS does not bounce through Settings during live runs.
 5. Restart the daemon or reconnect the phone and confirm the saved pairing and active workspace recover without losing host-local state.
 
 ## Project status
