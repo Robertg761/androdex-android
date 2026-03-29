@@ -146,7 +146,7 @@ The workflow:
 4. builds `android/app/build/outputs/apk/release/app-release.apk` with `assembleRelease`
 5. uploads the signed APK as the `androdex-release-apk` workflow artifact
 
-You can trigger it manually from the Actions tab with `workflow_dispatch`, or by pushing a tag that matches `android-v*`.
+It now runs automatically on every push to `main`. You can also trigger it manually from the Actions tab with `workflow_dispatch`, or by pushing a tag that matches `android-v*`.
 
 Example command to create the base64 secret value locally:
 
