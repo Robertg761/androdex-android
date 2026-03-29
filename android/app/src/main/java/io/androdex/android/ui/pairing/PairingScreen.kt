@@ -1,7 +1,20 @@
 package io.androdex.android.ui.pairing
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -9,7 +22,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -20,24 +35,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.androdex.android.R
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.shared.HostAccountCard
 import io.androdex.android.ui.shared.LandingBackdrop
-import io.androdex.android.ui.shared.LandingSectionSurface
 import io.androdex.android.ui.shared.RemodexButton
 import io.androdex.android.ui.shared.RemodexButtonStyle
 import io.androdex.android.ui.shared.RemodexDivider
+import io.androdex.android.ui.shared.RemodexGroupedSurface
 import io.androdex.android.ui.shared.RemodexInputField
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.StatusCapsule
-import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.PairingScreenUiState
+import io.androdex.android.ui.state.TrustedPairUiState
 import io.androdex.android.ui.theme.RemodexTheme
+
+private val PairingContentMaxWidth = 420.dp
 
 @Composable
 internal fun PairingScreen(
@@ -48,6 +68,9 @@ internal fun PairingScreen(
     onReconnectSaved: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .widthIn(max = PairingContentMaxWidth)
 
     Scaffold(containerColor = Color.Transparent) { paddingValues ->
         Box(
@@ -65,124 +88,158 @@ internal fun PairingScreen(
                         horizontal = geometry.pageHorizontalPadding,
                         vertical = geometry.pageVerticalPadding,
                     ),
-                verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing18),
             ) {
                 PairingHeroCard(
                     state = state,
                     onScanQr = onScanQr,
                     onReconnectSaved = onReconnectSaved,
+                    modifier = cardModifier,
                 )
 
-                StatusCapsule(state = state.connection)
+                StatusCapsule(
+                    state = state.connection,
+                    modifier = cardModifier,
+                )
+
+                if (state.hasSavedPairing || state.trustedPair != null) {
+                    SavedReconnectCard(
+                        state = state,
+                        onReconnectSaved = onReconnectSaved,
+                        modifier = cardModifier,
+                    )
+                }
 
                 RecoveryCard(
                     state = state,
-                    onReconnectSaved = onReconnectSaved,
+                    modifier = cardModifier,
                 )
-
-                if (state.trustedPair != null) {
-                    TrustedPairCard(state = state.trustedPair)
-                }
-
-                if (state.hostAccount != null) {
-                    HostAccountCard(state = state.hostAccount)
-                }
 
                 ManualPairingCard(
                     state = state,
                     onPairingInputChanged = onPairingInputChanged,
                     onConnect = onConnect,
+                    modifier = cardModifier,
                 )
+
+                if (state.hostAccount != null) {
+                    HostAccountCard(
+                        state = state.hostAccount,
+                        modifier = cardModifier,
+                    )
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PairingHeroCard(
     state: PairingScreenUiState,
     onScanQr: () -> Unit,
     onReconnectSaved: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val buttonPadding = PaddingValues(
+        horizontal = geometry.spacing20,
+        vertical = geometry.spacing14,
+    )
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+    RemodexGroupedSurface(
+        modifier = modifier,
+        cornerRadius = geometry.cornerComposer,
+        tonalColor = colors.subtleGlassTint,
+    ) {
         Column(
             modifier = Modifier.padding(
-                horizontal = geometry.pageHorizontalPadding,
-                vertical = geometry.pageVerticalPadding,
+                horizontal = geometry.spacing24,
+                vertical = geometry.spacing24,
             ),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing18),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing20),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing14),
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                modifier = Modifier.size(72.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = colors.selectedRowFill.copy(alpha = 0.82f),
             ) {
-                Surface(
-                    modifier = Modifier.size(76.dp),
-                    shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
-                    color = RemodexTheme.colors.selectedRowFill,
-                ) {
-                    Image(
-                        painter = painterResource(id = R.mipmap.ic_launcher_foreground),
-                        contentDescription = "Androdex",
-                        modifier = Modifier.size(76.dp),
-                    )
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing6)) {
-                    Text(
-                        text = "Androdex",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        color = RemodexTheme.colors.textPrimary,
-                    )
-                    Text(
-                        text = "Pair once, then keep Codex running on your host while Android stays the remote control.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = RemodexTheme.colors.textSecondary,
-                    )
-                }
+                Image(
+                    painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                    contentDescription = "Androdex",
+                    modifier = Modifier.size(72.dp),
+                )
             }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = RemodexTheme.colors.accentBlue.copy(alpha = 0.14f),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Lock,
-                        contentDescription = null,
-                        tint = RemodexTheme.colors.accentBlue,
-                        modifier = Modifier
-                            .padding(geometry.spacing8)
-                            .size(geometry.spacing16),
-                    )
-                }
                 Text(
-                    text = "End-to-end encrypted pairing with relay-compatible reconnects",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = RemodexTheme.colors.textSecondary,
+                    text = "Androdex",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = colors.textPrimary,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = "Keep Codex running on your host. Pair once, then reconnect securely from Android whenever the bridge comes back.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.textSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.widthIn(max = 320.dp),
+                )
+            }
+
+            PairingTrustCapsule()
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            ) {
+                PairingFeatureRow(
+                    icon = Icons.Outlined.Computer,
+                    title = "Host-local runtime",
+                    description = "Threads, tools, and git actions keep running on your computer.",
+                )
+                PairingFeatureRow(
+                    icon = Icons.Outlined.Lock,
+                    title = "Saved trust reconnects fast",
+                    description = "Use the same trusted pair again before you fall back to scanning or pasting.",
                 )
             }
 
             if (state.isBusy) {
-                LinearProgressIndicator(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    color = RemodexTheme.colors.accentBlue,
-                    trackColor = RemodexTheme.colors.selectedRowFill,
-                )
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                ) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accentBlue,
+                        trackColor = colors.selectedRowFill,
+                    )
+                    Text(
+                        text = state.connection.detail ?: "Connecting to your host...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
             ) {
                 RemodexButton(
                     onClick = onScanQr,
                     enabled = !state.isBusy,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = buttonPadding,
                 ) {
                     Icon(
                         imageVector = Icons.Default.QrCode2,
@@ -192,33 +249,317 @@ private fun PairingHeroCard(
                     Text(
                         text = "Scan QR",
                         modifier = Modifier.padding(start = geometry.spacing8),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                     )
                 }
-                RemodexButton(
-                    onClick = onReconnectSaved,
-                    enabled = state.hasSavedPairing && state.reconnectEnabled,
-                    modifier = Modifier.weight(1f),
-                    style = RemodexButtonStyle.Secondary,
-                ) {
-                    Text(
-                        text = if (state.hasSavedPairing) state.reconnectButtonLabel else "Saved reconnect unavailable",
-                        textAlign = TextAlign.Center,
+
+                if (state.hasSavedPairing) {
+                    RemodexButton(
+                        onClick = onReconnectSaved,
+                        enabled = state.reconnectEnabled,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = RemodexButtonStyle.Secondary,
+                        contentPadding = buttonPadding,
+                    ) {
+                        Text(
+                            text = state.reconnectButtonLabel,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        )
+                    }
+                }
+            }
+
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentWidth(Alignment.CenterHorizontally),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            ) {
+                if (state.hasSavedPairing) {
+                    PairingMetadataChip("Saved trust")
+                }
+                if (state.defaultRelayUrl != null) {
+                    PairingMetadataChip("Relay-ready")
+                }
+                PairingMetadataChip("Host-local")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PairingTrustCapsule() {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 332.dp),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.72f),
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                horizontal = geometry.spacing14,
+                vertical = geometry.spacing12,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(36.dp),
+                color = colors.accentBlue.copy(alpha = 0.14f),
+                shape = CircleShape,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.Lock,
+                        contentDescription = null,
+                        tint = colors.accentBlue,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
+                Text(
+                    text = "End-to-end encrypted pairing",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.textPrimary,
+                )
+                Text(
+                    text = "Relay-compatible reconnects stay tied to your trusted host.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PairingFeatureRow(
+    icon: ImageVector,
+    title: String,
+    description: String,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.62f),
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                horizontal = geometry.spacing14,
+                vertical = geometry.spacing12,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Surface(
+                modifier = Modifier.size(32.dp),
+                color = colors.selectedRowFill.copy(alpha = 0.88f),
+                shape = CircleShape,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.textPrimary,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SavedReconnectCard(
+    state: PairingScreenUiState,
+    onReconnectSaved: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val reconnectStyle = when (state.connection.status) {
+        ConnectionStatus.RECONNECT_REQUIRED,
+        ConnectionStatus.UPDATE_REQUIRED -> RemodexPillStyle.Warning
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> RemodexPillStyle.Accent
+        ConnectionStatus.CONNECTED -> RemodexPillStyle.Success
+        else -> RemodexPillStyle.Neutral
+    }
+
+    RemodexGroupedSurface(
+        modifier = modifier,
+        cornerRadius = geometry.cornerComposer,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.78f),
+    ) {
+        Column(
+            modifier = Modifier.padding(
+                horizontal = geometry.sectionPadding,
+                vertical = geometry.sectionPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+        ) {
+            Text(
+                text = "TRUSTED PAIR",
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
+                color = colors.textSecondary,
+            )
+
+            Text(
+                text = when {
+                    state.trustedPair != null -> "Reconnect without rescanning"
+                    else -> "Saved pairing is ready"
+                },
+                style = MaterialTheme.typography.titleLarge,
+                color = colors.textPrimary,
+            )
+
+            Text(
+                text = when (state.connection.status) {
+                    ConnectionStatus.RETRYING_SAVED_PAIRING ->
+                        "Android still trusts this host. Keep the bridge running and Androdex will keep retrying in the foreground."
+                    ConnectionStatus.RECONNECT_REQUIRED ->
+                        "Your previous trust still exists, but the host wants repair before a clean reconnect."
+                    ConnectionStatus.UPDATE_REQUIRED ->
+                        "Reconnect from the saved pair after updating the older side of the bridge."
+                    else ->
+                        "Jump back into the remembered host first, then fall back to scanning or a payload only if trust changed."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textSecondary,
+            )
+
+            state.trustedPair?.let { trustedPair ->
+                TrustedPairSummary(trustedPair = trustedPair)
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            ) {
+                RemodexPill(
+                    label = state.reconnectButtonLabel,
+                    style = reconnectStyle,
+                )
+                state.trustedPair?.relayLabel?.let {
+                    RemodexPill(
+                        label = it,
+                        style = RemodexPillStyle.Neutral,
                     )
                 }
             }
 
-            if (state.hasSavedPairing || state.defaultRelayUrl != null) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            RemodexButton(
+                onClick = onReconnectSaved,
+                enabled = state.reconnectEnabled,
+                modifier = Modifier.fillMaxWidth(),
+                style = RemodexButtonStyle.Secondary,
+                contentPadding = PaddingValues(
+                    horizontal = geometry.spacing20,
+                    vertical = geometry.spacing14,
+                ),
+            ) {
+                Text(
+                    text = state.reconnectButtonLabel,
                     modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrustedPairSummary(
+    trustedPair: TrustedPairUiState,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.selectedRowFill.copy(alpha = 0.52f),
+    ) {
+        Column(
+            modifier = Modifier.padding(
+                horizontal = geometry.spacing14,
+                vertical = geometry.spacing14,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            Text(
+                text = trustedPair.title.uppercase(),
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.0.sp),
+                color = colors.textSecondary,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    modifier = Modifier.size(28.dp),
+                    shape = CircleShape,
+                    color = colors.textPrimary.copy(alpha = 0.06f),
                 ) {
-                    if (state.hasSavedPairing) {
-                        StatusChip(label = "Saved pair")
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Outlined.Computer,
+                            contentDescription = null,
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(14.dp),
+                        )
                     }
-                    if (state.defaultRelayUrl != null) {
-                        StatusChip(label = "Relay-ready")
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+                ) {
+                    Text(
+                        text = trustedPair.name,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = colors.textPrimary,
+                    )
+                    trustedPair.systemName?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = "\"$it\"",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.textSecondary,
+                        )
                     }
-                    StatusChip(label = "Host-local runtime")
+                    trustedPair.detail?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.textSecondary,
+                        )
+                    }
                 }
             }
         }
@@ -228,40 +569,78 @@ private fun PairingHeroCard(
 @Composable
 private fun RecoveryCard(
     state: PairingScreenUiState,
-    onReconnectSaved: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val noticeColor = when (state.connection.status) {
+        ConnectionStatus.RECONNECT_REQUIRED,
+        ConnectionStatus.UPDATE_REQUIRED -> colors.errorRed
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> colors.accentOrange
+        else -> colors.accentBlue
+    }
+    val noticeTone = when (state.connection.status) {
+        ConnectionStatus.RECONNECT_REQUIRED,
+        ConnectionStatus.UPDATE_REQUIRED -> colors.errorRed.copy(alpha = 0.08f)
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> colors.accentOrange.copy(alpha = 0.08f)
+        else -> colors.secondarySurface.copy(alpha = 0.72f)
+    }
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+    RemodexGroupedSurface(
+        modifier = modifier,
+        cornerRadius = geometry.cornerComposer,
+        tonalColor = noticeTone,
+    ) {
         Column(
-            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            modifier = Modifier.padding(
+                horizontal = geometry.sectionPadding,
+                vertical = geometry.sectionPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
-            Text(
-                text = state.recoveryTitle,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = RemodexTheme.colors.textPrimary,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.WarningAmber,
+                    contentDescription = null,
+                    tint = noticeColor,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = state.recoveryTitle,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = colors.textPrimary,
+                )
+            }
+
             Text(
                 text = state.recoveryMessage,
                 style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textSecondary,
+                color = colors.textSecondary,
             )
+
+            recoveryFootnote(state.connection.status)?.let { footnote ->
+                Text(
+                    text = footnote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
+
             state.compatibilityMessage?.let { message ->
                 RemodexDivider()
                 Text(
+                    text = "Compatibility",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = noticeColor,
+                )
+                Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = RemodexTheme.colors.accentBlue,
+                    color = colors.textSecondary,
                 )
-            }
-            if (state.hasSavedPairing) {
-                RemodexButton(
-                    onClick = onReconnectSaved,
-                    enabled = state.reconnectEnabled,
-                ) {
-                    Text(state.reconnectButtonLabel)
-                }
             }
         }
     }
@@ -272,41 +651,57 @@ private fun ManualPairingCard(
     state: PairingScreenUiState,
     onPairingInputChanged: (String) -> Unit,
     onConnect: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+    RemodexGroupedSurface(
+        modifier = modifier,
+        cornerRadius = geometry.cornerComposer,
+        tonalColor = colors.subtleGlassTint,
+    ) {
         Column(
-            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+            modifier = Modifier.padding(
+                horizontal = geometry.sectionPadding,
+                vertical = geometry.sectionPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
         ) {
+            Text(
+                text = "MANUAL PAIRING",
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
+                color = colors.textSecondary,
+            )
+
             Row(
                 horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = RemodexTheme.colors.selectedRowFill,
+                    color = colors.selectedRowFill.copy(alpha = 0.82f),
+                    modifier = Modifier.size(36.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Link,
-                        contentDescription = null,
-                        tint = RemodexTheme.colors.textPrimary,
-                        modifier = Modifier
-                            .padding(geometry.spacing8)
-                            .size(geometry.spacing16),
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Link,
+                            contentDescription = null,
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
                     Text(
-                        text = "Manual pairing payload",
+                        text = "Paste a pairing payload",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = RemodexTheme.colors.textPrimary,
+                        color = colors.textPrimary,
                     )
                     Text(
-                        text = "Paste a payload only if you are not scanning a QR code.",
+                        text = "Use this when the QR camera flow is unavailable or you already copied the bridge payload from your host.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = RemodexTheme.colors.textSecondary,
+                        color = colors.textSecondary,
                     )
                 }
             }
@@ -325,14 +720,33 @@ private fun ManualPairingCard(
                 onClick = onConnect,
                 enabled = state.pairingInput.isNotBlank() && !state.isBusy,
                 modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(
+                    horizontal = geometry.spacing20,
+                    vertical = geometry.spacing14,
+                ),
             ) {
-                Text("Connect with payload")
+                Text(
+                    text = "Connect with payload",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun StatusChip(label: String) {
+private fun PairingMetadataChip(label: String) {
     RemodexPill(label = label, style = RemodexPillStyle.Neutral)
+}
+
+private fun recoveryFootnote(status: ConnectionStatus): String? {
+    return when (status) {
+        ConnectionStatus.RECONNECT_REQUIRED ->
+            "If this host was paired to another mobile client, reset trust on the host before scanning a new QR code."
+        ConnectionStatus.UPDATE_REQUIRED ->
+            "Updating the older app or bridge keeps reconnect, runtime controls, and trust presentation aligned."
+        else -> null
+    }
 }

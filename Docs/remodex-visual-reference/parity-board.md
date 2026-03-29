@@ -60,7 +60,12 @@ Phase 2 shell refresh anchors:
 - Thread shell after the shared-shell pass: `android-device-captures/phase2/phase2-thread-shell.png`
 - Matching Phase 2 UI dumps: `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, `android-device-captures/phase2/phase2-thread-shell.xml`
 
-The remaining Android capture gaps are now limited to later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
+Phase 3 pairing/onboarding/recovery implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` now mirrors the Remodex welcome/features hierarchy more closely with a centered hero, dedicated saved-reconnect summary, toned recovery messaging, and a denser manual-pairing form.
+- Fresh Android capture anchors for that refresh are still pending; until they exist, the pairing row should be treated as implementation-complete but phase-gate-incomplete.
+
+The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.
 

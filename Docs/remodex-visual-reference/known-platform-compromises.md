@@ -126,6 +126,16 @@ The acceptable Android compromise is:
 - prefer a dismissible drawer reveal over a fully separate modal sheet so the current screen remains partially visible
 - keep status and navigation bars visually transparent and let the app shell own the top/bottom edge treatment instead of introducing opaque platform chrome
 
+## 12. Paged Onboarding vs Scrollable Pairing
+
+Remodex splits its onboarding into dedicated paged welcome/features/step views before the QR pairing flow. Androdex still has to keep QR scan, saved reconnect, recovery copy, and manual payload entry reachable in one host-local Android surface.
+
+The acceptable compromise is:
+
+- borrow the Remodex onboarding hierarchy, spacing, and tone inside a single scrollable pairing screen
+- keep the saved reconnect and manual payload actions immediately available instead of hiding them behind separate onboarding pages
+- document that this is a workflow-preserving consolidation, not a claim of literal navigation parity
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:
