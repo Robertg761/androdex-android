@@ -419,7 +419,7 @@ private fun AndrodexUiState.toPairingScreenUiState(): PairingScreenUiState {
     )
 }
 
-private fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long): HomeScreenUiState {
+internal fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long = System.currentTimeMillis()): HomeScreenUiState {
     return HomeScreenUiState(
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),

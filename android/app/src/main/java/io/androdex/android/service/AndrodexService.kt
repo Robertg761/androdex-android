@@ -613,7 +613,28 @@ class AndrodexService(
     }
 
     private suspend fun refreshThreadsInternal() {
-        repository.refreshThreads()
+        val threads = repository.refreshThreads()
+        if (threads.isNotEmpty() || stateFlow.value.threads.isEmpty()) {
+            applyLoadedThreads(threads)
+        }
+    }
+
+    private fun applyLoadedThreads(threads: List<ThreadSummary>) {
+        updateSubagentIdentitiesFromThreads(threads)
+        stateFlow.update { current ->
+            current.copy(
+                threads = threads,
+                hasLoadedThreadList = true,
+                selectedThreadTitle = threads.firstOrNull { it.id == current.selectedThreadId }?.title
+                    ?: current.selectedThreadTitle,
+            )
+        }
+        refreshSubagentMessages()
+        if (stateFlow.value.pendingNotificationOpenThreadId != null) {
+            scope.launch {
+                routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+            }
+        }
     }
 
     private suspend fun loadThreadIntoState(
@@ -782,6 +803,7 @@ class AndrodexService(
                     ConnectionStatus.CONNECTED -> {
                         cancelSavedReconnectRetry()
                         scope.launch {
+                            refreshThreadsInternal()
                             loadRuntimeConfig()
                             loadWorkspaceState()
                             recoverVisibleThreadState()
@@ -825,21 +847,7 @@ class AndrodexService(
             }
 
             is ClientUpdate.ThreadsLoaded -> {
-                updateSubagentIdentitiesFromThreads(update.threads)
-                stateFlow.update { current ->
-                    current.copy(
-                        threads = update.threads,
-                        hasLoadedThreadList = true,
-                        selectedThreadTitle = update.threads.firstOrNull { it.id == current.selectedThreadId }?.title
-                            ?: current.selectedThreadTitle,
-                    )
-                }
-                refreshSubagentMessages()
-                if (stateFlow.value.pendingNotificationOpenThreadId != null) {
-                    scope.launch {
-                        routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
-                    }
-                }
+                applyLoadedThreads(update.threads)
             }
 
             is ClientUpdate.ThreadLoaded -> {

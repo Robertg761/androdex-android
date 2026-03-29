@@ -117,6 +117,18 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun refreshThreads_marksListLoadedEvenWhenRepositoryReturnsEmptyWithoutUpdate() = runTest {
+        val service = AndrodexService(FakeRepository(), backgroundScope)
+        advanceUntilIdle()
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.hasLoadedThreadList)
+        assertTrue(service.state.value.threads.isEmpty())
+    }
+
+    @Test
     fun planUpdates_mergeStreamingAndStructuredStateIntoSingleRow() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -1573,10 +1585,11 @@ private class FakeRepository : AndrodexRepositoryContract {
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 
     var refreshThreadsError: Throwable? = null
+    var refreshedThreads: List<ThreadSummary> = emptyList()
 
     override suspend fun refreshThreads(): List<ThreadSummary> {
         refreshThreadsError?.let { throw it }
-        return emptyList()
+        return refreshedThreads
     }
 
     override suspend fun startThread(preferredProjectPath: String?): ThreadSummary {

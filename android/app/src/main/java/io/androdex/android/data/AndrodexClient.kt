@@ -241,6 +241,7 @@ class AndrodexClient(
             sorted
         } catch (error: RpcException) {
             if (isNoActiveWorkspaceError(error)) {
+                updatesFlow.emit(ClientUpdate.ThreadsLoaded(emptyList()))
                 emptyList()
             } else {
                 throw error

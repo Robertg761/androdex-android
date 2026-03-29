@@ -33,6 +33,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.home.HomeScreen
 import io.androdex.android.ui.pairing.PairingScreen
 import io.androdex.android.ui.settings.RuntimeSettingsSheet
@@ -43,6 +44,7 @@ import io.androdex.android.ui.sidebar.SidebarContent
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.HomeScreenUiState
 import io.androdex.android.ui.state.PairingScreenUiState
+import io.androdex.android.ui.state.toHomeScreenUiState
 import io.androdex.android.ui.state.toAppUiState
 import io.androdex.android.ui.turn.ForkThreadSheet
 import io.androdex.android.ui.turn.ThreadRuntimeSheet
@@ -62,6 +64,9 @@ fun AndrodexApp(viewModel: MainViewModel) {
     val appState = remember(uiState, settingsOpen) {
         uiState.toAppUiState(isSettingsVisible = settingsOpen)
     }
+    val liveHomeState = remember(uiState) {
+        uiState.toHomeScreenUiState()
+    }
 
     // Drawer state — persistent across Home and Thread screens
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -72,7 +77,14 @@ fun AndrodexApp(viewModel: MainViewModel) {
     var cachedPairing by remember { mutableStateOf<PairingScreenUiState?>(null) }
     val destination = appState.destination
     if (destination is AndrodexDestinationUiState.Home) {
-        cachedSidebar = destination.state
+        cachedSidebar = liveHomeState
+    }
+    if (destination is AndrodexDestinationUiState.Thread
+        && (uiState.connectionStatus == ConnectionStatus.CONNECTED
+            || uiState.hasLoadedThreadList
+            || uiState.threads.isNotEmpty())
+    ) {
+        cachedSidebar = liveHomeState
     }
     if (destination is AndrodexDestinationUiState.Pairing) {
         cachedPairing = destination.state

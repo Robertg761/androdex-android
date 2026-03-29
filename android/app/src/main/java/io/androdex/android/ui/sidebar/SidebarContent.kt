@@ -29,6 +29,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +79,7 @@ internal fun SidebarContent(
 ) {
     var searchText by remember { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
+    var expandedProjects by rememberSaveable { mutableStateOf(emptyList<String>()) }
 
     // Filter threads client-side
     val filteredThreads = remember(threadList.threads, searchText) {
@@ -193,15 +197,31 @@ internal fun SidebarContent(
 
                 else -> {
                     groupedThreads.forEach { (project, threads) ->
+                        val isExpanded = searchText.isNotBlank()
+                            || selectedThreadId in threads.map { it.id }
+                            || project in expandedProjects
                         item(key = "hdr_$project") {
-                            SidebarProjectHeader(projectName = project)
-                        }
-                        items(threads, key = { it.id }) { thread ->
-                            SidebarThreadRow(
-                                thread = thread,
-                                isSelected = thread.id == selectedThreadId,
-                                onOpenThread = onOpenThread,
+                            SidebarProjectHeader(
+                                projectName = project,
+                                threadCount = threads.size,
+                                expanded = isExpanded,
+                                onToggle = {
+                                    expandedProjects = if (project in expandedProjects) {
+                                        expandedProjects - project
+                                    } else {
+                                        expandedProjects + project
+                                    }
+                                },
                             )
+                        }
+                        if (isExpanded) {
+                            items(threads, key = { it.id }) { thread ->
+                                SidebarThreadRow(
+                                    thread = thread,
+                                    isSelected = thread.id == selectedThreadId,
+                                    onOpenThread = onOpenThread,
+                                )
+                            }
                         }
                     }
                 }
@@ -390,25 +410,59 @@ private fun SidebarNewChatButton(onCreate: () -> Unit) {
 // ── Project section header ────────────────────────────────────────────────────
 
 @Composable
-private fun SidebarProjectHeader(projectName: String) {
+private fun SidebarProjectHeader(
+    projectName: String,
+    threadCount: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
     // Display only the last path component (like remodex)
     val displayName = projectName.trimEnd('/').substringAfterLast('/')
         .ifBlank { projectName }
 
-    Text(
-        text = displayName.uppercase(),
-        style = MaterialTheme.typography.labelSmall.copy(
-            fontWeight = FontWeight.Medium,
-            fontSize = 11.sp,
-            letterSpacing = 0.5.sp,
-        ),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Surface(
+        onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                contentDescription = if (expanded) "Collapse $displayName" else "Expand $displayName",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = displayName.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
+                    letterSpacing = 0.5.sp,
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = threadCount.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 // ── Thread row ────────────────────────────────────────────────────────────────

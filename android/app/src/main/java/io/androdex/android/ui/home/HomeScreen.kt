@@ -105,7 +105,6 @@ internal fun HomeScreen(
                         containerColor = Color.Transparent,
                         scrolledContainerColor = Color.Transparent,
                     ),
-                    windowInsets = WindowInsets(0),
                 )
                 BusyIndicator(state = state.busy)
             }
