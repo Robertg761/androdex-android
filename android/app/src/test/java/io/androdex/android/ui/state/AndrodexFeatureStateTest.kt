@@ -161,6 +161,7 @@ class AndrodexFeatureStateTest {
         assertEquals("30m ago", route.state.threadList.threads.single().updatedLabel)
         assertEquals("Androdex", route.state.threadList.threads.single().projectName)
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
+        assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
         assertNotNull(route.state.trustedPair)
         assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
@@ -185,6 +186,7 @@ class AndrodexFeatureStateTest {
         val route = appState.destination as AndrodexDestinationUiState.Home
 
         assertTrue(route.state.threadList.isLoading)
+        assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals(null, route.state.threadList.emptyState)
     }
 
@@ -200,7 +202,34 @@ class AndrodexFeatureStateTest {
         val route = appState.destination as AndrodexDestinationUiState.Home
 
         assertFalse(route.state.threadList.isLoading)
+        assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals("No conversations yet", route.state.threadList.emptyState?.title)
+    }
+
+    @Test
+    fun homeRoute_showsSidebarLoadingOverlayFlagWhenRefreshingExistingThreads() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-1",
+                    title = "Existing",
+                    preview = null,
+                    cwd = "/Users/robert/Documents/Projects/androdex",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = 1_000L,
+                )
+            ),
+            hasLoadedThreadList = true,
+            isLoadingThreadList = true,
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false, nowEpochMs = 2_000L)
+        val route = appState.destination as AndrodexDestinationUiState.Home
+
+        assertFalse(route.state.threadList.isLoading)
+        assertTrue(route.state.threadList.showLoadingOverlay)
+        assertEquals(null, route.state.threadList.emptyState)
     }
 
     @Test

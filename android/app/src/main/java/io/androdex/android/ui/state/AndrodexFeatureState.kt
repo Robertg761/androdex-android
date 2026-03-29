@@ -138,6 +138,7 @@ internal data class HostAccountRateLimitUiState(
 internal data class ThreadListPaneUiState(
     val threads: List<ThreadListItemUiState>,
     val isLoading: Boolean,
+    val showLoadingOverlay: Boolean,
     val emptyState: ThreadListEmptyStateUiState?,
 )
 
@@ -445,7 +446,8 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
         )
     }
     val isLoading = items.isEmpty() && !isBusy && (isLoadingThreadList || !hasLoadedThreadList)
-    val emptyState = if (items.isEmpty() && !isBusy && hasLoadedThreadList) {
+    val showLoadingOverlay = items.isNotEmpty() && !isBusy && isLoadingThreadList
+    val emptyState = if (items.isEmpty() && !isBusy && hasLoadedThreadList && !isLoadingThreadList) {
         ThreadListEmptyStateUiState(
             title = "No conversations yet",
             message = if (activeWorkspacePath == null) {
@@ -462,6 +464,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
     return ThreadListPaneUiState(
         threads = items,
         isLoading = isLoading,
+        showLoadingOverlay = showLoadingOverlay,
         emptyState = emptyState,
     )
 }

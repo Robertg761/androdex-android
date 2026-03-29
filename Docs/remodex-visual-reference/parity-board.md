@@ -72,13 +72,20 @@ Phase 4 home implementation note:
 - `android/app/src/main/java/io/androdex/android/service/AndrodexService.kt`, `android/app/src/main/java/io/androdex/android/MainViewModel.kt`, and `android/app/src/main/java/io/androdex/android/ui/state/AndrodexFeatureState.kt` now preserve a visible home thread-list loading state long enough to verify on-device instead of racing past between connect and list hydration.
 - Fresh Android capture anchors for this pass now include `android-device-captures/phase4/phase4-home-shell.png`, `android-device-captures/phase4/phase4-home-empty-no-project.png`, `android-device-captures/phase4/phase4-home-loading.png`, and their paired XML dumps.
 
+Phase 5 sidebar implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` now uses a shared grouped-thread collection, denser Remodex-style search/new-chat rhythm, a rounded footer status capsule, and updated section/row spacing so the drawer matches the refreshed Android reference more closely.
+- `android/app/src/main/java/io/androdex/android/ui/sidebar/ThreadListPane.kt` now delegates to the same grouped-thread renderer instead of carrying a second drifting thread-row implementation.
+- `android/app/src/main/java/io/androdex/android/service/AndrodexService.kt` now keeps thread-list loading visible for a short minimum window even when refreshing an already-populated drawer, which makes the live loading state perceptible instead of collapsing into a one-frame flash.
+- Fresh Android capture anchors for this pass now include `android-device-captures/phase5/phase5-sidebar-closed.png`, `android-device-captures/phase5/phase5-sidebar-open-default.png`, `android-device-captures/phase5/phase5-sidebar-search-focused.png`, `android-device-captures/phase5/phase5-sidebar-groups-expanded.png`, `android-device-captures/phase5/phase5-sidebar-empty.png`, and `android-device-captures/phase5/phase5-sidebar-loading.png`; the stable XML pair still applies to the closed/default/search/grouped/empty runtime variants.
+
 The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.
 
 ## Highest-Risk Visual Mismatches To Fix First
 
-1. Sidebar density. Remodex uses tighter row spacing, lighter fills, smaller type, and more native-looking list grouping than the current Compose drawer.
-2. Composer shell. Remodex uses a floating glass composer with a large `28` corner radius and layered autocomplete/voice overlays.
-3. Toolbar chrome. Remodex relies on compact principal-title layout plus small adaptive toolbar affordances, not a standard Material top app bar.
-4. Color semantics. Remodex leans on iOS semantic fills and glass/translucency; Androdex still reads like Material 3 with iOS-colored paint on top.
+1. Composer shell. Remodex uses a floating glass composer with a large `28` corner radius and layered autocomplete/voice overlays.
+2. Toolbar chrome. Remodex relies on compact principal-title layout plus small adaptive toolbar affordances, not a standard Material top app bar.
+3. Color semantics. Remodex leans on iOS semantic fills and glass/translucency; Androdex still reads like Material 3 with iOS-colored paint on top.
+4. Sidebar reconnect loading fidelity. The refreshed drawer now has real empty/loading Android anchors, but the saved-reconnect loading variant can still momentarily retain grouped drawer content while the home shell is rehydrating workspace context behind it.

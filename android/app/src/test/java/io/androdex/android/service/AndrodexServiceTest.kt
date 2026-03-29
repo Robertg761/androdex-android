@@ -42,9 +42,12 @@ import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.WorkspaceRecentState
 import io.androdex.android.model.requestId
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -126,6 +129,57 @@ class AndrodexServiceTest {
 
         assertTrue(service.state.value.hasLoadedThreadList)
         assertTrue(service.state.value.threads.isEmpty())
+    }
+
+    @Test
+    fun refreshThreads_replacesExistingThreadsWhenRepositoryLaterReturnsEmpty() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Existing", null, "/tmp/project", null, null),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.refreshThreads()
+        advanceUntilIdle()
+        assertEquals(listOf("thread-1"), service.state.value.threads.map { it.id })
+
+        repository.refreshedThreads = emptyList()
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.hasLoadedThreadList)
+        assertTrue(service.state.value.threads.isEmpty())
+    }
+
+    @Test
+    fun refreshThreads_marksExistingThreadListAsLoadingDuringRefresh() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Existing", null, "/tmp/project", null, null),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        repository.refreshThreadsDelayMs = 10
+        val refreshJob = backgroundScope.launch {
+            service.refreshThreads()
+        }
+        runCurrent()
+
+        assertTrue(service.state.value.hasLoadedThreadList)
+        assertEquals(listOf("thread-1"), service.state.value.threads.map { it.id })
+        assertTrue(service.state.value.isLoadingThreadList)
+
+        advanceUntilIdle()
+        refreshJob.join()
+
+        assertFalse(service.state.value.isLoadingThreadList)
     }
 
     @Test
@@ -618,6 +672,10 @@ class AndrodexServiceTest {
     fun notificationOpen_showsMissingThreadPromptAndFallsBackToLiveThread() = runTest {
         val repository = FakeRepository().apply {
             loadThreadError = IllegalStateException("thread not found")
+            refreshedThreads = listOf(
+                ThreadSummary("thread-deleted", "Deleted", null, null, null, null),
+                ThreadSummary("thread-live", "Live", null, null, null, null),
+            )
         }
         val service = AndrodexService(repository, backgroundScope)
         advanceUntilIdle()
@@ -1586,9 +1644,13 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     var refreshThreadsError: Throwable? = null
     var refreshedThreads: List<ThreadSummary> = emptyList()
+    var refreshThreadsDelayMs: Long = 0L
 
     override suspend fun refreshThreads(): List<ThreadSummary> {
         refreshThreadsError?.let { throw it }
+        if (refreshThreadsDelayMs > 0) {
+            delay(refreshThreadsDelayMs)
+        }
         return refreshedThreads
     }
 

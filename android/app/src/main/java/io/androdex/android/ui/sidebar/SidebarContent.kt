@@ -5,6 +5,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -13,9 +14,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -76,32 +79,12 @@ internal fun SidebarContent(
     onOpenSettings: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
-    var searchText by remember { mutableStateOf("") }
+    var searchText by rememberSaveable { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
-    var expandedProjects by rememberSaveable { mutableStateOf(emptyList<String>()) }
-
-    // Filter threads client-side
-    val filteredThreads = remember(threadList.threads, searchText) {
-        if (searchText.isBlank()) threadList.threads
-        else threadList.threads.filter {
-            it.title.contains(searchText, ignoreCase = true) ||
-                it.projectName.contains(searchText, ignoreCase = true)
-        }
-    }
-
-    // Group by project name; nil/blank project → "Untitled"
-    val groupedThreads = remember(filteredThreads) {
-        filteredThreads
-            .groupBy { it.projectName.ifBlank { "Untitled" } }
-            .entries
-            .sortedWith(compareBy { if (it.key == "Untitled") "\uFFFF" else it.key })
-    }
+    var expandedProjects by rememberSaveable { mutableStateOf(setOf<String>()) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // ── Header ────────────────────────────────────────────────────────
         SidebarHeader()
-
-        // ── Search ────────────────────────────────────────────────────────
         SidebarSearchField(
             text = searchText,
             focused = searchFocused,
@@ -112,133 +95,22 @@ internal fun SidebarContent(
                 searchFocused = false
             },
         )
-
-        // ── New Chat ──────────────────────────────────────────────────────
         SidebarNewChatButton(onCreate = onCreateThread)
-
-        // ── Thread list ───────────────────────────────────────────────────
-        LazyColumn(
+        SidebarThreadCollection(
+            threadList = threadList,
+            searchText = searchText,
+            selectedThreadId = selectedThreadId,
+            expandedProjects = expandedProjects,
+            onToggleProject = { project ->
+                expandedProjects = if (project in expandedProjects) {
+                    expandedProjects - project
+                } else {
+                    expandedProjects + project
+                }
+            },
+            onOpenThread = onOpenThread,
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(vertical = geometry.spacing4),
-        ) {
-            when {
-                threadList.isLoading && searchText.isBlank() -> {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    horizontal = geometry.sidebarOuterHorizontalPadding,
-                                    vertical = geometry.spacing32,
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Text(
-                                    text = "Loading conversations...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                threadList.emptyState != null && searchText.isBlank() -> {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    horizontal = geometry.sidebarOuterHorizontalPadding,
-                                    vertical = geometry.spacing32,
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
-                            ) {
-                                Text(
-                                    text = threadList.emptyState.title,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Medium,
-                                    ),
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                    textAlign = TextAlign.Center,
-                                )
-                                Text(
-                                    text = threadList.emptyState.message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                filteredThreads.isEmpty() && searchText.isNotBlank() -> {
-                    item {
-                        Text(
-                            text = "No matching conversations",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    horizontal = geometry.sidebarOuterHorizontalPadding,
-                                    vertical = geometry.spacing24,
-                                ),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
-
-                else -> {
-                    groupedThreads.forEach { (project, threads) ->
-                        val isExpanded = searchText.isNotBlank()
-                            || selectedThreadId in threads.map { it.id }
-                            || project in expandedProjects
-                        item(key = "hdr_$project") {
-                            SidebarProjectHeader(
-                                projectName = project,
-                                threadCount = threads.size,
-                                expanded = isExpanded,
-                                onToggle = {
-                                    expandedProjects = if (project in expandedProjects) {
-                                        expandedProjects - project
-                                    } else {
-                                        expandedProjects + project
-                                    }
-                                },
-                            )
-                        }
-                        if (isExpanded) {
-                            items(threads, key = { it.id }) { thread ->
-                                SidebarThreadRow(
-                                    thread = thread,
-                                    isSelected = thread.id == selectedThreadId,
-                                    onOpenThread = onOpenThread,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            item { Spacer(modifier = Modifier.height(geometry.spacing16)) }
-        }
-
-        // ── Footer ─────────────────────────────────────────────────────────
+        )
         SidebarFooter(
             connection = connection,
             macName = macName,
@@ -309,6 +181,7 @@ private fun SidebarSearchField(
             .padding(
                 start = geometry.sidebarOuterHorizontalPadding,
                 end = geometry.sidebarOuterHorizontalPadding,
+                top = geometry.spacing2,
                 bottom = geometry.spacing8,
             ),
         verticalAlignment = Alignment.CenterVertically,
@@ -353,6 +226,7 @@ private fun SidebarNewChatButton(onCreate: () -> Unit) {
         onClick = onCreate,
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = geometry.rowHeight + geometry.spacing12)
             .padding(horizontal = geometry.spacing4),
         paddingValues = PaddingValues(
             horizontal = geometry.sidebarRowHorizontalPadding,
@@ -376,8 +250,6 @@ private fun SidebarNewChatButton(onCreate: () -> Unit) {
     }
 }
 
-// ── Project section header ────────────────────────────────────────────────────
-
 @Composable
 private fun SidebarProjectHeader(
     projectName: String,
@@ -395,7 +267,8 @@ private fun SidebarProjectHeader(
         onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = geometry.spacing4, vertical = geometry.spacing2),
+            .padding(horizontal = geometry.spacing4)
+            .heightIn(min = geometry.rowHeight + geometry.spacing12),
         color = Color.Transparent,
         shape = RoundedCornerShape(geometry.cornerTiny),
     ) {
@@ -441,10 +314,8 @@ private fun SidebarProjectHeader(
     }
 }
 
-// ── Thread row ────────────────────────────────────────────────────────────────
-
 @Composable
-private fun SidebarThreadRow(
+internal fun SidebarThreadRow(
     thread: ThreadListItemUiState,
     isSelected: Boolean,
     onOpenThread: (String) -> Unit,
@@ -460,7 +331,9 @@ private fun SidebarThreadRow(
     RemodexSelectionRow(
         selected = isSelected,
         onClick = { onOpenThread(thread.id) },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = geometry.rowHeight + geometry.spacing8),
         paddingValues = PaddingValues(
             horizontal = geometry.sidebarOuterHorizontalPadding,
             vertical = geometry.spacing6,
@@ -495,7 +368,176 @@ private fun SidebarThreadRow(
     }
 }
 
-// ── Footer ────────────────────────────────────────────────────────────────────
+@Composable
+internal fun SidebarThreadCollection(
+    threadList: ThreadListPaneUiState,
+    searchText: String,
+    selectedThreadId: String?,
+    expandedProjects: Set<String>,
+    onToggleProject: (String) -> Unit,
+    onOpenThread: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    expandAllProjects: Boolean = false,
+) {
+    val geometry = RemodexTheme.geometry
+    val filteredThreads = remember(threadList.threads, searchText) {
+        if (searchText.isBlank()) {
+            threadList.threads
+        } else {
+            threadList.threads.filter { thread ->
+                thread.title.contains(searchText, ignoreCase = true) ||
+                    thread.projectName.contains(searchText, ignoreCase = true) ||
+                    thread.preview.orEmpty().contains(searchText, ignoreCase = true)
+            }
+        }
+    }
+    val groupedThreads = remember(filteredThreads) {
+        filteredThreads
+            .groupBy { thread ->
+                thread.projectName
+                    .trim()
+                    .ifBlank { "Untitled" }
+            }
+            .entries
+            .sortedBy { entry ->
+                if (entry.key == "Untitled") {
+                    "\uFFFF"
+                } else {
+                    entry.key.lowercase()
+                }
+            }
+    }
+
+    Box(modifier = modifier.fillMaxHeight()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = geometry.spacing4),
+        ) {
+            when {
+                threadList.isLoading && searchText.isBlank() -> {
+                    item {
+                        SidebarListStatusCard(
+                            title = "Loading conversations...",
+                            message = "Checking the host for your latest grouped threads.",
+                            loading = true,
+                        )
+                    }
+                }
+
+                threadList.emptyState != null && searchText.isBlank() -> {
+                    item {
+                        SidebarListStatusCard(
+                            title = threadList.emptyState.title,
+                            message = threadList.emptyState.message,
+                        )
+                    }
+                }
+
+                filteredThreads.isEmpty() && searchText.isNotBlank() -> {
+                    item {
+                        SidebarListStatusCard(
+                            title = "No matching conversations",
+                            message = "Try a different title, project, or preview phrase.",
+                        )
+                    }
+                }
+
+                else -> {
+                    groupedThreads.forEach { (project, threads) ->
+                        val isExpanded = expandAllProjects ||
+                            searchText.isNotBlank() ||
+                            selectedThreadId in threads.map { it.id } ||
+                            project in expandedProjects
+                        item(key = "project_$project") {
+                            SidebarProjectHeader(
+                                projectName = project,
+                                threadCount = threads.size,
+                                expanded = isExpanded,
+                                onToggle = { onToggleProject(project) },
+                            )
+                        }
+                        if (isExpanded) {
+                            items(threads, key = { thread -> thread.id }) { thread ->
+                                SidebarThreadRow(
+                                    thread = thread,
+                                    isSelected = thread.id == selectedThreadId,
+                                    onOpenThread = onOpenThread,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(geometry.spacing16))
+            }
+        }
+
+        if (threadList.showLoadingOverlay && searchText.isBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(RemodexTheme.colors.groupedBackground.copy(alpha = 0.76f))
+                    .padding(horizontal = geometry.sidebarOuterHorizontalPadding),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                SidebarListStatusCard(
+                    title = "Refreshing conversations...",
+                    message = "Updating the grouped drawer from the host workspace.",
+                    loading = true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarListStatusCard(
+    title: String,
+    message: String,
+    loading: Boolean = false,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = geometry.sidebarOuterHorizontalPadding,
+                vertical = geometry.spacing24,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+            modifier = Modifier.widthIn(max = 250.dp),
+        ) {
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = RemodexTheme.colors.accentBlue,
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = RemodexTheme.colors.textPrimary,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = RemodexTheme.colors.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
 
 @Composable
 private fun SidebarFooter(
@@ -507,60 +549,73 @@ private fun SidebarFooter(
     val isConnected = connection.status == ConnectionStatus.CONNECTED
     val connectionLabel = if (isConnected) "Connected to Mac" else "Saved Mac"
 
-    Surface(
-        color = RemodexTheme.colors.secondarySurface.copy(alpha = 0.64f),
-        modifier = Modifier.fillMaxWidth(),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = geometry.spacing4,
+                end = geometry.spacing4,
+                bottom = geometry.spacing6,
+            ),
     ) {
-        Row(
+        Surface(
+            color = RemodexTheme.colors.secondarySurface.copy(alpha = 0.8f),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(
-                    horizontal = geometry.sidebarOuterHorizontalPadding,
-                    vertical = geometry.spacing12,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .clip(RoundedCornerShape(geometry.cornerXLarge)),
+            shape = RoundedCornerShape(geometry.cornerXLarge),
+            border = BorderStroke(1.dp, RemodexTheme.colors.hairlineDivider),
         ) {
-            // Settings gear (circular, glass-like)
-            RemodexIconButton(
-                onClick = onOpenSettings,
-                contentDescription = "Settings",
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = geometry.sidebarRowHorizontalPadding,
+                        vertical = geometry.spacing12,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = null,
-                    tint = RemodexTheme.colors.textPrimary,
-                    modifier = Modifier.size(RemodexTheme.geometry.iconSize),
-                )
-            }
-
-            // Mac connection status (right-aligned, monospaced)
-            if (macName != null) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                    modifier = Modifier.widthIn(max = 170.dp),
+                RemodexIconButton(
+                    onClick = onOpenSettings,
+                    contentDescription = "Settings",
                 ) {
-                    Text(
-                        text = macName,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = RemodexMonoFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
-                        ),
-                        color = RemodexTheme.colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = RemodexTheme.colors.textPrimary,
+                        modifier = Modifier.size(RemodexTheme.geometry.iconSize),
                     )
-                    Text(
-                        text = connectionLabel,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = RemodexMonoFontFamily,
-                            fontSize = 10.sp,
-                        ),
-                        color = RemodexTheme.colors.textSecondary,
-                        maxLines = 1,
-                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                if (macName != null) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                        modifier = Modifier.widthIn(max = 190.dp),
+                    ) {
+                        Text(
+                            text = macName,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = RemodexMonoFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 11.sp,
+                            ),
+                            color = RemodexTheme.colors.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = connectionLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = RemodexMonoFontFamily,
+                                fontSize = 10.sp,
+                            ),
+                            color = RemodexTheme.colors.textSecondary,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }

@@ -600,38 +600,42 @@ class AndrodexService(
 
     suspend fun activateWorkspace(path: String) {
         val status = repository.activateWorkspace(path)
+        stateFlow.update {
+            it.copy(
+                activeWorkspacePath = status.currentCwd,
+                workspaceBrowserPath = null,
+                workspaceBrowserParentPath = null,
+                workspaceBrowserEntries = emptyList(),
+                selectedThreadId = null,
+                selectedThreadTitle = null,
+                threads = emptyList(),
+                hasLoadedThreadList = false,
+                isLoadingThreadList = true,
+                isWorkspaceBrowserLoading = false,
+            )
+        }
         refreshThreadsInternal()
         val recent = repository.listRecentWorkspaces()
         stateFlow.update {
             it.copy(
                 activeWorkspacePath = status.currentCwd,
                 recentWorkspaces = recent.recentWorkspaces,
-                workspaceBrowserPath = null,
-                workspaceBrowserParentPath = null,
-                workspaceBrowserEntries = emptyList(),
-                selectedThreadId = null,
-                selectedThreadTitle = null,
                 isWorkspaceBrowserLoading = false,
             )
         }
     }
 
     private suspend fun refreshThreadsInternal() {
-        val shouldHoldLoading = stateFlow.value.threads.isEmpty()
         val startedAt = System.currentTimeMillis()
         stateFlow.update { it.copy(isLoadingThreadList = true) }
         try {
             val threads = repository.refreshThreads()
-            if (threads.isNotEmpty() || stateFlow.value.threads.isEmpty()) {
-                applyLoadedThreads(threads)
-            }
+            applyLoadedThreads(threads)
         } finally {
-            if (shouldHoldLoading) {
-                val elapsedMs = System.currentTimeMillis() - startedAt
-                val remainingMs = minimumThreadListLoadingVisibleMs - elapsedMs
-                if (remainingMs > 0) {
-                    delay(remainingMs)
-                }
+            val elapsedMs = System.currentTimeMillis() - startedAt
+            val remainingMs = minimumThreadListLoadingVisibleMs - elapsedMs
+            if (remainingMs > 0) {
+                delay(remainingMs)
             }
             stateFlow.update { it.copy(isLoadingThreadList = false) }
         }

@@ -52,12 +52,29 @@ This file records the verified Android-side screenshots gathered during the live
 | `android-device-captures/phase4/phase4-home-no-project.xml` | UI dump for the transient no-workspace error variant | Useful for later dialog/overlay parity checks tied to the same home recovery path. |
 | `android-device-captures/phase4/phase4-home-loading.xml` | UI dump for the loading home variant | Confirms that the loading row is present in the live hierarchy even though it sits near the bottom edge of the viewport in the captured frame. |
 
+## Phase 5 Sidebar Captures
+
+| Android artifact | What it shows | Notes |
+| --- | --- | --- |
+| `android-device-captures/phase5/phase5-sidebar-closed.png` | Refreshed home shell with the drawer closed after the Phase 5 sidebar pass | Captured after restoring the primary `androdex` workspace so the post-refresh closed-shell state has a matching Android reference. |
+| `android-device-captures/phase5/phase5-sidebar-open-default.png` | Refreshed default open drawer state | Confirms the denser header/search stack, flatter grouped sections, and rounded footer capsule from the Phase 5 drawer implementation. |
+| `android-device-captures/phase5/phase5-sidebar-search-focused.png` | Drawer with the refreshed focused search field | Confirms the focused-field width change, cancel placement, and keyboard-aware layout after the sidebar pass. |
+| `android-device-captures/phase5/phase5-sidebar-groups-expanded.png` | Expanded grouped thread section after the sidebar refresh | Shows the shared grouped-thread renderer, timestamp alignment, and run-state dot placement in the updated drawer. |
+| `android-device-captures/phase5/phase5-sidebar-empty.png` | Empty drawer state with no conversations available | Captured against a temporary empty Codex home so the live Android drawer could show the true no-conversations copy instead of cached grouped history. |
+| `android-device-captures/phase5/phase5-sidebar-loading.png` | Drawer visible during saved-reconnect startup loading | Captured from the live Samsung device during the reconnect window where the home shell is still loading models and rehydrating workspace context behind the drawer. This is the closest stable Android-side loading reference for the sidebar runtime path. |
+| `android-device-captures/phase5/phase5-sidebar-closed.xml` | UI dump for the refreshed closed-shell state | Paired with the screenshot above for header spacing and home-shell alignment checks after the drawer refresh. |
+| `android-device-captures/phase5/phase5-sidebar-open-default.xml` | UI dump for the refreshed default drawer state | Useful for validating the updated group counts, row spacing, and footer metadata placement without re-running the device flow. |
+| `android-device-captures/phase5/phase5-sidebar-search-focused.xml` | UI dump for the focused search drawer state | Confirms the focused search field width and cancel affordance in the live hierarchy. |
+| `android-device-captures/phase5/phase5-sidebar-groups-expanded.xml` | UI dump for the expanded grouped drawer state | Confirms the updated expanded section rows, timestamps, and visible grouped-thread content. |
+| `android-device-captures/phase5/phase5-sidebar-empty.xml` | UI dump for the empty drawer state | Confirms the `No conversations yet` drawer copy and the supporting empty-state message in the live hierarchy. |
+
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
 - Verified Phase 1 refresh dumps currently include `android-device-captures/phase1/phase1-home-refresh.xml` and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
 - Verified Phase 2 shell dumps now include `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, and `android-device-captures/phase2/phase2-thread-shell.xml`.
 - Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`, `android-device-captures/phase4/phase4-home-empty-no-project.xml`, `android-device-captures/phase4/phase4-home-no-project.xml`, and `android-device-captures/phase4/phase4-home-loading.xml`.
+- Verified Phase 5 sidebar dumps now include `android-device-captures/phase5/phase5-sidebar-closed.xml`, `android-device-captures/phase5/phase5-sidebar-open-default.xml`, `android-device-captures/phase5/phase5-sidebar-search-focused.xml`, `android-device-captures/phase5/phase5-sidebar-groups-expanded.xml`, and `android-device-captures/phase5/phase5-sidebar-empty.xml`.
 - `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
@@ -66,4 +83,6 @@ This file records the verified Android-side screenshots gathered during the live
 
 - A stale Phase 1 sidebar refresh artifact drifted out of app context and was replaced with a live Androdex recapture; earlier non-Androdex captures remain excluded from the reference set.
 - The Android captures are counterpart references for Androdex, not canonical Remodex screenshots.
+- The Phase 5 device pass now has real empty/loading drawer references, but the loading anchor is still a startup-time runtime variant rather than the ideal steady-state overlay card: Android can retain grouped drawer content while the saved-reconnect flow is still rehydrating workspace context behind it.
+- `android-device-captures/phase5/phase5-sidebar-loading.png` is intentionally screenshot-only for now; repeated `uiautomator dump` attempts kept resolving to the settled default drawer instead of the transient saved-reconnect loading frame.
 - We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 1 blockers.

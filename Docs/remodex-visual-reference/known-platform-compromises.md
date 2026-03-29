@@ -136,6 +136,17 @@ The acceptable compromise is:
 - keep the saved reconnect and manual payload actions immediately available instead of hiding them behind separate onboarding pages
 - document that this is a workflow-preserving consolidation, not a claim of literal navigation parity
 
+## 13. Sidebar Runtime Data vs Drawer-Specific Capture States
+
+The refreshed Android drawer can now match the Remodex header, search rhythm, grouped sections, thread rows, and footer capsule much more closely. The remaining sidebar nuance is not a geometry or token mismatch; it is a reconnect-timing/runtime-state exposure problem.
+
+The acceptable compromise is:
+
+- keep the drawer visuals aligned with the Remodex grouped-sidebar structure
+- accept a saved-reconnect loading capture where the drawer can still retain grouped thread content while the home shell behind it is rehydrating workspace and model state
+- document that runtime-specific loading nuance explicitly instead of pretending Android exposes the exact same steady-state drawer overlay timing as Remodex
+- treat the runtime nuance as a verification note, not as permission to fall back to a looser Material drawer design
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:
