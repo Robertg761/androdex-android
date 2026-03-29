@@ -6,6 +6,12 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
@@ -36,6 +42,7 @@ import io.androdex.android.ui.shared.MissingNotificationThreadDialog
 import io.androdex.android.ui.sidebar.SidebarContent
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.HomeScreenUiState
+import io.androdex.android.ui.state.PairingScreenUiState
 import io.androdex.android.ui.state.toAppUiState
 import io.androdex.android.ui.turn.ForkThreadSheet
 import io.androdex.android.ui.turn.ThreadRuntimeSheet
@@ -62,9 +69,13 @@ fun AndrodexApp(viewModel: MainViewModel) {
     // Cache the last HomeScreenUiState so the sidebar stays populated
     // while viewing a thread (Thread state carries no thread-list data)
     var cachedSidebar by remember { mutableStateOf<HomeScreenUiState?>(null) }
+    var cachedPairing by remember { mutableStateOf<PairingScreenUiState?>(null) }
     val destination = appState.destination
     if (destination is AndrodexDestinationUiState.Home) {
         cachedSidebar = destination.state
+    }
+    if (destination is AndrodexDestinationUiState.Pairing) {
+        cachedPairing = destination.state
     }
 
     // Selected thread ID — used to highlight the active row in the sidebar
@@ -156,25 +167,97 @@ fun AndrodexApp(viewModel: MainViewModel) {
 
     // ── Root navigation ─────────────────────────────────────────────────
     when (destination) {
-        is AndrodexDestinationUiState.Pairing -> {
-            PairingScreen(
-                state = destination.state,
-                onPairingInputChanged = viewModel::updatePairingInput,
-                onScanQr = {
-                    scanLauncher.launch(
-                        ScanOptions()
-                            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            .setPrompt("Scan the Androdex pairing QR")
-                            .setBeepEnabled(false)
-                            .setOrientationLocked(false)
-                    )
+        is AndrodexDestinationUiState.Pairing,
+        is AndrodexDestinationUiState.Home -> {
+            val landingRoute = if (destination is AndrodexDestinationUiState.Home) {
+                LandingRoute.Home
+            } else {
+                LandingRoute.Pairing
+            }
+            AnimatedContent(
+                targetState = landingRoute,
+                transitionSpec = {
+                    val movingToHome = targetState == LandingRoute.Home
+                    (fadeIn() + slideInHorizontally { fullWidth ->
+                        if (movingToHome) fullWidth / 8 else -fullWidth / 8
+                    }) togetherWith
+                        (fadeOut() + slideOutHorizontally { fullWidth ->
+                            if (movingToHome) -fullWidth / 12 else fullWidth / 12
+                        })
                 },
-                onConnect = viewModel::connectWithCurrentPairingInput,
-                onReconnectSaved = viewModel::reconnectSaved,
-            )
+                label = "landingTransition",
+            ) { route ->
+                when (route) {
+                    LandingRoute.Pairing -> {
+                        cachedPairing?.let { pairingState ->
+                            PairingScreen(
+                                state = pairingState,
+                                onPairingInputChanged = viewModel::updatePairingInput,
+                                onScanQr = {
+                                    scanLauncher.launch(
+                                        ScanOptions()
+                                            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                            .setPrompt("Scan the Androdex pairing QR")
+                                            .setBeepEnabled(false)
+                                            .setOrientationLocked(false)
+                                    )
+                                },
+                                onConnect = viewModel::connectWithCurrentPairingInput,
+                                onReconnectSaved = viewModel::reconnectSaved,
+                            )
+                        }
+                    }
+
+                    LandingRoute.Home -> {
+                        cachedSidebar?.let { homeState ->
+                            ModalNavigationDrawer(
+                                drawerState = drawerState,
+                                gesturesEnabled = true,
+                                drawerContent = {
+                                    ModalDrawerSheet(
+                                        drawerContainerColor = MaterialTheme.colorScheme.background,
+                                        modifier = Modifier
+                                            .width(300.dp)
+                                            .fillMaxHeight(),
+                                    ) {
+                                        SidebarContent(
+                                            threadList = homeState.threadList,
+                                            connection = homeState.connection,
+                                            macName = homeState.trustedPair?.name,
+                                            selectedThreadId = selectedThreadId,
+                                            onCreateThread = {
+                                                scope.launch { drawerState.close() }
+                                                viewModel.createThread()
+                                            },
+                                            onOpenThread = { id ->
+                                                scope.launch { drawerState.close() }
+                                                viewModel.openThread(id)
+                                            },
+                                            onOpenSettings = { settingsOpen = true },
+                                        )
+                                    }
+                                },
+                            ) {
+                                HomeScreen(
+                                    state = homeState,
+                                    onOpenSidebar = { scope.launch { drawerState.open() } },
+                                    onOpenSettings = { settingsOpen = true },
+                                    onCreateThread = viewModel::createThread,
+                                    onOpenThread = viewModel::openThread,
+                                    onOpenProjects = viewModel::openProjectPicker,
+                                    onCloseProjects = viewModel::closeProjectPicker,
+                                    onRefreshProjects = viewModel::loadRecentWorkspaces,
+                                    onBrowseWorkspace = viewModel::browseWorkspace,
+                                    onWorkspaceBrowserPathChanged = viewModel::updateWorkspaceBrowserPath,
+                                    onActivateWorkspace = viewModel::activateWorkspace,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        is AndrodexDestinationUiState.Home,
         is AndrodexDestinationUiState.Thread -> {
             ModalNavigationDrawer(
                 drawerState = drawerState,
@@ -206,122 +289,106 @@ fun AndrodexApp(viewModel: MainViewModel) {
                     }
                 },
             ) {
-                // ── Main content ─────────────────────────────────────────
-                when (val dest = destination) {
-                    is AndrodexDestinationUiState.Home -> {
-                        HomeScreen(
-                            state = dest.state,
-                            onOpenSidebar = { scope.launch { drawerState.open() } },
-                            onOpenSettings = { settingsOpen = true },
-                            onOpenProjects = viewModel::openProjectPicker,
-                            onCloseProjects = viewModel::closeProjectPicker,
-                            onRefreshProjects = viewModel::loadRecentWorkspaces,
-                            onBrowseWorkspace = viewModel::browseWorkspace,
-                            onWorkspaceBrowserPathChanged = viewModel::updateWorkspaceBrowserPath,
-                            onActivateWorkspace = viewModel::activateWorkspace,
-                        )
-                    }
-
-                    is AndrodexDestinationUiState.Thread -> {
-                        if (threadRuntimeOpen) {
-                            ThreadRuntimeSheet(
-                                state = dest.state.runtime,
-                                onDismiss = { threadRuntimeOpen = false },
-                                onSelectReasoning = viewModel::selectThreadReasoningOverride,
-                                onSelectServiceTier = { wireValue ->
-                                    viewModel.selectThreadServiceTierOverride(
-                                        io.androdex.android.model.ServiceTier.fromWireValue(wireValue)
-                                    )
-                                },
-                                onUseDefaults = viewModel::useThreadRuntimeDefaults,
+                if (threadRuntimeOpen) {
+                    ThreadRuntimeSheet(
+                        state = destination.state.runtime,
+                        onDismiss = { threadRuntimeOpen = false },
+                        onSelectReasoning = viewModel::selectThreadReasoningOverride,
+                        onSelectServiceTier = { wireValue ->
+                            viewModel.selectThreadServiceTierOverride(
+                                io.androdex.android.model.ServiceTier.fromWireValue(wireValue)
                             )
-                        }
-                        if (forkThreadOpen) {
-                            ForkThreadSheet(
-                                state = dest.state.fork,
-                                onDismiss = { forkThreadOpen = false },
-                                onFork = { projectPath ->
-                                    forkThreadOpen = false
-                                    viewModel.forkSelectedThread(projectPath)
-                                },
-                            )
-                        }
-                        ThreadTimelineScreen(
-                            state = dest.state,
-                            onBack = viewModel::closeThread,
-                            onOpenSidebar = { scope.launch { drawerState.open() } },
-                            onRefresh = { viewModel.openThread(dest.state.threadId) },
-                            onComposerChanged = viewModel::updateComposerText,
-                            onPlanModeChanged = viewModel::updateComposerPlanMode,
-                            onSubagentsModeChanged = viewModel::updateComposerSubagentsEnabled,
-                            onSelectReviewTarget = viewModel::updateComposerReviewTarget,
-                            onReviewBaseBranchChanged = viewModel::updateComposerReviewBaseBranch,
-                            onRemoveReviewSelection = viewModel::clearComposerReviewSelection,
-                            onSelectFileAutocomplete = viewModel::selectFileAutocomplete,
-                            onRemoveMentionedFile = viewModel::removeMentionedFile,
-                            onSelectSkillAutocomplete = viewModel::selectSkillAutocomplete,
-                            onRemoveMentionedSkill = viewModel::removeMentionedSkill,
-                            onSelectSlashCommand = viewModel::selectSlashCommand,
-                            onAddCamera = {
-                                val permissionGranted = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.CAMERA,
-                                ) == PackageManager.PERMISSION_GRANTED
-                                when {
-                                    permissionGranted -> cameraLauncher.launch(null)
-                                    activity == null -> viewModel.reportAttachmentError("Camera is unavailable right now.")
-                                    else -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            },
-                            onAddGallery = {
-                                galleryLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            onRemoveComposerAttachment = viewModel::removeComposerAttachment,
-                            onOpenRuntime = { threadRuntimeOpen = true },
-                            onOpenFork = {
-                                if (dest.state.fork.isEnabled) forkThreadOpen = true
-                            },
-                            onCompactThread = viewModel::compactSelectedThread,
-                            onRollbackThread = viewModel::rollbackSelectedThread,
-                            onCleanBackgroundTerminals = viewModel::cleanSelectedThreadBackgroundTerminals,
-                            onSend = viewModel::sendMessage,
-                            onStop = viewModel::interruptSelectedThread,
-                            onPauseQueue = viewModel::pauseSelectedThreadQueue,
-                            onResumeQueue = viewModel::resumeSelectedThreadQueue,
-                            onRestoreQueuedDraft = viewModel::restoreQueuedDraftToComposer,
-                            onRemoveQueuedDraft = viewModel::removeQueuedDraft,
-                            onToolInputAnswerChanged = viewModel::updateToolInputAnswer,
-                            onSubmitToolInput = viewModel::submitToolInput,
-                            onRefreshGit = viewModel::refreshSelectedThreadGitState,
-                            onLoadGitDiff = viewModel::refreshSelectedThreadGitDiff,
-                            onOpenGitCommit = viewModel::openGitCommitDialog,
-                            onUpdateGitCommitMessage = viewModel::updateGitCommitMessage,
-                            onDismissGitCommit = viewModel::dismissGitCommitDialog,
-                            onSubmitGitCommit = viewModel::submitGitCommit,
-                            onPushGit = viewModel::pushGitChanges,
-                            onRequestGitPull = viewModel::requestGitPull,
-                            onOpenGitBranchDialog = viewModel::openGitBranchDialog,
-                            onUpdateGitBranchName = viewModel::updateGitBranchName,
-                            onDismissGitBranchDialog = viewModel::dismissGitBranchDialog,
-                            onRequestCreateGitBranch = viewModel::requestCreateGitBranch,
-                            onRequestSwitchGitBranch = viewModel::requestSwitchGitBranch,
-                            onOpenGitWorktreeDialog = viewModel::openGitWorktreeDialog,
-                            onUpdateGitWorktreeBranchName = viewModel::updateGitWorktreeBranchName,
-                            onUpdateGitWorktreeBaseBranch = viewModel::updateGitWorktreeBaseBranch,
-                            onUpdateGitWorktreeTransferMode = viewModel::updateGitWorktreeTransferMode,
-                            onDismissGitWorktreeDialog = viewModel::dismissGitWorktreeDialog,
-                            onRequestCreateGitWorktree = viewModel::requestCreateGitWorktree,
-                            onRequestRemoveGitWorktree = viewModel::requestRemoveGitWorktree,
-                            onDismissGitAlert = viewModel::dismissGitAlert,
-                            onHandleGitAlertAction = viewModel::handleGitAlertAction,
-                        )
-                    }
-
-                    else -> Unit
+                        },
+                        onUseDefaults = viewModel::useThreadRuntimeDefaults,
+                    )
                 }
+                if (forkThreadOpen) {
+                    ForkThreadSheet(
+                        state = destination.state.fork,
+                        onDismiss = { forkThreadOpen = false },
+                        onFork = { projectPath ->
+                            forkThreadOpen = false
+                            viewModel.forkSelectedThread(projectPath)
+                        },
+                    )
+                }
+                ThreadTimelineScreen(
+                    state = destination.state,
+                    onBack = viewModel::closeThread,
+                    onOpenSidebar = { scope.launch { drawerState.open() } },
+                    onRefresh = { viewModel.openThread(destination.state.threadId) },
+                    onComposerChanged = viewModel::updateComposerText,
+                    onPlanModeChanged = viewModel::updateComposerPlanMode,
+                    onSubagentsModeChanged = viewModel::updateComposerSubagentsEnabled,
+                    onSelectReviewTarget = viewModel::updateComposerReviewTarget,
+                    onReviewBaseBranchChanged = viewModel::updateComposerReviewBaseBranch,
+                    onRemoveReviewSelection = viewModel::clearComposerReviewSelection,
+                    onSelectFileAutocomplete = viewModel::selectFileAutocomplete,
+                    onRemoveMentionedFile = viewModel::removeMentionedFile,
+                    onSelectSkillAutocomplete = viewModel::selectSkillAutocomplete,
+                    onRemoveMentionedSkill = viewModel::removeMentionedSkill,
+                    onSelectSlashCommand = viewModel::selectSlashCommand,
+                    onAddCamera = {
+                        val permissionGranted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.CAMERA,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        when {
+                            permissionGranted -> cameraLauncher.launch(null)
+                            activity == null -> viewModel.reportAttachmentError("Camera is unavailable right now.")
+                            else -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                    onAddGallery = {
+                        galleryLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onRemoveComposerAttachment = viewModel::removeComposerAttachment,
+                    onOpenRuntime = { threadRuntimeOpen = true },
+                    onOpenFork = {
+                        if (destination.state.fork.isEnabled) forkThreadOpen = true
+                    },
+                    onCompactThread = viewModel::compactSelectedThread,
+                    onRollbackThread = viewModel::rollbackSelectedThread,
+                    onCleanBackgroundTerminals = viewModel::cleanSelectedThreadBackgroundTerminals,
+                    onSend = viewModel::sendMessage,
+                    onStop = viewModel::interruptSelectedThread,
+                    onPauseQueue = viewModel::pauseSelectedThreadQueue,
+                    onResumeQueue = viewModel::resumeSelectedThreadQueue,
+                    onRestoreQueuedDraft = viewModel::restoreQueuedDraftToComposer,
+                    onRemoveQueuedDraft = viewModel::removeQueuedDraft,
+                    onToolInputAnswerChanged = viewModel::updateToolInputAnswer,
+                    onSubmitToolInput = viewModel::submitToolInput,
+                    onRefreshGit = viewModel::refreshSelectedThreadGitState,
+                    onLoadGitDiff = viewModel::refreshSelectedThreadGitDiff,
+                    onOpenGitCommit = viewModel::openGitCommitDialog,
+                    onUpdateGitCommitMessage = viewModel::updateGitCommitMessage,
+                    onDismissGitCommit = viewModel::dismissGitCommitDialog,
+                    onSubmitGitCommit = viewModel::submitGitCommit,
+                    onPushGit = viewModel::pushGitChanges,
+                    onRequestGitPull = viewModel::requestGitPull,
+                    onOpenGitBranchDialog = viewModel::openGitBranchDialog,
+                    onUpdateGitBranchName = viewModel::updateGitBranchName,
+                    onDismissGitBranchDialog = viewModel::dismissGitBranchDialog,
+                    onRequestCreateGitBranch = viewModel::requestCreateGitBranch,
+                    onRequestSwitchGitBranch = viewModel::requestSwitchGitBranch,
+                    onOpenGitWorktreeDialog = viewModel::openGitWorktreeDialog,
+                    onUpdateGitWorktreeBranchName = viewModel::updateGitWorktreeBranchName,
+                    onUpdateGitWorktreeBaseBranch = viewModel::updateGitWorktreeBaseBranch,
+                    onUpdateGitWorktreeTransferMode = viewModel::updateGitWorktreeTransferMode,
+                    onDismissGitWorktreeDialog = viewModel::dismissGitWorktreeDialog,
+                    onRequestCreateGitWorktree = viewModel::requestCreateGitWorktree,
+                    onRequestRemoveGitWorktree = viewModel::requestRemoveGitWorktree,
+                    onDismissGitAlert = viewModel::dismissGitAlert,
+                    onHandleGitAlertAction = viewModel::handleGitAlertAction,
+                )
             }
         }
     }
+}
+
+private enum class LandingRoute {
+    Pairing,
+    Home,
 }

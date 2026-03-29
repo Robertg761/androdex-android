@@ -110,6 +110,13 @@ class AndrodexFeatureStateTest {
                 fingerprint = "ABCD1234EFGH5678",
                 lastPairedAtEpochMs = 1_000L,
             ),
+            hostAccountSnapshot = HostAccountSnapshot(
+                status = HostAccountStatus.AUTHENTICATED,
+                authMethod = "chatgpt",
+                email = "host@example.com",
+                planType = "pro",
+                bridgeVersion = "1.1.3",
+            ),
             activeWorkspacePath = "C:\\Projects\\Androdex",
             runningThreadIds = setOf("thread-1"),
             threads = listOf(
@@ -153,6 +160,7 @@ class AndrodexFeatureStateTest {
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
         assertNotNull(route.state.trustedPair)
+        assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
         assertEquals("Connected pair", route.state.trustedPair?.statusLabel)
         assertNotNull(route.state.projectPicker)
         assertTrue(route.state.projectPicker?.isBrowsing == true)

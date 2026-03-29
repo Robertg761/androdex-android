@@ -121,6 +121,31 @@ class MainViewModelWorkspaceTest {
     }
 
     @Test
+    fun connect_doesNotAutoOpenProjectPicker() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.isProjectPickerOpen)
+    }
+
+    @Test
+    fun openProjectPicker_loadsWorkspaceStateExplicitly() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openProjectPicker()
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(viewModel.uiState.value.isProjectPickerOpen)
+        assertEquals(1, repository.recentStateLoads)
+    }
+
+    @Test
     fun startupNotice_populatesInitialErrorMessage() = runTest(dispatcher) {
         val repository = FakeRepository().apply {
             startupNotice = "Pair again on this Android install."
@@ -483,6 +508,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     var recentState = WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
     var startupNotice: String? = null
     var reconnectSavedCalls = 0
+    var recentStateLoads = 0
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
@@ -606,7 +632,10 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) = Unit
 
-    override suspend fun listRecentWorkspaces(): WorkspaceRecentState = recentState
+    override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
+        recentStateLoads += 1
+        return recentState
+    }
 
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
         return WorkspaceBrowseResult(

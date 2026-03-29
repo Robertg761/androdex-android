@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,8 +23,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.androdex.android.ui.shared.LandingSectionSurface
 import io.androdex.android.ui.state.ProjectPickerUiState
 import io.androdex.android.ui.state.WorkspaceRowAction
 import io.androdex.android.ui.state.WorkspaceRowUiState
@@ -60,7 +63,18 @@ internal fun ProjectPickerSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Projects", style = MaterialTheme.typography.titleLarge)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Projects", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = if (state.isBrowsing) {
+                            "Choose the host folder that new chats should use."
+                        } else {
+                            "Pick a recent project or browse the host for another one."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 TextButton(onClick = onRefresh) {
                     Text("Refresh")
                 }
@@ -70,30 +84,36 @@ internal fun ProjectPickerSheet(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = MaterialTheme.shapes.large,
-            ) {
+            LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        "Current Project",
-                        style = MaterialTheme.typography.labelMedium,
+                        "Current project",
+                        style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
                     Text(
                         text = state.activeWorkspacePath ?: "No project selected",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = if (state.activeWorkspacePath == null) {
+                            "Selecting a project makes new chats and recent context land in the right place immediately."
+                        } else {
+                            "Switch projects any time without leaving the thread list."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
             if (!state.isBrowsing) {
                 if (state.recentWorkspaces.isNotEmpty()) {
-                    Text("Recent", style = MaterialTheme.typography.titleMedium)
+                    Text("Recent projects", style = MaterialTheme.typography.titleMedium)
                     state.recentWorkspaces.forEach { workspace ->
                         WorkspaceRow(
                             state = workspace,
@@ -106,10 +126,10 @@ internal fun ProjectPickerSheet(
                     onClick = { onBrowse(null) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Browse Folders")
+                    Text("Browse host folders")
                 }
             } else {
-                Text("Browse Host Folders", style = MaterialTheme.typography.titleMedium)
+                Text("Browse host folders", style = MaterialTheme.typography.titleMedium)
                 TextField(
                     value = state.browserPath,
                     onValueChange = onBrowserPathChanged,
@@ -171,21 +191,24 @@ private fun WorkspaceRow(
         color = if (state.active) {
             MaterialTheme.colorScheme.secondaryContainer
         } else {
-            MaterialTheme.colorScheme.surfaceContainer
+            MaterialTheme.colorScheme.surfaceContainerHigh
         },
-        shape = MaterialTheme.shapes.large,
+        shape = RoundedCornerShape(20.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(state.title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = state.title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                )
                 if (state.active) {
                     Text(
                         "Active",

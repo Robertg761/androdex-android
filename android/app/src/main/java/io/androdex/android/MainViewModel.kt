@@ -172,11 +172,6 @@ class MainViewModel(
                     connectionStatus = serviceState.connectionStatus,
                     hasSavedPairing = serviceState.hasSavedPairing,
                 )
-                if (lastConnectionStatus != ConnectionStatus.CONNECTED
-                    && serviceState.connectionStatus == ConnectionStatus.CONNECTED
-                ) {
-                    uiStateFlow.update { it.copy(isProjectPickerOpen = true) }
-                }
                 lastConnectionStatus = serviceState.connectionStatus
             }
         }
