@@ -116,6 +116,16 @@ The acceptable compromise is:
 - use short ease-in-out curves for search/composer state changes
 - avoid springy or highly expressive Material motion that makes the app feel like a different product
 
+## 11. Drawer Reveal And System Bar Rendering
+
+Remodex gets some of its shell feel from iOS-native navigation, drawer, and system-bar blending that Compose cannot reproduce literally.
+
+The acceptable Android compromise is:
+
+- use a shared connected-shell host so home and thread transitions happen inside the same drawer container
+- prefer a dismissible drawer reveal over a fully separate modal sheet so the current screen remains partially visible
+- keep status and navigation bars visually transparent and let the app shell own the top/bottom edge treatment instead of introducing opaque platform chrome
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:

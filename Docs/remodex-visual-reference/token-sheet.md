@@ -226,3 +226,11 @@ Last updated: `2026-03-29`
 - `android/app/src/main/java/io/androdex/android/ui/theme/Type.kt` now prioritizes Remodex sizing and density over the prior Geist-first setup. The Android compromise is `SansSerif` plus `Monospace`, sized to the extracted Remodex `AppFont` scale.
 - Shared primitives now live in `android/app/src/main/java/io/androdex/android/ui/shared/RemodexPrimitives.kt` so sidebar rows, search shells, grouped surfaces, compact headers, pills, buttons, inputs, dividers, and alert shells can opt into the same token source instead of re-styling Material defaults independently.
 - The phase 1 refresh surfaces now consume those shared geometry tokens directly in home, pairing, sidebar, shared-status, and overlay code instead of carrying duplicated per-screen padding and spacing literals.
+
+## Phase 2 Android Mapping
+
+Last updated: `2026-03-29`
+
+- `android/app/src/main/java/io/androdex/android/AndrodexApp.kt` now keeps home and thread inside one connected-shell host, using a `320dp` dismissible drawer so the active surface remains partially visible during drawer reveal instead of switching to a fully separate modal layer.
+- `android/app/src/main/java/io/androdex/android/MainActivity.kt` now drives transparent status and navigation bars through `enableEdgeToEdge(...)`, while `android/app/src/main/java/io/androdex/android/ui/shared/RemodexPrimitives.kt` applies the header inset so the shell owns the top edge rather than default Material chrome.
+- `android/app/src/main/java/io/androdex/android/ui/shared/LandingChrome.kt` now uses a flatter vertical wash instead of the earlier colored radial glow field, matching the calmer Remodex shell background more closely.

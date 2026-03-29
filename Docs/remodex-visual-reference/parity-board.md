@@ -53,6 +53,13 @@ Phase 1 design-system refresh anchors:
 - Runtime UI dumps currently verified for the same pass: `android-device-captures/phase1/phase1-home-refresh.xml`, `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`
 - Pairing refresh dump available for future cleanup: `android-device-captures/phase1/phase1-pairing-refresh.xml`
 
+Phase 2 shell refresh anchors:
+
+- Connected home shell after the shared-shell and edge-to-edge pass: `android-device-captures/phase2/phase2-home-shell.png`
+- Drawer reveal after the shared-shell pass: `android-device-captures/phase2/phase2-sidebar-open-shell.png`
+- Thread shell after the shared-shell pass: `android-device-captures/phase2/phase2-thread-shell.png`
+- Matching Phase 2 UI dumps: `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, `android-device-captures/phase2/phase2-thread-shell.xml`
+
 The remaining Android capture gaps are now limited to later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.

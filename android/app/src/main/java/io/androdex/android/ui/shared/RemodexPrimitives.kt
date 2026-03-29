@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -106,7 +107,9 @@ internal fun RemodexPageHeader(
 
     Surface(
         color = colors.topBarBackground,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding(),
     ) {
         Row(
             modifier = Modifier
@@ -114,7 +117,7 @@ internal fun RemodexPageHeader(
                 .padding(
                     start = geometry.pageHorizontalPadding,
                     end = geometry.pageHorizontalPadding,
-                    top = geometry.spacing10,
+                    top = geometry.spacing4,
                     bottom = geometry.spacing8,
                 ),
             verticalAlignment = Alignment.CenterVertically,

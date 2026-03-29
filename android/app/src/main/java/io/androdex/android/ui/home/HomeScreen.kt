@@ -79,6 +79,7 @@ internal fun HomeScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
         topBar = {
             Column {
                 RemodexPageHeader(
