@@ -49,16 +49,17 @@ import io.androdex.android.ui.state.BusyUiState
 import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.HostAccountUiState
 import io.androdex.android.ui.state.TrustedPairUiState
+import io.androdex.android.ui.theme.RemodexTheme
 
 @Composable
 internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (status) {
-    ConnectionStatus.CONNECTED -> MaterialTheme.colorScheme.tertiary
+    ConnectionStatus.CONNECTED -> RemodexTheme.colors.statusDotConnected
     ConnectionStatus.CONNECTING,
     ConnectionStatus.HANDSHAKING,
-    ConnectionStatus.RETRYING_SAVED_PAIRING -> Color(0xFFFF9F0A)
+    ConnectionStatus.RETRYING_SAVED_PAIRING -> RemodexTheme.colors.statusDotSyncing
     ConnectionStatus.RECONNECT_REQUIRED,
-    ConnectionStatus.UPDATE_REQUIRED -> MaterialTheme.colorScheme.error
-    ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+    ConnectionStatus.UPDATE_REQUIRED -> RemodexTheme.colors.statusDotError
+    ConnectionStatus.DISCONNECTED -> RemodexTheme.colors.statusDotOffline
 }
 
 @Composable
@@ -66,6 +67,7 @@ internal fun StatusCapsule(
     state: ConnectionBannerUiState,
     modifier: Modifier = Modifier,
 ) {
+    val geometry = RemodexTheme.geometry
     val dotColor = connectionStatusDotColor(state.status)
     val label = when (state.status) {
         ConnectionStatus.CONNECTED -> "Connected"
@@ -87,17 +89,22 @@ internal fun StatusCapsule(
         else -> null
     }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(14.dp),
+    RemodexGroupedSurface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 8.dp),
+            .padding(bottom = geometry.spacing8),
+        cornerRadius = RemodexTheme.geometry.cornerSmall,
+        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(
+            modifier = Modifier.padding(
+                horizontal = geometry.spacing14,
+                vertical = geometry.spacing10,
+            ),
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
             ) {
                 Box(
                     modifier = Modifier
@@ -116,40 +123,44 @@ internal fun StatusCapsule(
                         text = text,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = RemodexTheme.colors.textPrimary,
                     )
                 }
             }
             state.detail?.takeIf { it.isNotBlank() }?.let {
                 Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = RemodexTheme.colors.textSecondary,
+                        modifier = Modifier.padding(top = geometry.spacing4),
+                    )
+                }
             guidance?.let {
                 Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = if (state.detail.isNullOrBlank()) 4.dp else 2.dp),
-                )
-            }
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = RemodexTheme.colors.textSecondary,
+                        modifier = Modifier.padding(
+                            top = if (state.detail.isNullOrBlank()) geometry.spacing4 else geometry.spacing2,
+                        ),
+                    )
+                }
             state.fingerprint?.takeIf { it.isNotBlank() }?.let {
                 Text(
-                    text = "Host: $it",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
+                        text = "Host: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RemodexTheme.colors.textTertiary,
+                        modifier = Modifier.padding(top = geometry.spacing2),
+                    )
+                }
         }
     }
 }
 
 @Composable
 internal fun BusyIndicator(state: BusyUiState) {
+    val geometry = RemodexTheme.geometry
+
     AnimatedVisibility(
         visible = state.isVisible,
         enter = slideInVertically { -it } + fadeIn(),
@@ -158,15 +169,18 @@ internal fun BusyIndicator(state: BusyUiState) {
         Column(modifier = Modifier.fillMaxWidth()) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                color = RemodexTheme.colors.accentBlue,
+                trackColor = RemodexTheme.colors.selectedRowFill,
             )
             state.label?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                    color = RemodexTheme.colors.textSecondary,
+                    modifier = Modifier.padding(
+                        horizontal = geometry.pageHorizontalPadding,
+                        vertical = geometry.spacing6,
+                    ),
                 )
             }
         }
@@ -178,19 +192,21 @@ internal fun TrustedPairCard(
     state: TrustedPairUiState,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
         modifier = modifier.fillMaxWidth(),
+        cornerRadius = RemodexTheme.geometry.cornerLarge,
+        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing14),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Desktop icon in small circular background
             Surface(
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
+                color = RemodexTheme.colors.selectedRowFill,
                 shape = CircleShape,
                 modifier = Modifier.size(36.dp),
             ) {
@@ -198,7 +214,7 @@ internal fun TrustedPairCard(
                     Icon(
                         imageVector = Icons.Outlined.Computer,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground,
+                        tint = RemodexTheme.colors.textPrimary,
                         modifier = Modifier.size(18.dp),
                     )
                 }
@@ -206,27 +222,27 @@ internal fun TrustedPairCard(
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
             ) {
                 Text(
                     text = state.name,
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = RemodexTheme.colors.textPrimary,
                 )
                 state.systemName?.let {
                     Text(
                         text = "\"$it\"",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = RemodexTheme.colors.textSecondary,
                     )
                 }
                 state.detail?.let {
                     Text(
                         text = it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = RemodexTheme.colors.textSecondary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -240,17 +256,7 @@ internal fun TrustedPairCard(
 
 @Composable
 private fun StatusPill(label: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-        )
-    }
+    RemodexPill(label = label, style = RemodexPillStyle.Accent)
 }
 
 @Composable
@@ -258,41 +264,47 @@ internal fun BridgeStatusCard(
     state: BridgeStatusUiState,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
         modifier = modifier.fillMaxWidth(),
+        cornerRadius = RemodexTheme.geometry.cornerLarge,
+        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(
+                horizontal = geometry.sidebarOuterHorizontalPadding,
+                vertical = geometry.spacing14,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     imageVector = Icons.Outlined.SettingsEthernet,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = RemodexTheme.colors.accentBlue,
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
                     text = state.title,
                     style = MaterialTheme.typography.titleMedium,
+                    color = RemodexTheme.colors.textPrimary,
                 )
             }
             Text(
                 text = state.summary,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = RemodexTheme.colors.textSecondary,
             )
             MetadataRow(label = "Speed tiers", value = state.serviceTierMessage)
             MetadataRow(label = "Thread forks", value = state.threadForkMessage)
             Text(
                 text = "Update command: ${state.updateCommand}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = RemodexTheme.colors.textTertiary,
             )
         }
     }
@@ -303,14 +315,19 @@ internal fun HostAccountCard(
     state: HostAccountUiState,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(18.dp),
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
         modifier = modifier.fillMaxWidth(),
+        cornerRadius = RemodexTheme.geometry.cornerLarge,
+        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.78f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(
+                horizontal = geometry.sidebarOuterHorizontalPadding,
+                vertical = geometry.spacing14,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -318,18 +335,19 @@ internal fun HostAccountCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Key,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = RemodexTheme.colors.accentBlue,
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
                         text = state.title,
                         style = MaterialTheme.typography.titleMedium,
+                        color = RemodexTheme.colors.textPrimary,
                     )
                 }
                 StatusPill(label = state.statusLabel)
@@ -339,7 +357,7 @@ internal fun HostAccountCard(
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = RemodexTheme.colors.textSecondary,
                 )
             }
 
@@ -356,14 +374,14 @@ internal fun HostAccountCard(
                 MetadataRow(label = "Version", value = version)
             }
             if (state.rateLimits.isNotEmpty()) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                RemodexDivider()
                 Text(
                     text = "Rate limits",
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = RemodexTheme.colors.accentBlue,
                 )
                 state.rateLimits.forEach { rateLimit ->
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -378,7 +396,7 @@ internal fun HostAccountCard(
                                 Text(
                                     text = it,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = RemodexTheme.colors.textSecondary,
                                 )
                             }
                         }
@@ -386,7 +404,7 @@ internal fun HostAccountCard(
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = RemodexTheme.colors.textSecondary,
                             )
                         }
                     }
@@ -398,6 +416,7 @@ internal fun HostAccountCard(
 
 @Composable
 internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
+    val geometry = RemodexTheme.geometry
     val isStreaming = messages.any { it.isStreaming }
     val activeSystemMessage = messages.lastOrNull {
         it.role == ConversationRole.SYSTEM && it.isStreaming
@@ -438,23 +457,26 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
         exit = slideOutVertically { -it } + fadeOut(),
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+            color = RemodexTheme.colors.accentBlue.copy(alpha = 0.12f),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(
+                    horizontal = geometry.sidebarOuterHorizontalPadding,
+                    vertical = geometry.spacing8,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = RemodexTheme.colors.accentBlue,
                 )
                 Text(
                     text = activityText ?: "Working...",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = RemodexTheme.colors.accentBlue,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -488,8 +510,10 @@ private fun MetadataRow(
     value: String,
     icon: (@Composable () -> Unit)? = null,
 ) {
+    val geometry = RemodexTheme.geometry
+
     Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
@@ -498,18 +522,18 @@ private fun MetadataRow(
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .background(MaterialTheme.colorScheme.outline, CircleShape),
+                    .background(RemodexTheme.colors.textTertiary, CircleShape),
             )
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            color = RemodexTheme.colors.accentBlue,
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = RemodexTheme.colors.textSecondary,
             modifier = Modifier.weight(1f),
         )
     }

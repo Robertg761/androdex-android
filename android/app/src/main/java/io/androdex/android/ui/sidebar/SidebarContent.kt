@@ -25,22 +25,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,11 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,10 +53,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.androdex.android.R
 import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.ui.shared.RemodexButton
+import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.RemodexSearchField
+import io.androdex.android.ui.shared.RemodexSelectionRow
 import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.ThreadListItemUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
+import io.androdex.android.ui.theme.RemodexMonoFontFamily
+import io.androdex.android.ui.theme.RemodexTheme
 
 @Composable
 internal fun SidebarContent(
@@ -77,6 +75,7 @@ internal fun SidebarContent(
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
     var searchText by remember { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
     var expandedProjects by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -120,7 +119,7 @@ internal fun SidebarContent(
         // ── Thread list ───────────────────────────────────────────────────
         LazyColumn(
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(vertical = 4.dp),
+            contentPadding = PaddingValues(vertical = geometry.spacing4),
         ) {
             when {
                 threadList.isLoading && searchText.isBlank() -> {
@@ -128,12 +127,15 @@ internal fun SidebarContent(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 32.dp),
+                                .padding(
+                                    horizontal = geometry.sidebarOuterHorizontalPadding,
+                                    vertical = geometry.spacing32,
+                                ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
                             ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
@@ -155,12 +157,15 @@ internal fun SidebarContent(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 32.dp),
+                                .padding(
+                                    horizontal = geometry.sidebarOuterHorizontalPadding,
+                                    vertical = geometry.spacing32,
+                                ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
                             ) {
                                 Text(
                                     text = threadList.emptyState.title,
@@ -189,7 +194,10 @@ internal fun SidebarContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 24.dp),
+                                .padding(
+                                    horizontal = geometry.sidebarOuterHorizontalPadding,
+                                    vertical = geometry.spacing24,
+                                ),
                             textAlign = TextAlign.Center,
                         )
                     }
@@ -227,7 +235,7 @@ internal fun SidebarContent(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+            item { Spacer(modifier = Modifier.height(geometry.spacing16)) }
         }
 
         // ── Footer ─────────────────────────────────────────────────────────
@@ -243,19 +251,26 @@ internal fun SidebarContent(
 
 @Composable
 private fun SidebarHeader() {
+    val geometry = RemodexTheme.geometry
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+            .padding(
+                start = geometry.sidebarOuterHorizontalPadding,
+                end = geometry.sidebarOuterHorizontalPadding,
+                top = geometry.spacing12,
+                bottom = geometry.spacing8,
+            ),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
     ) {
         // App logo 26×26 with rounded corners
         Surface(
             modifier = Modifier.size(26.dp),
-            shape = RoundedCornerShape(6.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shape = RoundedCornerShape(RemodexTheme.geometry.cornerTiny),
+            color = RemodexTheme.colors.selectedRowFill,
         ) {
             Image(
                 painter = painterResource(id = R.mipmap.ic_launcher_foreground),
@@ -271,7 +286,7 @@ private fun SidebarHeader() {
                 fontSize = 17.sp,
                 letterSpacing = 0.sp,
             ),
-            color = MaterialTheme.colorScheme.onBackground,
+            color = RemodexTheme.colors.textPrimary,
         )
     }
 }
@@ -286,71 +301,25 @@ private fun SidebarSearchField(
     onFocusChange: (Boolean) -> Unit,
     onCancel: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            .padding(
+                start = geometry.sidebarOuterHorizontalPadding,
+                end = geometry.sidebarOuterHorizontalPadding,
+                bottom = geometry.spacing8,
+            ),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
     ) {
-        // Search pill
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(15.dp),
-            )
-
-            Box(modifier = Modifier.weight(1f)) {
-                if (text.isEmpty()) {
-                    Text(
-                        text = "Search",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                BasicTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 15.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { onFocusChange(it.isFocused) },
-                )
-            }
-
-            AnimatedVisibility(
-                visible = text.isNotEmpty(),
-                enter = fadeIn() + expandHorizontally(),
-                exit = fadeOut() + shrinkHorizontally(),
-            ) {
-                IconButton(
-                    onClick = { onTextChange("") },
-                    modifier = Modifier.size(18.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp),
-                    )
-                }
-            }
-        }
+        RemodexSearchField(
+            text = text,
+            onTextChange = onTextChange,
+            modifier = Modifier.weight(1f),
+            onFocusChange = onFocusChange,
+        )
 
         // Cancel button (visible when focused)
         AnimatedVisibility(
@@ -358,14 +327,15 @@ private fun SidebarSearchField(
             enter = fadeIn() + expandHorizontally(),
             exit = fadeOut() + shrinkHorizontally(),
         ) {
-            TextButton(
+            RemodexButton(
                 onClick = onCancel,
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                style = RemodexButtonStyle.Ghost,
+                contentPadding = PaddingValues(horizontal = geometry.spacing4, vertical = 0.dp),
             ) {
                 Text(
                     text = "Cancel",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = RemodexTheme.colors.accentBlue,
                 )
             }
         }
@@ -376,34 +346,33 @@ private fun SidebarSearchField(
 
 @Composable
 private fun SidebarNewChatButton(onCreate: () -> Unit) {
-    Surface(
+    val geometry = RemodexTheme.geometry
+
+    RemodexSelectionRow(
+        selected = false,
         onClick = onCreate,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = Color.Transparent,
+            .padding(horizontal = geometry.spacing4),
+        paddingValues = PaddingValues(
+            horizontal = geometry.sidebarRowHorizontalPadding,
+            vertical = geometry.spacing10,
+        ),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(20.dp),
-            )
-            Text(
-                text = "New Chat",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 15.sp,
-                ),
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-        }
+        Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = RemodexTheme.colors.textPrimary,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            text = "New Chat",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+            ),
+            color = RemodexTheme.colors.textPrimary,
+        )
     }
 }
 
@@ -416,6 +385,8 @@ private fun SidebarProjectHeader(
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     // Display only the last path component (like remodex)
     val displayName = projectName.trimEnd('/').substringAfterLast('/')
         .ifBlank { projectName }
@@ -424,21 +395,26 @@ private fun SidebarProjectHeader(
         onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = geometry.spacing4, vertical = geometry.spacing2),
         color = Color.Transparent,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(geometry.cornerTiny),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
+                .padding(
+                    start = geometry.sidebarRowHorizontalPadding,
+                    end = geometry.sidebarRowHorizontalPadding,
+                    top = geometry.spacing14,
+                    bottom = geometry.spacing6,
+                ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
         ) {
             Icon(
-                imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = if (expanded) "Collapse $displayName" else "Expand $displayName",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = RemodexTheme.colors.textSecondary,
                 modifier = Modifier.size(16.dp),
             )
             Text(
@@ -448,7 +424,7 @@ private fun SidebarProjectHeader(
                     fontSize = 11.sp,
                     letterSpacing = 0.5.sp,
                 ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = RemodexTheme.colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -459,7 +435,7 @@ private fun SidebarProjectHeader(
                     fontWeight = FontWeight.Medium,
                     fontSize = 11.sp,
                 ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = RemodexTheme.colors.textSecondary,
             )
         }
     }
@@ -473,61 +449,48 @@ private fun SidebarThreadRow(
     isSelected: Boolean,
     onOpenThread: (String) -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
     val runDotColor = when (thread.runState) {
-        ThreadRunBadgeUiState.RUNNING -> Color(0xFF0A84FF) // iOS blue
-        ThreadRunBadgeUiState.READY   -> Color(0xFF30D158) // iOS green
-        ThreadRunBadgeUiState.FAILED  -> Color(0xFFFF453A) // iOS red
-        null -> MaterialTheme.colorScheme.outlineVariant
+        ThreadRunBadgeUiState.RUNNING -> RemodexTheme.colors.accentBlue
+        ThreadRunBadgeUiState.READY   -> RemodexTheme.colors.accentGreen
+        ThreadRunBadgeUiState.FAILED  -> RemodexTheme.colors.errorRed
+        null -> RemodexTheme.colors.textTertiary
     }
 
-    Surface(
+    RemodexSelectionRow(
+        selected = isSelected,
         onClick = { onOpenThread(thread.id) },
         modifier = Modifier.fillMaxWidth(),
-        color = if (isSelected)
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-        else
-            Color.Transparent,
-        shape = RoundedCornerShape(8.dp),
+        paddingValues = PaddingValues(
+            horizontal = geometry.sidebarOuterHorizontalPadding,
+            vertical = geometry.spacing6,
+        ),
     ) {
-        Row(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Run-state dot (10×10)
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(runDotColor),
-            )
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(runDotColor),
+        )
 
-            // Thread title
+        Text(
+            text = thread.title,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+            ),
+            color = if (isSelected) RemodexTheme.colors.accentBlue else RemodexTheme.colors.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+
+        thread.updatedLabel?.let {
             Text(
-                text = thread.title,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 15.sp,
-                ),
-                color = if (isSelected)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                text = it,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                color = RemodexTheme.colors.textSecondary,
             )
-
-            // Timestamp (caption2 / 11sp)
-            thread.updatedLabel?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
     }
 }
@@ -540,35 +503,35 @@ private fun SidebarFooter(
     macName: String?,
     onOpenSettings: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
     val isConnected = connection.status == ConnectionStatus.CONNECTED
     val connectionLabel = if (isConnected) "Connected to Mac" else "Saved Mac"
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
+        color = RemodexTheme.colors.secondarySurface.copy(alpha = 0.64f),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(
+                    horizontal = geometry.sidebarOuterHorizontalPadding,
+                    vertical = geometry.spacing12,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             // Settings gear (circular, glass-like)
-            Surface(
+            RemodexIconButton(
                 onClick = onOpenSettings,
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f),
-                modifier = Modifier.size(36.dp),
+                contentDescription = "Settings",
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = RemodexTheme.colors.textPrimary,
+                    modifier = Modifier.size(RemodexTheme.geometry.iconSize),
+                )
             }
 
             // Mac connection status (right-aligned, monospaced)
@@ -581,21 +544,21 @@ private fun SidebarFooter(
                     Text(
                         text = macName,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = RemodexMonoFontFamily,
                             fontWeight = FontWeight.Medium,
                             fontSize = 11.sp,
                         ),
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = RemodexTheme.colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = connectionLabel,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = RemodexMonoFontFamily,
                             fontSize = 10.sp,
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = RemodexTheme.colors.textSecondary,
                         maxLines = 1,
                     )
                 }

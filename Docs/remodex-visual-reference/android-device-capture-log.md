@@ -22,9 +22,18 @@ This file records the verified Android-side screenshots gathered during the live
 | `android-device-captures/recovery--repair-pairing-required--androdex.png` | Pairing recovery requiring repair | Real stale-trust recovery surface observed before resetting host pairing. |
 | `android-device-captures/thread--streaming--androdex.png` | Active thread shell and composer | Shows `Conversation`, git pill state, and `Stop` / `Queue` controls during an in-flight turn. |
 
+## Phase 1 Refresh Captures
+
+| Android artifact | What it shows | Notes |
+| --- | --- | --- |
+| `android-device-captures/phase1/phase1-pairing-refresh.png` | Pairing / saved-reconnect shell after the semantic token pass | Captured from a cold app launch while the saved reconnect handshake was still in progress, so the refreshed pairing hero, buttons, status capsule, and recovery cards are all visible together. |
+| `android-device-captures/phase1/phase1-home-refresh.png` | Connected home shell after the semantic token pass | Captured after the reconnect settled, showing the refreshed landing hero, status capsule, project card, and recent-thread styling on the live device. |
+| `android-device-captures/phase1/phase1-sidebar-open-refresh.png` | Sidebar open state after the semantic token pass | Captured from the refreshed build with the drawer open so the updated header, search shell, grouped rows, and footer chrome are anchored to the same phase 1 token and primitive pass. |
+
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
+- The Phase 1 refresh pass also added `android-device-captures/phase1/phase1-pairing-refresh.xml`, `android-device-captures/phase1/phase1-home-refresh.xml`, and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
 

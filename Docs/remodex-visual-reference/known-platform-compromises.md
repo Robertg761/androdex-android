@@ -40,6 +40,8 @@ Closest acceptable compromise:
 
 This is why copying the current Geist-based theme is not enough.
 
+Phase 1 note: the Android design-system pass now uses `SansSerif` plus `Monospace` in `Type.kt` so the app tracks Remodex density and hierarchy more closely than the earlier Geist-first setup. This keeps the compromise explicit until a closer licensed/system-available family is proven on Android.
+
 ## 4. SwiftUI Navigation Bars And Toolbar Items
 
 Remodex relies on:

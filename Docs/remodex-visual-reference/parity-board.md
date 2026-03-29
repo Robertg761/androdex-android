@@ -45,7 +45,16 @@ The March 29, 2026 real-device pass gives us verified Android-side anchors for t
 - Thread/composer shell: `android-device-captures/thread--streaming--androdex.png`
 - Settings: `android-device-captures/settings--root--androdex.png`
 
+Phase 1 design-system refresh anchors:
+
+- Pairing reconnect shell after semantic token + primitive pass: `android-device-captures/phase1/phase1-pairing-refresh.png`
+- Home after semantic token + primitive pass: `android-device-captures/phase1/phase1-home-refresh.png`
+- Sidebar open/search/grouped shell after semantic token + primitive pass: `android-device-captures/phase1/phase1-sidebar-open-refresh.png`
+- Runtime UI dumps for the same pass: `android-device-captures/phase1/phase1-pairing-refresh.xml`, `android-device-captures/phase1/phase1-home-refresh.xml`, `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`
+
 The remaining Android capture gaps are now limited to runtime-driven recovery flows that cannot be derived from static source alone: notification-open success/fallback and the missing-thread prompt family.
+
+Phase 1 is complete for the shared design-system surfaces. The refreshed sidebar open capture now anchors the token/primitive adoption for the drawer header, search shell, grouped rows, and footer chrome, while full drawer-shell behavior and density convergence still belong to Phase 5. Runtime alert and missing-thread dialog families remain tracked under Phase 11 and the recovery backlog.
 
 ## Highest-Risk Visual Mismatches To Fix First
 

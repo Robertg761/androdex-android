@@ -216,3 +216,13 @@ These are the few concrete motion values visible in source:
 - `Geist` is not the canonical Remodex default. The canonical baseline is the iOS system font metrics in `AppFont`.
 - The Remodex look is driven more by semantic fills, glass, and compact geometry than by saturated brand color.
 - The current Android `MaterialTheme` layer is too generic to express these values cleanly. Phase 1 should promote these into explicit Remodex-style tokens rather than continue using stock Material names.
+
+## Phase 1 Android Mapping
+
+Last updated: `2026-03-29`
+
+- `android/app/src/main/java/io/androdex/android/ui/theme/Theme.kt` now exposes semantic Android-side tokens for app background, grouped background, raised/secondary surfaces, selected row fill, separator and hairline, text tiers, semantic accents, input/search fills, sheet tinting, overlay dimming, and status dots.
+- `android/app/src/main/java/io/androdex/android/ui/theme/Theme.kt` also centralizes recurring geometry for the Remodex spacing scale, radii, page padding, sidebar rhythm, chip height, button height, icon button sizing, sheet handle size, and max content width.
+- `android/app/src/main/java/io/androdex/android/ui/theme/Type.kt` now prioritizes Remodex sizing and density over the prior Geist-first setup. The Android compromise is `SansSerif` plus `Monospace`, sized to the extracted Remodex `AppFont` scale.
+- Shared primitives now live in `android/app/src/main/java/io/androdex/android/ui/shared/RemodexPrimitives.kt` so sidebar rows, search shells, grouped surfaces, compact headers, pills, buttons, inputs, dividers, and alert shells can opt into the same token source instead of re-styling Material defaults independently.
+- The phase 1 refresh surfaces now consume those shared geometry tokens directly in home, pairing, sidebar, shared-status, and overlay code instead of carrying duplicated per-screen padding and spacing literals.

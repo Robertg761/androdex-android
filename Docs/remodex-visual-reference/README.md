@@ -63,5 +63,8 @@ As of March 29, 2026 we now have verified Androdex runtime captures for:
 - QR scanner
 - repair-pairing-required recovery
 - active thread shell with composer controls visible
+- Phase 1 pairing reconnect shell refresh
+- Phase 1 connected home shell refresh
+- Phase 1 sidebar open shell refresh
 
 Prefer the route-based `*--androdex.png` files when a canonical Android counterpart exists. Older `androdex-*.png` files are retained as exploratory scratch captures for states that do not yet have a route-based filename.

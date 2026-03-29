@@ -3,21 +3,20 @@ package io.androdex.android.ui.shared
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import io.androdex.android.ui.theme.RemodexTheme
 
 @Composable
 internal fun LandingBackdrop(modifier: Modifier = Modifier) {
-    val background = MaterialTheme.colorScheme.background
-    val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-    val secondaryGlow = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+    val colors = RemodexTheme.colors
+    val background = colors.appBackground
+    val primaryGlow = colors.accentBlue.copy(alpha = 0.10f)
+    val secondaryGlow = colors.accentGreen.copy(alpha = 0.06f)
 
     Box(
         modifier = modifier
@@ -31,16 +30,16 @@ internal fun LandingBackdrop(modifier: Modifier = Modifier) {
                     Brush.verticalGradient(
                         colors = listOf(
                             background,
-                            background.copy(alpha = 0.96f),
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+                            background.copy(alpha = 0.98f),
+                            colors.groupedBackground.copy(alpha = 0.92f),
                         ),
                     ),
                 ),
         )
         Box(
             modifier = Modifier
-                .offset(x = (-72).dp, y = (-24).dp)
-                .size(240.dp)
+                .offset(x = (-84).dp, y = (-54).dp)
+                .size(220.dp)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
@@ -50,8 +49,8 @@ internal fun LandingBackdrop(modifier: Modifier = Modifier) {
         )
         Box(
             modifier = Modifier
-                .offset(x = 220.dp, y = 120.dp)
-                .size(280.dp)
+                .offset(x = 240.dp, y = 160.dp)
+                .size(240.dp)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
@@ -67,13 +66,9 @@ internal fun LandingSectionSurface(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Surface(
+    RemodexGroupedSurface(
         modifier = modifier,
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        tonalElevation = 1.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(content = content)
-    }
+        cornerRadius = RemodexTheme.geometry.cornerComposer,
+        content = content,
+    )
 }

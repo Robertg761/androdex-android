@@ -10,14 +10,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -34,9 +28,16 @@ import io.androdex.android.R
 import io.androdex.android.ui.shared.HostAccountCard
 import io.androdex.android.ui.shared.LandingBackdrop
 import io.androdex.android.ui.shared.LandingSectionSurface
+import io.androdex.android.ui.shared.RemodexButton
+import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.RemodexDivider
+import io.androdex.android.ui.shared.RemodexInputField
+import io.androdex.android.ui.shared.RemodexPill
+import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.PairingScreenUiState
+import io.androdex.android.ui.theme.RemodexTheme
 
 @Composable
 internal fun PairingScreen(
@@ -46,6 +47,8 @@ internal fun PairingScreen(
     onConnect: () -> Unit,
     onReconnectSaved: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     Scaffold(containerColor = Color.Transparent) { paddingValues ->
         Box(
             modifier = Modifier
@@ -58,8 +61,11 @@ internal fun PairingScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(
+                        horizontal = geometry.pageHorizontalPadding,
+                        vertical = geometry.pageVerticalPadding,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
             ) {
                 PairingHeroCard(
                     state = state,
@@ -98,19 +104,24 @@ private fun PairingHeroCard(
     onScanQr: () -> Unit,
     onReconnectSaved: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier.padding(
+                horizontal = geometry.pageHorizontalPadding,
+                vertical = geometry.pageVerticalPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing18),
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing14),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
                     modifier = Modifier.size(76.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
+                    color = RemodexTheme.colors.selectedRowFill,
                 ) {
                     Image(
                         painter = painterResource(id = R.mipmap.ic_launcher_foreground),
@@ -118,80 +129,76 @@ private fun PairingHeroCard(
                         modifier = Modifier.size(76.dp),
                     )
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing6)) {
                     Text(
                         text = "Androdex",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        color = RemodexTheme.colors.textPrimary,
                     )
                     Text(
                         text = "Pair once, then keep Codex running on your host while Android stays the remote control.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = RemodexTheme.colors.textSecondary,
                     )
                 }
             }
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                    color = RemodexTheme.colors.accentBlue.copy(alpha = 0.14f),
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Lock,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        tint = RemodexTheme.colors.accentBlue,
                         modifier = Modifier
-                            .padding(9.dp)
-                            .size(16.dp),
+                            .padding(geometry.spacing8)
+                            .size(geometry.spacing16),
                     )
                 }
                 Text(
                     text = "End-to-end encrypted pairing with relay-compatible reconnects",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = RemodexTheme.colors.textSecondary,
                 )
             }
 
             if (state.isBusy) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                    color = RemodexTheme.colors.accentBlue,
+                    trackColor = RemodexTheme.colors.selectedRowFill,
                 )
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
             ) {
-                Button(
+                RemodexButton(
                     onClick = onScanQr,
                     enabled = !state.isBusy,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(16.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Default.QrCode2,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(geometry.iconSize),
                     )
                     Text(
                         text = "Scan QR",
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = geometry.spacing8),
                     )
                 }
-                Button(
+                RemodexButton(
                     onClick = onReconnectSaved,
                     enabled = state.hasSavedPairing && state.reconnectEnabled,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    ),
+                    style = RemodexButtonStyle.Secondary,
                 ) {
                     Text(
                         text = if (state.hasSavedPairing) state.reconnectButtonLabel else "Saved reconnect unavailable",
@@ -202,7 +209,7 @@ private fun PairingHeroCard(
 
             if (state.hasSavedPairing || state.defaultRelayUrl != null) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (state.hasSavedPairing) {
@@ -223,33 +230,35 @@ private fun RecoveryCard(
     state: PairingScreenUiState,
     onReconnectSaved: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
         ) {
             Text(
                 text = state.recoveryTitle,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = RemodexTheme.colors.textPrimary,
             )
             Text(
                 text = state.recoveryMessage,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = RemodexTheme.colors.textSecondary,
             )
             state.compatibilityMessage?.let { message ->
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                RemodexDivider()
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = RemodexTheme.colors.accentBlue,
                 )
             }
             if (state.hasSavedPairing) {
-                Button(
+                RemodexButton(
                     onClick = onReconnectSaved,
                     enabled = state.reconnectEnabled,
-                    shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(state.reconnectButtonLabel)
                 }
@@ -264,65 +273,58 @@ private fun ManualPairingCard(
     onPairingInputChanged: (String) -> Unit,
     onConnect: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
+
     LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    color = RemodexTheme.colors.selectedRowFill,
                 ) {
                     Icon(
                         imageVector = Icons.Default.Link,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
+                        tint = RemodexTheme.colors.textPrimary,
                         modifier = Modifier
-                            .padding(9.dp)
-                            .size(16.dp),
+                            .padding(geometry.spacing8)
+                            .size(geometry.spacing16),
                     )
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
                     Text(
                         text = "Manual pairing payload",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = RemodexTheme.colors.textPrimary,
                     )
                     Text(
                         text = "Paste a payload only if you are not scanning a QR code.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = RemodexTheme.colors.textSecondary,
                     )
                 }
             }
 
-            OutlinedTextField(
+            RemodexInputField(
                 value = state.pairingInput,
                 onValueChange = onPairingInputChanged,
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 4,
-                label = { Text("Pairing payload") },
-                placeholder = { Text("{\"v\":3,...}") },
-                shape = RoundedCornerShape(16.dp),
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                    focusedLabelColor = MaterialTheme.colorScheme.primary,
-                    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                ),
+                label = "Pairing payload",
+                placeholder = "{\"v\":3,...}",
+                mono = true,
             )
 
-            Button(
+            RemodexButton(
                 onClick = onConnect,
                 enabled = state.pairingInput.isNotBlank() && !state.isBusy,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
             ) {
                 Text("Connect with payload")
             }
@@ -332,15 +334,5 @@ private fun ManualPairingCard(
 
 @Composable
 private fun StatusChip(label: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-        )
-    }
+    RemodexPill(label = label, style = RemodexPillStyle.Neutral)
 }

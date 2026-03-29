@@ -6,20 +6,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.MissingNotificationThreadPrompt
+import io.androdex.android.ui.theme.RemodexTheme
 
 @Composable
 internal fun ApprovalDialog(
@@ -27,41 +25,51 @@ internal fun ApprovalDialog(
     onApprove: () -> Unit,
     onDecline: () -> Unit,
 ) {
+    val geometry = RemodexTheme.geometry
     val activeRequest = request ?: return
 
-    AlertDialog(
+    RemodexAlertDialog(
         onDismissRequest = { },
+        title = "Approval Required",
         confirmButton = {
-            Button(onClick = onApprove) {
+            RemodexButton(onClick = onApprove) {
                 Text("Approve")
             }
         },
         dismissButton = {
-            OutlinedButton(onClick = onDecline) {
+            RemodexButton(
+                onClick = onDecline,
+                style = RemodexButtonStyle.Secondary,
+            ) {
                 Text("Decline")
             }
         },
         icon = {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp),
-            )
-        },
-        title = {
-            Text("Approval Required", style = MaterialTheme.typography.titleMedium)
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                modifier = Modifier.size(36.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = RemodexTheme.colors.selectedRowFill,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = RemodexTheme.colors.accentBlue,
+                        modifier = Modifier
+                            .padding(geometry.spacing8)
+                            .size(geometry.iconSize),
+                    )
+                }
+            },
+            content = {
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 Text(
                     text = activeRequest.method,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = RemodexTheme.colors.accentBlue,
                 )
                 activeRequest.command?.takeIf { it.isNotBlank() }?.let { command ->
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        color = RemodexTheme.colors.inputBackground,
                         shape = MaterialTheme.shapes.small,
                     ) {
                         Text(
@@ -69,16 +77,20 @@ internal fun ApprovalDialog(
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = FontFamily.Monospace,
                             ),
-                            modifier = Modifier.padding(12.dp),
+                            color = RemodexTheme.colors.textPrimary,
+                            modifier = Modifier.padding(geometry.spacing12),
                         )
                     }
                 }
                 activeRequest.reason?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = RemodexTheme.colors.textSecondary,
+                    )
                 }
             }
         },
-        shape = MaterialTheme.shapes.large,
     )
 }
 
@@ -87,20 +99,24 @@ internal fun ErrorMessageDialog(
     message: String,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    RemodexAlertDialog(
         onDismissRequest = onDismiss,
+        title = "Something went wrong",
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            RemodexButton(
+                onClick = onDismiss,
+                style = RemodexButtonStyle.Secondary,
+            ) {
                 Text("OK")
             }
         },
-        title = {
-            Text("Something went wrong", style = MaterialTheme.typography.titleMedium)
+        content = {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = RemodexTheme.colors.textSecondary,
+            )
         },
-        text = {
-            Text(message, style = MaterialTheme.typography.bodyMedium)
-        },
-        shape = MaterialTheme.shapes.large,
     )
 }
 
@@ -109,22 +125,23 @@ internal fun MissingNotificationThreadDialog(
     prompt: MissingNotificationThreadPrompt,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    RemodexAlertDialog(
         onDismissRequest = onDismiss,
+        title = "Conversation unavailable",
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            RemodexButton(
+                onClick = onDismiss,
+                style = RemodexButtonStyle.Secondary,
+            ) {
                 Text("OK")
             }
         },
-        title = {
-            Text("Conversation unavailable", style = MaterialTheme.typography.titleMedium)
-        },
-        text = {
+        content = {
             Text(
                 "The notification opened thread ${prompt.threadId}, but that thread is no longer available on this host. Androdex kept your current conversation open when possible.",
                 style = MaterialTheme.typography.bodyMedium,
+                color = RemodexTheme.colors.textSecondary,
             )
         },
-        shape = MaterialTheme.shapes.large,
     )
 }
