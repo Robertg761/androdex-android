@@ -47,6 +47,7 @@ import io.androdex.android.ui.state.PairingScreenUiState
 import io.androdex.android.ui.state.toHomeScreenUiState
 import io.androdex.android.ui.state.toAppUiState
 import io.androdex.android.ui.turn.ForkThreadSheet
+import io.androdex.android.ui.turn.GitSheet
 import io.androdex.android.ui.turn.ThreadRuntimeSheet
 import io.androdex.android.ui.turn.ThreadTimelineScreen
 import io.androdex.android.ui.turn.TurnAttachmentPipeline
@@ -58,6 +59,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
     var settingsOpen by remember { mutableStateOf(false) }
     var threadRuntimeOpen by remember { mutableStateOf(false) }
     var forkThreadOpen by remember { mutableStateOf(false) }
+    var gitSheetOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val activity = LocalActivity.current
     val scope = rememberCoroutineScope()
@@ -97,6 +99,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
         if (destination !is AndrodexDestinationUiState.Thread) {
             threadRuntimeOpen = false
             forkThreadOpen = false
+            gitSheetOpen = false
         }
     }
 
@@ -324,6 +327,19 @@ fun AndrodexApp(viewModel: MainViewModel) {
                         },
                     )
                 }
+                if (gitSheetOpen) {
+                    GitSheet(
+                        state = destination.state.git,
+                        onDismiss = { gitSheetOpen = false },
+                        onRefreshGit = viewModel::refreshSelectedThreadGitState,
+                        onLoadGitDiff = viewModel::refreshSelectedThreadGitDiff,
+                        onOpenGitCommit = viewModel::openGitCommitDialog,
+                        onPushGit = viewModel::pushGitChanges,
+                        onRequestGitPull = viewModel::requestGitPull,
+                        onOpenGitBranchDialog = viewModel::openGitBranchDialog,
+                        onOpenGitWorktreeDialog = viewModel::openGitWorktreeDialog,
+                    )
+                }
                 ThreadTimelineScreen(
                     state = destination.state,
                     onBack = viewModel::closeThread,
@@ -358,6 +374,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                     },
                     onRemoveComposerAttachment = viewModel::removeComposerAttachment,
                     onOpenRuntime = { threadRuntimeOpen = true },
+                    onOpenGitSheet = { gitSheetOpen = true },
                     onOpenFork = {
                         if (destination.state.fork.isEnabled) forkThreadOpen = true
                     },
@@ -372,20 +389,13 @@ fun AndrodexApp(viewModel: MainViewModel) {
                     onRemoveQueuedDraft = viewModel::removeQueuedDraft,
                     onToolInputAnswerChanged = viewModel::updateToolInputAnswer,
                     onSubmitToolInput = viewModel::submitToolInput,
-                    onRefreshGit = viewModel::refreshSelectedThreadGitState,
-                    onLoadGitDiff = viewModel::refreshSelectedThreadGitDiff,
-                    onOpenGitCommit = viewModel::openGitCommitDialog,
                     onUpdateGitCommitMessage = viewModel::updateGitCommitMessage,
                     onDismissGitCommit = viewModel::dismissGitCommitDialog,
                     onSubmitGitCommit = viewModel::submitGitCommit,
-                    onPushGit = viewModel::pushGitChanges,
-                    onRequestGitPull = viewModel::requestGitPull,
-                    onOpenGitBranchDialog = viewModel::openGitBranchDialog,
                     onUpdateGitBranchName = viewModel::updateGitBranchName,
                     onDismissGitBranchDialog = viewModel::dismissGitBranchDialog,
                     onRequestCreateGitBranch = viewModel::requestCreateGitBranch,
                     onRequestSwitchGitBranch = viewModel::requestSwitchGitBranch,
-                    onOpenGitWorktreeDialog = viewModel::openGitWorktreeDialog,
                     onUpdateGitWorktreeBranchName = viewModel::updateGitWorktreeBranchName,
                     onUpdateGitWorktreeBaseBranch = viewModel::updateGitWorktreeBaseBranch,
                     onUpdateGitWorktreeTransferMode = viewModel::updateGitWorktreeTransferMode,

@@ -1,5 +1,7 @@
 package io.androdex.android.ui.state
 
+import io.androdex.android.GitActionKind
+import io.androdex.android.ThreadGitState
 import io.androdex.android.AndrodexUiState
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
@@ -13,6 +15,7 @@ import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.ImageAttachment
+import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
@@ -483,6 +486,41 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun threadRoute_gitAvailabilityMessage_explainsDisconnectedBusyAndRunningStates() {
+        val disconnectedRoute = gitThreadState(connectionStatus = ConnectionStatus.DISCONNECTED)
+            .toAppUiState(isSettingsVisible = false)
+            .destination as AndrodexDestinationUiState.Thread
+        assertEquals(
+            "Reconnect to the host to use Git actions.",
+            disconnectedRoute.state.git.availabilityMessage,
+        )
+
+        val busyRoute = gitThreadState(runningGitAction = GitActionKind.PUSH)
+            .toAppUiState(isSettingsVisible = false)
+            .destination as AndrodexDestinationUiState.Thread
+        assertEquals("Git action in progress.", busyRoute.state.git.availabilityMessage)
+
+        val runningRoute = gitThreadState(runningThread = true)
+            .toAppUiState(isSettingsVisible = false)
+            .destination as AndrodexDestinationUiState.Thread
+        assertEquals(
+            "Git actions pause while this thread is running.",
+            runningRoute.state.git.availabilityMessage,
+        )
+    }
+
+    @Test
+    fun threadRoute_gitDiffStaysUnloadedUntilRequested() {
+        val route = gitThreadState()
+            .toAppUiState(isSettingsVisible = false)
+            .destination as AndrodexDestinationUiState.Thread
+
+        assertTrue(route.state.git.hasWorkingDirectory)
+        assertEquals(null, route.state.git.diffPatch)
+        assertEquals("main", route.state.git.status?.currentBranch)
+    }
+
+    @Test
     fun threadRoute_disablesMaintenanceActionsWhenHostSupportIsMissing() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,
@@ -561,5 +599,47 @@ class AndrodexFeatureStateTest {
         assertEquals("release", prompt.questions.single().answer)
         assertTrue(prompt.questions.single().options.any { it.label == "release" && it.isSelected })
         assertTrue(prompt.questions.single().allowsCustomAnswer)
+    }
+
+    private fun gitThreadState(
+        connectionStatus: ConnectionStatus = ConnectionStatus.CONNECTED,
+        runningThread: Boolean = false,
+        runningGitAction: GitActionKind? = null,
+    ): AndrodexUiState {
+        return AndrodexUiState(
+            connectionStatus = connectionStatus,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "C:\\Projects\\Androdex",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                )
+            ),
+            runningThreadIds = if (runningThread) setOf("thread-9") else emptySet(),
+            gitStateByThread = mapOf(
+                "thread-9" to ThreadGitState(
+                    status = GitRepoSyncResult(
+                        repoRoot = "C:\\Projects\\Androdex",
+                        currentBranch = "main",
+                        trackingBranch = "origin/main",
+                        isDirty = true,
+                        aheadCount = 1,
+                        behindCount = 0,
+                        localOnlyCommitCount = 1,
+                        state = "dirty",
+                        canPush = true,
+                        isPublishedToRemote = true,
+                        files = emptyList(),
+                        repoDiffTotals = null,
+                    )
+                )
+            ),
+            runningGitActionByThread = runningGitAction?.let { mapOf("thread-9" to it) } ?: emptyMap(),
+        )
     }
 }

@@ -81,7 +81,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.androdex.android.applyingSubagentsSelection
 import io.androdex.android.ComposerSlashCommand
-import io.androdex.android.GitActionKind
 import io.androdex.android.GitAlertAction
 import io.androdex.android.GitAlertButton
 import io.androdex.android.GitAlertState
@@ -104,7 +103,6 @@ import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.BusyIndicator
-import io.androdex.android.ui.state.ThreadGitUiState
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
@@ -218,6 +216,7 @@ internal fun ThreadTimelineScreen(
     onAddGallery: () -> Unit,
     onRemoveComposerAttachment: (String) -> Unit,
     onOpenRuntime: () -> Unit,
+    onOpenGitSheet: () -> Unit,
     onOpenFork: () -> Unit,
     onCompactThread: () -> Unit,
     onRollbackThread: () -> Unit,
@@ -230,20 +229,13 @@ internal fun ThreadTimelineScreen(
     onRemoveQueuedDraft: (String) -> Unit,
     onToolInputAnswerChanged: (String, String, String) -> Unit,
     onSubmitToolInput: (String) -> Unit,
-    onRefreshGit: () -> Unit,
-    onLoadGitDiff: () -> Unit,
-    onOpenGitCommit: () -> Unit,
     onUpdateGitCommitMessage: (String) -> Unit,
     onDismissGitCommit: () -> Unit,
     onSubmitGitCommit: () -> Unit,
-    onPushGit: () -> Unit,
-    onRequestGitPull: () -> Unit,
-    onOpenGitBranchDialog: () -> Unit,
     onUpdateGitBranchName: (String) -> Unit,
     onDismissGitBranchDialog: () -> Unit,
     onRequestCreateGitBranch: () -> Unit,
     onRequestSwitchGitBranch: (String) -> Unit,
-    onOpenGitWorktreeDialog: () -> Unit,
     onUpdateGitWorktreeBranchName: (String) -> Unit,
     onUpdateGitWorktreeBaseBranch: (String) -> Unit,
     onUpdateGitWorktreeTransferMode: (GitWorktreeChangeTransferMode) -> Unit,
@@ -278,6 +270,7 @@ internal fun ThreadTimelineScreen(
     }
     val bubbleContexts = remember(state.messages) { buildBubbleContexts(state.messages) }
     val agentActivityText = remember(state.messages) { buildAgentActivityText(state.messages) }
+    val gitAffordance = remember(state.git) { buildGitAffordanceUiState(state.git) }
 
     Scaffold(
         topBar = {
@@ -312,7 +305,14 @@ internal fun ThreadTimelineScreen(
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
+                        gitAffordance?.let { affordance ->
+                            GitTopBarPill(
+                                state = affordance,
+                                onClick = onOpenGitSheet,
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -351,6 +351,15 @@ internal fun ThreadTimelineScreen(
                                     onOpenFork()
                                 },
                             )
+                            if (state.git.hasWorkingDirectory) {
+                                DropdownMenuItem(
+                                    text = { Text("Git") },
+                                    onClick = {
+                                        overflowMenuExpanded = false
+                                        onOpenGitSheet()
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Compact context") },
                                 enabled = state.compact.isEnabled,
@@ -450,17 +459,6 @@ internal fun ThreadTimelineScreen(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
             }
-            GitStatusCard(
-                threadId = state.threadId,
-                state = state.git,
-                onRefreshGit = onRefreshGit,
-                onLoadGitDiff = onLoadGitDiff,
-                onOpenGitCommit = onOpenGitCommit,
-                onPushGit = onPushGit,
-                onRequestGitPull = onRequestGitPull,
-                onOpenGitBranchDialog = onOpenGitBranchDialog,
-                onOpenGitWorktreeDialog = onOpenGitWorktreeDialog,
-            )
 
             Box(
                 modifier = Modifier
@@ -575,6 +573,42 @@ private fun ForkedThreadBanner(modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
+        }
+    }
+}
+
+@Composable
+private fun GitTopBarPill(
+    state: GitAffordanceUiState,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(999.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = state.primaryLabel,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            state.secondaryLabel?.let { secondary ->
+                Text(
+                    text = secondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -936,231 +970,6 @@ private fun ToolInputQuestionCard(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-    }
-}
-
-@Composable
-private fun GitStatusCard(
-    threadId: String,
-    state: ThreadGitUiState,
-    onRefreshGit: () -> Unit,
-    onLoadGitDiff: () -> Unit,
-    onOpenGitCommit: () -> Unit,
-    onPushGit: () -> Unit,
-    onRequestGitPull: () -> Unit,
-    onOpenGitBranchDialog: () -> Unit,
-    onOpenGitWorktreeDialog: () -> Unit,
-) {
-    var expanded by rememberSaveable(threadId) { mutableStateOf(true) }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { expanded = !expanded }
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = state.status?.currentBranch?.let { "Git • $it" } ?: "Git workflows",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = state.status?.repoRoot?.trim()?.substringAfterLast('\\')?.substringAfterLast('/')
-                            ?: state.availabilityMessage
-                            ?: "Host-local repository controls",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                if (state.isRefreshing || state.runningAction != null) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = if (expanded) "Collapse Git section" else "Expand Git section",
-                        modifier = Modifier.scale(scaleX = 1f, scaleY = if (expanded) 1f else -1f),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            AnimatedVisibility(visible = expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    state.status?.let { status ->
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            GitBadge(label = status.state.replace('_', ' '), emphasized = true)
-                            GitBadge(label = if (status.isDirty) "Dirty" else "Clean")
-                            if (status.aheadCount > 0) {
-                                GitBadge(label = "Ahead ${status.aheadCount}")
-                            }
-                            if (status.behindCount > 0) {
-                                GitBadge(label = "Behind ${status.behindCount}")
-                            }
-                            if (status.localOnlyCommitCount > 0) {
-                                GitBadge(label = "Local ${status.localOnlyCommitCount}")
-                            }
-                            status.trackingBranch?.takeIf { it.isNotBlank() }?.let { GitBadge(label = it) }
-                        }
-
-                        status.repoDiffTotals?.let { diffTotals ->
-                            Text(
-                                text = buildString {
-                                    append("+")
-                                    append(diffTotals.additions)
-                                    append(" / -")
-                                    append(diffTotals.deletions)
-                                    if (diffTotals.binaryFiles > 0) {
-                                        append(" / ")
-                                        append(diffTotals.binaryFiles)
-                                        append(" binary")
-                                    }
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-
-                        if (status.files.isNotEmpty()) {
-                            status.files.take(5).forEach { file ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    GitFileStatusPill(file.status)
-                                    Text(
-                                        text = file.path,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
-                        DiffView(diffText = patch)
-                    }
-
-                    state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedButton(onClick = onRefreshGit, enabled = state.canRunActions) {
-                            Text("Status")
-                        }
-                        OutlinedButton(onClick = onLoadGitDiff, enabled = state.canRunActions) {
-                            Text(if (state.diffPatch.isNullOrBlank()) "Load Diff" else "Refresh Diff")
-                        }
-                        OutlinedButton(
-                            onClick = onOpenGitCommit,
-                            enabled = state.canRunActions && state.status?.isDirty == true,
-                        ) {
-                            Text("Commit")
-                        }
-                        OutlinedButton(
-                            onClick = onPushGit,
-                            enabled = state.canRunActions && (state.status?.canPush == true),
-                        ) {
-                            Text("Push")
-                        }
-                        OutlinedButton(
-                            onClick = onRequestGitPull,
-                            enabled = state.canRunActions && state.status != null,
-                        ) {
-                            Text("Pull")
-                        }
-                        OutlinedButton(onClick = onOpenGitBranchDialog, enabled = state.canRunActions) {
-                            Text("Branches")
-                        }
-                        OutlinedButton(onClick = onOpenGitWorktreeDialog, enabled = state.canRunActions) {
-                            Text("Worktrees")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GitBadge(
-    label: String,
-    emphasized: Boolean = false,
-) {
-    Surface(
-        color = if (emphasized) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            text = label.replaceFirstChar { char ->
-                if (char.isLowerCase()) {
-                    char.titlecase()
-                } else {
-                    char.toString()
-                }
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
-}
-
-@Composable
-private fun GitFileStatusPill(status: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(
-            text = status.ifBlank { "?" },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-        )
     }
 }
 
@@ -1789,59 +1598,6 @@ private fun FileChangeBubble(message: ConversationMessage) {
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiffView(
-    diffText: String,
-    modifier: Modifier = Modifier,
-) {
-    val addedBg = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-    val removedBg = MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
-    val addedText = MaterialTheme.colorScheme.tertiary
-    val removedText = MaterialTheme.colorScheme.error
-    val hunkText = MaterialTheme.colorScheme.secondary
-    val contextText = MaterialTheme.colorScheme.onSurfaceVariant
-    val scrollState = rememberScrollState()
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        shape = RoundedCornerShape(0.dp),
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier
-                .horizontalScroll(scrollState)
-                .padding(vertical = 4.dp),
-        ) {
-            diffText.lines().forEach { line ->
-                val (bgColor, fgColor) = when {
-                    line.startsWith("+++") || line.startsWith("---") -> {
-                        Color.Transparent to MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    line.startsWith("+") -> addedBg to addedText
-                    line.startsWith("-") -> removedBg to removedText
-                    line.startsWith("@@") -> Color.Transparent to hunkText
-                    else -> Color.Transparent to contextText
-                }
-
-                Text(
-                    text = line.ifEmpty { " " },
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                    ),
-                    color = fgColor,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(bgColor)
-                        .padding(horizontal = 12.dp, vertical = 1.dp),
-                    softWrap = false,
-                )
             }
         }
     }

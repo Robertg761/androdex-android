@@ -9,13 +9,18 @@ const http = require("http");
 const path = require("path");
 const { spawn } = require("child_process");
 const {
+  clearStaleDaemonStartLock,
   clearDaemonControlState,
   getDaemonLogPath,
   readDaemonControlState,
+  releaseDaemonStartLock,
+  tryAcquireDaemonStartLock,
 } = require("./daemon-store");
 
 const CONTROL_HOST = "127.0.0.1";
 const DAEMON_START_TIMEOUT_MS = 8_000;
+const DAEMON_START_LOCK_STALE_MS = DAEMON_START_TIMEOUT_MS * 2;
+const DAEMON_START_LOCK_WAIT_MS = DAEMON_START_TIMEOUT_MS + 1_000;
 
 async function startBridge() {
   const response = await activateWorkspace(process.cwd());
@@ -94,38 +99,70 @@ async function ensureDaemonRunning() {
     }
   }
 
-  const daemonScriptPath = path.join(__dirname, "..", "bin", "androdex.js");
-  const logPath = getDaemonLogPath();
-  const stdoutFd = fs.openSync(logPath, "a");
-  const stderrFd = fs.openSync(logPath, "a");
-  const child = spawn(
-    process.execPath,
-    [daemonScriptPath, "__daemon-run"],
-    {
-      detached: true,
-      stdio: ["ignore", stdoutFd, stderrFd],
-      windowsHide: true,
-    }
-  );
-  child.unref();
-  fs.closeSync(stdoutFd);
-  fs.closeSync(stderrFd);
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < DAEMON_START_TIMEOUT_MS) {
+  const startLock = await acquireDaemonStartLock();
+  try {
     const controlState = readDaemonControlState();
     if (controlState) {
       try {
         await requestDaemon("GET", "/status");
         return;
       } catch {
-        // Keep polling until the daemon finishes booting or times out.
+        clearDaemonControlState();
       }
     }
-    await sleep(200);
+
+    const daemonScriptPath = path.join(__dirname, "..", "bin", "androdex.js");
+    const logPath = getDaemonLogPath();
+    const stdoutFd = fs.openSync(logPath, "a");
+    const stderrFd = fs.openSync(logPath, "a");
+    try {
+      const child = spawn(
+        process.execPath,
+        [daemonScriptPath, "__daemon-run"],
+        {
+          detached: true,
+          stdio: ["ignore", stdoutFd, stderrFd],
+          windowsHide: true,
+        }
+      );
+      child.unref();
+    } finally {
+      fs.closeSync(stdoutFd);
+      fs.closeSync(stderrFd);
+    }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < DAEMON_START_TIMEOUT_MS) {
+      const nextControlState = readDaemonControlState();
+      if (nextControlState) {
+        try {
+          await requestDaemon("GET", "/status");
+          return;
+        } catch {
+          // Keep polling until the daemon finishes booting or times out.
+        }
+      }
+      await sleep(200);
+    }
+  } finally {
+    releaseDaemonStartLock(startLock);
   }
 
   throw new Error("Timed out while starting the Androdex daemon.");
+}
+
+async function acquireDaemonStartLock() {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < DAEMON_START_LOCK_WAIT_MS) {
+    const lockHandle = tryAcquireDaemonStartLock();
+    if (lockHandle) {
+      return lockHandle;
+    }
+    clearStaleDaemonStartLock({ staleAfterMs: DAEMON_START_LOCK_STALE_MS });
+    await sleep(125);
+  }
+
+  throw new Error("Timed out while waiting for the Androdex daemon start lock.");
 }
 
 function requestDaemon(method, requestPath, body = null) {
