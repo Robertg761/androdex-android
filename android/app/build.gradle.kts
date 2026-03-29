@@ -38,6 +38,39 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.inputStream().use(keystoreProperties::load)
 }
 
+fun resolveBuildValue(
+    gradlePropertyName: String,
+    environmentVariableName: String = gradlePropertyName,
+    keystorePropertyName: String? = null
+): String? {
+    return providers.gradleProperty(gradlePropertyName).orNull
+        ?: providers.environmentVariable(environmentVariableName).orNull
+        ?: keystorePropertyName?.let(keystoreProperties::getProperty)
+}
+
+val releaseKeystorePath = resolveBuildValue(
+    gradlePropertyName = "ANDRODEX_ANDROID_KEYSTORE_PATH",
+    keystorePropertyName = "storeFile"
+)
+val releaseKeystorePassword = resolveBuildValue(
+    gradlePropertyName = "ANDRODEX_ANDROID_KEYSTORE_PASSWORD",
+    keystorePropertyName = "storePassword"
+)
+val releaseKeyAlias = resolveBuildValue(
+    gradlePropertyName = "ANDRODEX_ANDROID_KEY_ALIAS",
+    keystorePropertyName = "keyAlias"
+)
+val releaseKeyPassword = resolveBuildValue(
+    gradlePropertyName = "ANDRODEX_ANDROID_KEY_PASSWORD",
+    keystorePropertyName = "keyPassword"
+)
+val hasCompleteReleaseSigningConfig = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "io.androdex.android"
     compileSdk = 36
@@ -81,12 +114,12 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (hasCompleteReleaseSigningConfig) {
             create("release") {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = rootProject.file(requireNotNull(releaseKeystorePath))
+                storePassword = requireNotNull(releaseKeystorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
             }
         }
     }
@@ -140,6 +173,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.fragment:fragment:1.8.9")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.0")
     implementation("com.squareup.okhttp3:okhttp:5.3.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

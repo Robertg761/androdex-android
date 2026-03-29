@@ -21,6 +21,7 @@ Androdex keeps Codex running on your host computer, while the phone connects as 
 - [Current Status](#current-status)
 - [Install the Bridge](#install-the-bridge)
 - [Build the Android App From Source](#build-the-android-app-from-source)
+- [Build a Signed Android APK with GitHub Actions](#build-a-signed-android-apk-with-github-actions)
 - [Quick Start](#quick-start)
 - [Commands](#commands)
 - [Architecture](#architecture)
@@ -112,6 +113,45 @@ The debug APK is typically written to:
 
 ```text
 android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+For a local signed release build, copy `android/keystore.properties.example` to
+`android/keystore.properties`, point `storeFile` at your local keystore, then run:
+
+```sh
+cd android
+gradlew assembleRelease
+```
+
+The local keystore file and `keystore.properties` are ignored by git on purpose.
+
+## Build a Signed Android APK with GitHub Actions
+
+The repo includes [`.github/workflows/android-release.yml`](.github/workflows/android-release.yml) to build a signed release APK on GitHub-hosted runners.
+
+Add these repository or environment secrets before running the workflow:
+
+| Secret | Description |
+|----------|-------------|
+| `ANDRODEX_ANDROID_KEYSTORE_BASE64` | Base64-encoded contents of your Android release keystore |
+| `ANDRODEX_ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDRODEX_ANDROID_KEY_ALIAS` | Key alias inside the keystore |
+| `ANDRODEX_ANDROID_KEY_PASSWORD` | Key password for the alias |
+
+The workflow:
+
+1. checks out the repo
+2. installs Java 17 with the Gradle cache enabled
+3. decodes the keystore from `ANDRODEX_ANDROID_KEYSTORE_BASE64`
+4. builds `android/app/build/outputs/apk/release/app-release.apk` with `assembleRelease`
+5. uploads the signed APK as the `androdex-release-apk` workflow artifact
+
+You can trigger it manually from the Actions tab with `workflow_dispatch`, or by pushing a tag that matches `android-v*`.
+
+Example command to create the base64 secret value locally:
+
+```sh
+base64 -i android/release-keystore.jks | tr -d '\n'
 ```
 
 ## Quick Start

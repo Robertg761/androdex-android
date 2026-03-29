@@ -9,6 +9,8 @@ on:
 jobs:
   android-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -21,31 +23,46 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Validate Android signing secrets
+        env:
+          ANDRODEX_ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDRODEX_ANDROID_KEYSTORE_BASE64 }}
+          ANDRODEX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEYSTORE_PASSWORD }}
+          ANDRODEX_ANDROID_KEY_ALIAS: ${{ secrets.ANDRODEX_ANDROID_KEY_ALIAS }}
+          ANDRODEX_ANDROID_KEY_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in \
+            ANDRODEX_ANDROID_KEYSTORE_BASE64 \
+            ANDRODEX_ANDROID_KEYSTORE_PASSWORD \
+            ANDRODEX_ANDROID_KEY_ALIAS \
+            ANDRODEX_ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "Missing secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Decode Android release keystore
         env:
           ANDRODEX_ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDRODEX_ANDROID_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$ANDRODEX_ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Missing secret: ANDRODEX_ANDROID_KEYSTORE_BASE64" >&2
-            exit 1
-          fi
           echo "$ANDRODEX_ANDROID_KEYSTORE_BASE64" | base64 --decode > android/release-keystore.jks
-
-      - name: Write Android signing properties
-        run: |
-          cat <<EOF > android/keystore.properties
-          storeFile=release-keystore.jks
-          storePassword=${{ secrets.ANDRODEX_ANDROID_KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDRODEX_ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDRODEX_ANDROID_KEY_PASSWORD }}
-          EOF
 
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
 
       - name: Build signed release APK
         working-directory: android
-        run: ./gradlew assembleRelease
+        env:
+          ANDRODEX_ANDROID_KEYSTORE_PATH: release-keystore.jks
+          ANDRODEX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEYSTORE_PASSWORD }}
+          ANDRODEX_ANDROID_KEY_ALIAS: ${{ secrets.ANDRODEX_ANDROID_KEY_ALIAS }}
+          ANDRODEX_ANDROID_KEY_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
 
       - name: Upload signed release APK
         uses: actions/upload-artifact@v4
