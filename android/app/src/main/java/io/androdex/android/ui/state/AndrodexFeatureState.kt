@@ -444,7 +444,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             isForked = thread.forkedFromThreadId != null,
         )
     }
-    val isLoading = items.isEmpty() && !isBusy && !hasLoadedThreadList
+    val isLoading = items.isEmpty() && !isBusy && (isLoadingThreadList || !hasLoadedThreadList)
     val emptyState = if (items.isEmpty() && !isBusy && hasLoadedThreadList) {
         ThreadListEmptyStateUiState(
             title = "No conversations yet",

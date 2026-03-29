@@ -44,14 +44,20 @@ This file records the verified Android-side screenshots gathered during the live
 | Android artifact | What it shows | Notes |
 | --- | --- | --- |
 | `android-device-captures/phase4/phase4-home-shell.png` | Refreshed connected home shell after the Phase 4 layout pass | Captured live on Samsung `SM-S928W` after installing the debug build. Confirms the centered principal title, in-hero status capsule, flatter single-column hero, quieter current-project card, and grouped recent-thread list. |
+| `android-device-captures/phase4/phase4-home-empty-no-project.png` | Empty home state with no active workspace | Captured after restarting the daemon without restoring a workspace so the Android app shows the no-project empty shell instead of stale thread content. |
+| `android-device-captures/phase4/phase4-home-no-project.png` | First no-workspace error pass | Preserved as a runtime-adjacent artifact because the host surfaces the “No active workspace” error dialog before the clean empty state settles. Useful for later alert-phase comparison even though the clean empty-state capture is the canonical home reference. |
+| `android-device-captures/phase4/phase4-home-loading.png` | Home shell while the thread list is still loading | Captured after adding explicit thread-list loading-state plumbing so the Remodex-style loading variant exists long enough to verify on device. |
 | `android-device-captures/phase4/phase4-home-shell.xml` | UI dump for the refreshed connected home shell | Paired with the screenshot above so spacing, text hierarchy, and visible row content can be checked without re-running the device flow. |
+| `android-device-captures/phase4/phase4-home-empty-no-project.xml` | UI dump for the empty no-project home state | Confirms the empty-state copy, disabled primary CTA, and project-picker affordance once no active workspace is present. |
+| `android-device-captures/phase4/phase4-home-no-project.xml` | UI dump for the transient no-workspace error variant | Useful for later dialog/overlay parity checks tied to the same home recovery path. |
+| `android-device-captures/phase4/phase4-home-loading.xml` | UI dump for the loading home variant | Confirms that the loading row is present in the live hierarchy even though it sits near the bottom edge of the viewport in the captured frame. |
 
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
 - Verified Phase 1 refresh dumps currently include `android-device-captures/phase1/phase1-home-refresh.xml` and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
 - Verified Phase 2 shell dumps now include `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, and `android-device-captures/phase2/phase2-thread-shell.xml`.
-- Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`.
+- Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`, `android-device-captures/phase4/phase4-home-empty-no-project.xml`, `android-device-captures/phase4/phase4-home-no-project.xml`, and `android-device-captures/phase4/phase4-home-loading.xml`.
 - `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
@@ -60,5 +66,4 @@ This file records the verified Android-side screenshots gathered during the live
 
 - A stale Phase 1 sidebar refresh artifact drifted out of app context and was replaced with a live Androdex recapture; earlier non-Androdex captures remain excluded from the reference set.
 - The Android captures are counterpart references for Androdex, not canonical Remodex screenshots.
-- We still do not have fresh Phase 4 live-device captures for no-project, empty-thread, or loading-thread home variants. Those remain the only blocker for marking the home phase `Done`.
 - We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 1 blockers.

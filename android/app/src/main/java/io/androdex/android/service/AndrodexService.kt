@@ -56,6 +56,7 @@ import kotlin.math.abs
 
 private const val savedReconnectRetryDelayMs = 5_000L
 private const val executionReloadMergeWindowMs = 5_000L
+private const val minimumThreadListLoadingVisibleMs = 350L
 
 private data class SubagentIdentityEntry(
     val threadId: String?,
@@ -77,6 +78,7 @@ data class AndrodexServiceState(
     val secureFingerprint: String? = null,
     val threads: List<ThreadSummary> = emptyList(),
     val hasLoadedThreadList: Boolean = false,
+    val isLoadingThreadList: Boolean = false,
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
     val timelineByThread: Map<String, List<ConversationMessage>> = emptyMap(),
@@ -190,6 +192,7 @@ class AndrodexService(
             it.copy(
                 threads = emptyList(),
                 hasLoadedThreadList = false,
+                isLoadingThreadList = false,
                 selectedThreadId = null,
                 selectedThreadTitle = null,
             )
@@ -231,6 +234,7 @@ class AndrodexService(
         cancelSavedReconnectRetry()
         clearThreadRunState()
         repository.disconnect(clearSavedPairing)
+        stateFlow.update { it.copy(isLoadingThreadList = false) }
     }
 
     suspend fun refreshThreads() {
@@ -613,9 +617,23 @@ class AndrodexService(
     }
 
     private suspend fun refreshThreadsInternal() {
-        val threads = repository.refreshThreads()
-        if (threads.isNotEmpty() || stateFlow.value.threads.isEmpty()) {
-            applyLoadedThreads(threads)
+        val shouldHoldLoading = stateFlow.value.threads.isEmpty()
+        val startedAt = System.currentTimeMillis()
+        stateFlow.update { it.copy(isLoadingThreadList = true) }
+        try {
+            val threads = repository.refreshThreads()
+            if (threads.isNotEmpty() || stateFlow.value.threads.isEmpty()) {
+                applyLoadedThreads(threads)
+            }
+        } finally {
+            if (shouldHoldLoading) {
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val remainingMs = minimumThreadListLoadingVisibleMs - elapsedMs
+                if (remainingMs > 0) {
+                    delay(remainingMs)
+                }
+            }
+            stateFlow.update { it.copy(isLoadingThreadList = false) }
         }
     }
 
