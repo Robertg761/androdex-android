@@ -4,17 +4,15 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -27,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.androdex.android.R
@@ -46,6 +45,7 @@ import io.androdex.android.ui.shared.RemodexSelectionRow
 import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.state.HomeScreenUiState
+import io.androdex.android.ui.state.ThreadListPaneUiState
 import io.androdex.android.ui.state.ThreadListEmptyStateUiState
 import io.androdex.android.ui.state.ThreadListItemUiState
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
@@ -82,34 +82,9 @@ internal fun HomeScreen(
         contentWindowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
         topBar = {
             Column {
-                RemodexPageHeader(
-                    title = "Androdex",
-                    navigation = {
-                        RemodexIconButton(
-                            onClick = onOpenSidebar,
-                            contentDescription = "Open sidebar",
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Menu,
-                                contentDescription = null,
-                                tint = RemodexTheme.colors.textPrimary,
-                                modifier = Modifier.size(RemodexTheme.geometry.iconSize),
-                            )
-                        }
-                    },
-                    actions = {
-                        RemodexIconButton(
-                            onClick = onOpenSettings,
-                            contentDescription = "Open settings",
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = RemodexTheme.colors.textPrimary,
-                                modifier = Modifier.size(RemodexTheme.geometry.iconSize),
-                            )
-                        }
-                    },
+                HomeTopBar(
+                    onOpenSidebar = onOpenSidebar,
+                    onOpenSettings = onOpenSettings,
                 )
                 BusyIndicator(state = state.busy)
             }
@@ -123,66 +98,54 @@ internal fun HomeScreen(
                 contentPadding = PaddingValues(
                     start = geometry.pageHorizontalPadding,
                     end = geometry.pageHorizontalPadding,
-                    top = innerPadding.calculateTopPadding() + geometry.spacing8,
+                    top = innerPadding.calculateTopPadding() + geometry.spacing20,
                     bottom = innerPadding.calculateBottomPadding() + geometry.spacing32,
                 ),
-                verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing24),
             ) {
                 item {
-                    HomeHeroCard(
-                        state = state,
-                        onCreateThread = onCreateThread,
-                        onOpenProjects = onOpenProjects,
-                    )
-                }
-                item {
-                    StatusCapsule(state = state.connection)
-                }
-                item {
-                    CurrentProjectCard(
-                        activeWorkspacePath = state.activeWorkspacePath,
-                        onOpenProjects = onOpenProjects,
-                    )
-                }
-                item {
-                    RecentConversationHeader(hasThreads = state.threadList.threads.isNotEmpty())
-                }
-                when {
-                    state.threadList.isLoading -> {
-                        item {
-                            LoadingThreadsCard()
-                        }
-                    }
-
-                    state.threadList.emptyState != null -> {
-                        item {
-                            EmptyThreadsCard(
-                                state = state.threadList.emptyState,
-                                onOpenProjects = onOpenProjects,
-                            )
-                        }
-                    }
-
-                    else -> {
-                        items(state.threadList.threads.take(8), key = { it.id }) { thread ->
-                            RecentConversationCard(
-                                thread = thread,
-                                onOpenThread = { onOpenThread(thread.id) },
-                            )
-                        }
+                    HomeNarrowSection {
+                        HomeHeroSection(
+                            state = state,
+                            onCreateThread = onCreateThread,
+                            onOpenProjects = onOpenProjects,
+                        )
                     }
                 }
                 item {
-                    BridgeStatusCard(state = state.bridgeStatus)
+                    HomeNarrowSection {
+                        CurrentProjectCard(
+                            activeWorkspacePath = state.activeWorkspacePath,
+                            onOpenProjects = onOpenProjects,
+                        )
+                    }
+                }
+                item {
+                    HomeWideSection {
+                        RecentConversationSection(
+                            state = state.threadList,
+                            onOpenProjects = onOpenProjects,
+                            onOpenThread = onOpenThread,
+                        )
+                    }
+                }
+                item {
+                    HomeWideSection {
+                        BridgeStatusCard(state = state.bridgeStatus)
+                    }
                 }
                 state.trustedPair?.let { pair ->
                     item {
-                        TrustedPairCard(state = pair)
+                        HomeWideSection {
+                            TrustedPairCard(state = pair)
+                        }
                     }
                 }
                 state.hostAccount?.let { account ->
                     item {
-                        HostAccountCard(state = account)
+                        HomeWideSection {
+                            HostAccountCard(state = account)
+                        }
                     }
                 }
             }
@@ -191,7 +154,75 @@ internal fun HomeScreen(
 }
 
 @Composable
-private fun HomeHeroCard(
+private fun HomeTopBar(
+    onOpenSidebar: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    RemodexPageHeader(
+        title = "Androdex",
+        subtitle = "Host-local Codex",
+        centerTitle = true,
+        navigation = {
+            RemodexIconButton(
+                onClick = onOpenSidebar,
+                contentDescription = "Open sidebar",
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Menu,
+                    contentDescription = null,
+                    tint = RemodexTheme.colors.textPrimary,
+                    modifier = Modifier.size(RemodexTheme.geometry.iconSize),
+                )
+            }
+        },
+        actions = {
+            RemodexIconButton(
+                onClick = onOpenSettings,
+                contentDescription = "Open settings",
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = RemodexTheme.colors.textPrimary,
+                    modifier = Modifier.size(RemodexTheme.geometry.iconSize),
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun HomeNarrowSection(content: @Composable ColumnScope.() -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = RemodexTheme.geometry.maxContentWidth),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun HomeWideSection(content: @Composable ColumnScope.() -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 560.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun HomeHeroSection(
     state: HomeScreenUiState,
     onCreateThread: () -> Unit,
     onOpenProjects: () -> Unit,
@@ -199,103 +230,142 @@ private fun HomeHeroCard(
     val hasWorkspace = state.activeWorkspacePath != null
     val geometry = RemodexTheme.geometry
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = geometry.pageHorizontalPadding,
-                vertical = geometry.pageVerticalPadding,
-            ),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing18),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+    ) {
+        Surface(
+            modifier = Modifier.size(88.dp),
+            shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
+            color = RemodexTheme.colors.selectedRowFill,
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing14),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    modifier = Modifier.size(72.dp),
-                    shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
-                    color = RemodexTheme.colors.selectedRowFill,
-                ) {
-                    Image(
-                        painter = painterResource(id = R.mipmap.ic_launcher_foreground),
-                        contentDescription = "Androdex",
-                        modifier = Modifier.size(72.dp),
-                    )
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing6)) {
-                    Text(
-                        text = "Host-local Codex",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = RemodexTheme.colors.accentBlue,
-                    )
-                    Text(
-                        text = "Run everything on your computer. Control it from Android.",
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = RemodexTheme.colors.textPrimary,
-                    )
-                }
-            }
-
+            Image(
+                painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                contentDescription = "Androdex",
+                modifier = Modifier.size(88.dp),
+            )
+        }
+        StatusCapsule(
+            state = state.connection,
+            modifier = Modifier.fillMaxWidth(),
+            bottomPadding = 0.dp,
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+        ) {
+            Text(
+                text = "Run on your computer. Continue from Android.",
+                style = MaterialTheme.typography.titleLarge,
+                color = RemodexTheme.colors.textPrimary,
+                textAlign = TextAlign.Center,
+            )
             Text(
                 text = if (hasWorkspace) {
-                    "Jump back into recent conversations or start a fresh thread in ${displayName(state.activeWorkspacePath)}."
+                    "Jump back into recent work in ${displayName(state.activeWorkspacePath)} or start a fresh thread without leaving the home view."
                 } else {
-                    "Choose a project to make the first screen useful right away, then start threads without bouncing through extra sheets."
+                    "Choose a project once, then keep chats, file-aware actions, and recovery flows anchored to your host workspace."
                 },
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
+                color = RemodexTheme.colors.textSecondary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Lock,
+                contentDescription = null,
+                tint = RemodexTheme.colors.textTertiary,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = "Encrypted relay-safe control",
+                style = MaterialTheme.typography.labelLarge,
                 color = RemodexTheme.colors.textSecondary,
             )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
-                verticalAlignment = Alignment.CenterVertically,
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            RemodexButton(
+                onClick = onCreateThread,
+                enabled = hasWorkspace && !state.busy.isVisible,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = geometry.spacing20, vertical = geometry.spacing14),
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Lock,
+                    imageVector = Icons.Default.Add,
                     contentDescription = null,
-                    tint = RemodexTheme.colors.textSecondary,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    text = "End-to-end encrypted remote control",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = RemodexTheme.colors.textSecondary,
+                    text = if (hasWorkspace) "New chat" else "Pick a project first",
+                    modifier = Modifier.padding(start = geometry.spacing8),
                 )
             }
-
-            Row(
+            RemodexButton(
+                onClick = onOpenProjects,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+                style = RemodexButtonStyle.Ghost,
             ) {
-                RemodexButton(
-                    onClick = onCreateThread,
-                    enabled = hasWorkspace && !state.busy.isVisible,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = if (hasWorkspace) "New chat" else "Pick a project first",
-                        modifier = Modifier.padding(start = geometry.spacing8),
-                    )
-                }
-                RemodexButton(
-                    onClick = onOpenProjects,
-                    modifier = Modifier.weight(1f),
-                    style = RemodexButtonStyle.Secondary,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = if (hasWorkspace) "Switch project" else "Choose project",
-                        modifier = Modifier.padding(start = geometry.spacing8),
-                    )
+                Text(text = if (hasWorkspace) "Switch project" else "Choose project")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentConversationSection(
+    state: ThreadListPaneUiState,
+    onOpenProjects: () -> Unit,
+    onOpenThread: (String) -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+    ) {
+        RecentConversationHeader(
+            hasThreads = state.threads.isNotEmpty(),
+            threadCount = state.threads.size,
+        )
+        when {
+            state.isLoading -> LoadingThreadsCard()
+            state.emptyState != null -> EmptyThreadsCard(
+                state = state.emptyState,
+                onOpenProjects = onOpenProjects,
+            )
+            else -> RecentConversationList(
+                threads = state.threads.take(8),
+                onOpenThread = onOpenThread,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentConversationList(
+    threads: List<ThreadListItemUiState>,
+    onOpenThread: (String) -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+
+    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            threads.forEachIndexed { index, thread ->
+                RecentConversationCard(
+                    thread = thread,
+                    onOpenThread = { onOpenThread(thread.id) },
+                )
+                if (index != threads.lastIndex) {
+                    RemodexDivider(modifier = Modifier.padding(horizontal = geometry.sectionPadding))
                 }
             }
         }
@@ -317,7 +387,7 @@ private fun CurrentProjectCard(
             Text(
                 text = "Current project",
                 style = MaterialTheme.typography.labelLarge,
-                color = RemodexTheme.colors.accentBlue,
+                color = RemodexTheme.colors.textSecondary,
             )
             Text(
                 text = activeWorkspacePath?.let(::displayName) ?: "No project selected yet",
@@ -327,12 +397,12 @@ private fun CurrentProjectCard(
             Text(
                 text = activeWorkspacePath
                     ?: "Pick a host folder to anchor new chats, recent history, and file-aware actions.",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = RemodexTheme.colors.textSecondary,
             )
             RemodexButton(
                 onClick = onOpenProjects,
-                style = RemodexButtonStyle.Secondary,
+                style = RemodexButtonStyle.Ghost,
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
@@ -349,30 +419,42 @@ private fun CurrentProjectCard(
 }
 
 @Composable
-private fun RecentConversationHeader(hasThreads: Boolean) {
+private fun RecentConversationHeader(
+    hasThreads: Boolean,
+    threadCount: Int,
+) {
     val geometry = RemodexTheme.geometry
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+        ) {
             Text(
                 text = "Recent conversations",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = RemodexTheme.colors.textPrimary,
             )
             Text(
                 text = if (hasThreads) {
                     "Reopen the work that already exists on your host."
                 } else {
-                    "Once threads exist, they show up here instead of hiding in the drawer."
+                    "The latest threads will appear here as soon as your host has something to continue."
                 },
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = RemodexTheme.colors.textSecondary,
             )
         }
-        RemodexPill(label = "History", style = RemodexPillStyle.Accent)
+        if (hasThreads) {
+            RemodexPill(
+                label = if (threadCount == 1) "1 thread" else "$threadCount threads",
+                style = RemodexPillStyle.Neutral,
+            )
+        }
     }
 }
 
@@ -380,22 +462,31 @@ private fun RecentConversationHeader(hasThreads: Boolean) {
 private fun LoadingThreadsCard() {
     val geometry = RemodexTheme.geometry
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
-        ) {
-            Text(
-                text = "Loading your conversations",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = RemodexTheme.colors.textPrimary,
-            )
-            Text(
-                text = "Androdex is syncing the thread list from the host.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textSecondary,
-            )
-        }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = geometry.spacing16),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            strokeWidth = 2.dp,
+            color = RemodexTheme.colors.accentBlue,
+            trackColor = RemodexTheme.colors.selectedRowFill,
+        )
+        Text(
+            text = "Loading your conversations",
+            style = MaterialTheme.typography.titleSmall,
+            color = RemodexTheme.colors.textPrimary,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = "Androdex is syncing the thread list from the host.",
+            style = MaterialTheme.typography.bodySmall,
+            color = RemodexTheme.colors.textSecondary,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -406,28 +497,31 @@ private fun EmptyThreadsCard(
 ) {
     val geometry = RemodexTheme.geometry
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
-        ) {
-            Text(
-                text = state.title,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = RemodexTheme.colors.textPrimary,
-            )
-            Text(
-                text = state.message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textSecondary,
-            )
-            if (state.showChooseProjectAction) {
-                RemodexButton(
-                    onClick = onOpenProjects,
-                    style = RemodexButtonStyle.Secondary,
-                ) {
-                    Text("Choose a project")
-                }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = geometry.spacing16),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+    ) {
+        Text(
+            text = state.title,
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+            color = RemodexTheme.colors.textPrimary,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = state.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = RemodexTheme.colors.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+        if (state.showChooseProjectAction) {
+            RemodexButton(
+                onClick = onOpenProjects,
+                style = RemodexButtonStyle.Secondary,
+            ) {
+                Text("Choose a project")
             }
         }
     }
@@ -439,22 +533,18 @@ private fun RecentConversationCard(
     onOpenThread: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
-    val runColor = when (thread.runState) {
-        ThreadRunBadgeUiState.RUNNING -> RemodexTheme.colors.accentBlue
-        ThreadRunBadgeUiState.READY -> RemodexTheme.colors.accentGreen
-        ThreadRunBadgeUiState.FAILED -> RemodexTheme.colors.errorRed
-        null -> RemodexTheme.colors.textTertiary
-    }
+    val runColor = threadRunColor(thread.runState)
+    val runLabel = threadRunLabel(thread.runState)
 
     RemodexSelectionRow(
         selected = false,
         onClick = onOpenThread,
         modifier = Modifier.fillMaxWidth(),
-        paddingValues = PaddingValues(horizontal = geometry.sectionPadding, vertical = geometry.spacing16),
+        paddingValues = PaddingValues(horizontal = geometry.sectionPadding, vertical = geometry.spacing14),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -474,7 +564,7 @@ private fun RecentConversationCard(
                     )
                     Text(
                         text = thread.title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.titleSmall,
                         color = RemodexTheme.colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -490,19 +580,48 @@ private fun RecentConversationCard(
             }
             Text(
                 text = thread.preview ?: "Open this thread to continue where the host left off.",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = RemodexTheme.colors.textSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            RemodexDivider()
-            Text(
-                text = thread.projectName,
-                style = MaterialTheme.typography.labelLarge,
-                color = RemodexTheme.colors.accentBlue,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = thread.projectName,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = RemodexTheme.colors.textSecondary,
+                )
+                if (thread.isForked) {
+                    RemodexPill(label = "Fork", style = RemodexPillStyle.Neutral)
+                }
+                if (runLabel != null) {
+                    Text(
+                        text = runLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = runColor,
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun threadRunColor(runState: ThreadRunBadgeUiState?): Color = when (runState) {
+    ThreadRunBadgeUiState.RUNNING -> RemodexTheme.colors.accentBlue
+    ThreadRunBadgeUiState.READY -> RemodexTheme.colors.accentGreen
+    ThreadRunBadgeUiState.FAILED -> RemodexTheme.colors.errorRed
+    null -> RemodexTheme.colors.textTertiary
+}
+
+private fun threadRunLabel(runState: ThreadRunBadgeUiState?): String? = when (runState) {
+    ThreadRunBadgeUiState.RUNNING -> "Running"
+    ThreadRunBadgeUiState.READY -> "Ready"
+    ThreadRunBadgeUiState.FAILED -> "Needs review"
+    null -> null
 }
 
 private fun displayName(path: String): String {

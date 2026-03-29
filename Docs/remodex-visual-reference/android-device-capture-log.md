@@ -39,11 +39,19 @@ This file records the verified Android-side screenshots gathered during the live
 | `android-device-captures/phase2/phase2-thread-shell.png` | Thread shell after the shared connected-shell transition | Verifies that the same edge-to-edge shell and compact header behavior carry through when navigating from home into a thread. |
 | `android-device-captures/phase2/phase2-home-thread-home-transition.mp4` | Home -> thread -> home shell transition clip | Recorded on device with `adb screenrecord` to confirm the shared-shell route animation and back-navigation return path outside of still screenshots. |
 
+## Phase 4 Home Captures
+
+| Android artifact | What it shows | Notes |
+| --- | --- | --- |
+| `android-device-captures/phase4/phase4-home-shell.png` | Refreshed connected home shell after the Phase 4 layout pass | Captured live on Samsung `SM-S928W` after installing the debug build. Confirms the centered principal title, in-hero status capsule, flatter single-column hero, quieter current-project card, and grouped recent-thread list. |
+| `android-device-captures/phase4/phase4-home-shell.xml` | UI dump for the refreshed connected home shell | Paired with the screenshot above so spacing, text hierarchy, and visible row content can be checked without re-running the device flow. |
+
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
 - Verified Phase 1 refresh dumps currently include `android-device-captures/phase1/phase1-home-refresh.xml` and `android-device-captures/phase1/phase1-sidebar-open-refresh.xml`.
 - Verified Phase 2 shell dumps now include `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, and `android-device-captures/phase2/phase2-thread-shell.xml`.
+- Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`.
 - `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
@@ -52,4 +60,5 @@ This file records the verified Android-side screenshots gathered during the live
 
 - A stale Phase 1 sidebar refresh artifact drifted out of app context and was replaced with a live Androdex recapture; earlier non-Androdex captures remain excluded from the reference set.
 - The Android captures are counterpart references for Androdex, not canonical Remodex screenshots.
+- We still do not have fresh Phase 4 live-device captures for no-project, empty-thread, or loading-thread home variants. Those remain the only blocker for marking the home phase `Done`.
 - We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 1 blockers.

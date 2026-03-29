@@ -65,13 +65,20 @@ Phase 3 pairing/onboarding/recovery implementation note:
 - `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` now mirrors the Remodex welcome/features hierarchy more closely with a centered hero, dedicated saved-reconnect summary, toned recovery messaging, and a denser manual-pairing form.
 - Fresh Android capture anchors for that refresh are still pending; until they exist, the pairing row should be treated as implementation-complete but phase-gate-incomplete.
 
+Phase 4 home implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` now uses a centered Remodex-style home shell: compact centered title chrome, single-column empty-state hero, in-hero connection capsule, quieter current-project module, and grouped recent-conversation rows instead of the earlier multi-card landing stack.
+- `android/app/src/main/java/io/androdex/android/ui/shared/RemodexPrimitives.kt` now exposes a centered-title page-header mode so the home toolbar can match the Remodex principal-title placement without hand-tuned per-screen padding.
+- Fresh Android capture anchors for this pass now include `android-device-captures/phase4/phase4-home-shell.png` and `android-device-captures/phase4/phase4-home-shell.xml`.
+- Remaining home-state capture gap: no-project, loading, and empty-thread variants still need fresh live-device captures before Phase 4 can close.
+
 The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.
 
 ## Highest-Risk Visual Mismatches To Fix First
 
-1. Home screen composition. Androdex currently uses a custom landing-card layout, while Remodex is much flatter and more centered around a single empty-state shell.
+1. Home screen variant coverage. The connected home shell is now much closer to the flatter Remodex empty-state layout, but the no-project, loading, and empty-thread variants still need live capture and final parity review.
 2. Sidebar density. Remodex uses tighter row spacing, lighter fills, smaller type, and more native-looking list grouping than the current Compose drawer.
 3. Composer shell. Remodex uses a floating glass composer with a large `28` corner radius and layered autocomplete/voice overlays.
 4. Toolbar chrome. Remodex relies on compact principal-title layout plus small adaptive toolbar affordances, not a standard Material top app bar.

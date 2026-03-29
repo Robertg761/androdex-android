@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -99,6 +100,7 @@ internal fun RemodexPageHeader(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    centerTitle: Boolean = false,
     navigation: (@Composable () -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
@@ -111,48 +113,106 @@ internal fun RemodexPageHeader(
             .fillMaxWidth()
             .statusBarsPadding(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = geometry.pageHorizontalPadding,
-                    end = geometry.pageHorizontalPadding,
-                    top = geometry.spacing4,
-                    bottom = geometry.spacing8,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
-        ) {
-            if (navigation != null) {
-                navigation()
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(if (subtitle == null) 0.dp else geometry.spacing2),
+        if (centerTitle) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = geometry.pageHorizontalPadding,
+                        end = geometry.pageHorizontalPadding,
+                        top = geometry.spacing4,
+                        bottom = geometry.spacing8,
+                    ),
             ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = colors.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                subtitle?.let {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    if (navigation != null) {
+                        navigation()
+                    } else {
+                        Spacer(modifier = Modifier.size(geometry.iconButtonSize))
+                    }
+                    if (actions != null) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                            verticalAlignment = Alignment.CenterVertically,
+                            content = actions,
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.size(geometry.iconButtonSize))
+                    }
+                }
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = geometry.iconButtonSize + geometry.spacing12),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(if (subtitle == null) 0.dp else geometry.spacing2),
+                ) {
                     Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textSecondary,
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    subtitle?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
-            if (actions != null) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
-                    verticalAlignment = Alignment.CenterVertically,
-                    content = actions,
-                )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = geometry.pageHorizontalPadding,
+                        end = geometry.pageHorizontalPadding,
+                        top = geometry.spacing4,
+                        bottom = geometry.spacing8,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+            ) {
+                if (navigation != null) {
+                    navigation()
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(if (subtitle == null) 0.dp else geometry.spacing2),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    subtitle?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (actions != null) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                        verticalAlignment = Alignment.CenterVertically,
+                        content = actions,
+                    )
+                }
             }
         }
     }

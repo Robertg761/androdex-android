@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationKind
@@ -66,6 +67,7 @@ internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (s
 internal fun StatusCapsule(
     state: ConnectionBannerUiState,
     modifier: Modifier = Modifier,
+    bottomPadding: Dp = 8.dp,
 ) {
     val geometry = RemodexTheme.geometry
     val dotColor = connectionStatusDotColor(state.status)
@@ -92,7 +94,7 @@ internal fun StatusCapsule(
     RemodexGroupedSurface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = geometry.spacing8),
+            .padding(bottom = bottomPadding),
         cornerRadius = RemodexTheme.geometry.cornerSmall,
         tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
     ) {
