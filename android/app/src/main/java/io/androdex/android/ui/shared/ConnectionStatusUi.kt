@@ -1,34 +1,26 @@
 package io.androdex.android.ui.shared
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.SettingsEthernet
-import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -37,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -49,8 +42,17 @@ import io.androdex.android.ui.state.BridgeStatusUiState
 import io.androdex.android.ui.state.BusyUiState
 import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.HostAccountUiState
+import io.androdex.android.ui.state.SharedStatusTone
 import io.androdex.android.ui.state.TrustedPairUiState
+import io.androdex.android.ui.theme.RemodexMonoFontFamily
 import io.androdex.android.ui.theme.RemodexTheme
+
+internal data class ConnectionBannerPresentation(
+    val title: String,
+    val badgeLabel: String,
+    val tone: SharedStatusTone,
+    val guidance: String?,
+)
 
 @Composable
 internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (status) {
@@ -63,129 +65,111 @@ internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (s
     ConnectionStatus.DISCONNECTED -> RemodexTheme.colors.statusDotOffline
 }
 
+internal fun connectionBannerPresentation(
+    status: ConnectionStatus,
+    detail: String?,
+): ConnectionBannerPresentation {
+    val guidance = when (status) {
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> {
+            "Saved pairing is still trusted. We'll keep retrying automatically when the host or relay comes back."
+        }
+        ConnectionStatus.RECONNECT_REQUIRED -> {
+            "Saved pairing needs attention. Reconnect from the trusted pair first, then scan a fresh QR if trust changed."
+        }
+        ConnectionStatus.UPDATE_REQUIRED -> updateRequiredGuidance(detail)
+        else -> null
+    }
+    return when (status) {
+        ConnectionStatus.CONNECTED -> ConnectionBannerPresentation(
+            title = "Connected to host",
+            badgeLabel = "Live",
+            tone = SharedStatusTone.Success,
+            guidance = guidance,
+        )
+        ConnectionStatus.CONNECTING -> ConnectionBannerPresentation(
+            title = "Connecting to host",
+            badgeLabel = "Syncing",
+            tone = SharedStatusTone.Accent,
+            guidance = guidance,
+        )
+        ConnectionStatus.HANDSHAKING -> ConnectionBannerPresentation(
+            title = "Completing secure handshake",
+            badgeLabel = "Syncing",
+            tone = SharedStatusTone.Accent,
+            guidance = guidance,
+        )
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> ConnectionBannerPresentation(
+            title = "Waiting for trusted host",
+            badgeLabel = "Retrying",
+            tone = SharedStatusTone.Accent,
+            guidance = guidance,
+        )
+        ConnectionStatus.RECONNECT_REQUIRED -> ConnectionBannerPresentation(
+            title = "Trusted pair needs repair",
+            badgeLabel = "Repair",
+            tone = SharedStatusTone.Warning,
+            guidance = guidance,
+        )
+        ConnectionStatus.UPDATE_REQUIRED -> ConnectionBannerPresentation(
+            title = "Host and Android are out of sync",
+            badgeLabel = "Update",
+            tone = SharedStatusTone.Warning,
+            guidance = guidance,
+        )
+        ConnectionStatus.DISCONNECTED -> ConnectionBannerPresentation(
+            title = "Host not connected",
+            badgeLabel = "Offline",
+            tone = SharedStatusTone.Neutral,
+            guidance = guidance,
+        )
+    }
+}
+
 @Composable
 internal fun StatusCapsule(
     state: ConnectionBannerUiState,
     modifier: Modifier = Modifier,
     bottomPadding: Dp = 8.dp,
 ) {
-    val geometry = RemodexTheme.geometry
-    val dotColor = connectionStatusDotColor(state.status)
-    val label = when (state.status) {
-        ConnectionStatus.CONNECTED -> "Connected"
-        ConnectionStatus.CONNECTING -> "Connecting"
-        ConnectionStatus.HANDSHAKING -> "Handshaking"
-        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting for host"
-        ConnectionStatus.RECONNECT_REQUIRED -> "Repair Pairing Required"
-        ConnectionStatus.UPDATE_REQUIRED -> "Update Required"
-        ConnectionStatus.DISCONNECTED -> "Disconnected"
-    }
-    val guidance = when (state.status) {
-        ConnectionStatus.RETRYING_SAVED_PAIRING -> {
-            "Saved pairing is still trusted. We'll retry automatically when the host or relay comes back."
-        }
-        ConnectionStatus.RECONNECT_REQUIRED -> {
-            "Saved pairing needs attention. Reconnect from saved pairing or scan a fresh QR code if trust changed."
-        }
-        ConnectionStatus.UPDATE_REQUIRED -> updateRequiredGuidance(state.detail)
-        else -> null
-    }
+    val presentation = connectionBannerPresentation(state.status, state.detail)
 
-    RemodexGroupedSurface(
+    SharedStatusCard(
         modifier = modifier
             .fillMaxWidth()
             .padding(bottom = bottomPadding),
-        cornerRadius = RemodexTheme.geometry.cornerSmall,
-        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
+        title = presentation.title,
+        badgeLabel = presentation.badgeLabel,
+        tone = presentation.tone,
+        leading = {
+            SharedStatusDot(state.status)
+        },
     ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = geometry.spacing14,
-                vertical = geometry.spacing10,
-            ),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
-                AnimatedContent(
-                    targetState = label,
-                    transitionSpec = {
-                        fadeIn(tween(200)) togetherWith fadeOut(tween(200))
-                    },
-                    label = "statusLabel",
-                ) { text ->
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = RemodexTheme.colors.textPrimary,
-                    )
-                }
-            }
-            state.detail?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = RemodexTheme.colors.textSecondary,
-                        modifier = Modifier.padding(top = geometry.spacing4),
-                    )
-                }
-            guidance?.let {
-                Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = RemodexTheme.colors.textSecondary,
-                        modifier = Modifier.padding(
-                            top = if (state.detail.isNullOrBlank()) geometry.spacing4 else geometry.spacing2,
-                        ),
-                    )
-                }
-            state.fingerprint?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                        text = "Host: $it",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = RemodexTheme.colors.textTertiary,
-                        modifier = Modifier.padding(top = geometry.spacing2),
-                    )
-                }
+        state.detail?.takeIf { it.isNotBlank() }?.let {
+            SharedStatusBodyText(it)
+        }
+        presentation.guidance?.let {
+            SharedStatusBodyText(it)
+        }
+        state.fingerprint?.takeIf { it.isNotBlank() }?.let {
+            SharedMonospaceBlock(
+                label = "Trusted host",
+                value = it,
+            )
         }
     }
 }
 
 @Composable
 internal fun BusyIndicator(state: BusyUiState) {
-    val geometry = RemodexTheme.geometry
-
     AnimatedVisibility(
         visible = state.isVisible,
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut(),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = RemodexTheme.colors.accentBlue,
-                trackColor = RemodexTheme.colors.selectedRowFill,
-            )
-            state.label?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = RemodexTheme.colors.textSecondary,
-                    modifier = Modifier.padding(
-                        horizontal = geometry.pageHorizontalPadding,
-                        vertical = geometry.spacing6,
-                    ),
-                )
-            }
-        }
+        SharedActivityCapsule(
+            label = state.label ?: "Syncing with host",
+            tone = SharedStatusTone.Accent,
+        )
     }
 }
 
@@ -194,71 +178,40 @@ internal fun TrustedPairCard(
     state: TrustedPairUiState,
     modifier: Modifier = Modifier,
 ) {
-    val geometry = RemodexTheme.geometry
-
-    RemodexGroupedSurface(
+    SharedStatusCard(
         modifier = modifier.fillMaxWidth(),
-        cornerRadius = RemodexTheme.geometry.cornerLarge,
-        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
+        title = state.title,
+        badgeLabel = state.statusLabel,
+        tone = state.tone,
+        leading = {
+            SharedStatusIconBadge(
+                icon = Icons.Outlined.Computer,
+                tone = state.tone,
+            )
+        },
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing14),
-            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Desktop icon in small circular background
-            Surface(
-                color = RemodexTheme.colors.selectedRowFill,
-                shape = CircleShape,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        imageVector = Icons.Outlined.Computer,
-                        contentDescription = null,
-                        tint = RemodexTheme.colors.textPrimary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
-            ) {
-                Text(
-                    text = state.name,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    color = RemodexTheme.colors.textPrimary,
-                )
-                state.systemName?.let {
-                    Text(
-                        text = "\"$it\"",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = RemodexTheme.colors.textSecondary,
-                    )
-                }
-                state.detail?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = RemodexTheme.colors.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            StatusPill(label = state.statusLabel)
+        Text(
+            text = state.name,
+            style = MaterialTheme.typography.titleSmall,
+            color = RemodexTheme.colors.textPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
+        state.systemName?.takeIf { it.isNotBlank() }?.let {
+            SharedStatusBodyText(it)
+        }
+        state.detail?.takeIf { it.isNotBlank() }?.let {
+            SharedStatusBodyText(it)
+        }
+        state.relayLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Relay", value = it)
+        }
+        state.fingerprint?.takeIf { it.isNotBlank() }?.let {
+            SharedMonospaceBlock(
+                label = "Fingerprint",
+                value = it,
+            )
         }
     }
-}
-
-@Composable
-private fun StatusPill(label: String) {
-    RemodexPill(label = label, style = RemodexPillStyle.Accent)
 }
 
 @Composable
@@ -266,49 +219,25 @@ internal fun BridgeStatusCard(
     state: BridgeStatusUiState,
     modifier: Modifier = Modifier,
 ) {
-    val geometry = RemodexTheme.geometry
-
-    RemodexGroupedSurface(
+    SharedStatusCard(
         modifier = modifier.fillMaxWidth(),
-        cornerRadius = RemodexTheme.geometry.cornerLarge,
-        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.85f),
+        title = state.title,
+        badgeLabel = state.statusLabel,
+        tone = state.tone,
+        leading = {
+            SharedStatusIconBadge(
+                icon = Icons.Outlined.SettingsEthernet,
+                tone = state.tone,
+            )
+        },
     ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = geometry.sidebarOuterHorizontalPadding,
-                vertical = geometry.spacing14,
-            ),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.SettingsEthernet,
-                    contentDescription = null,
-                    tint = RemodexTheme.colors.accentBlue,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = state.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = RemodexTheme.colors.textPrimary,
-                )
-            }
-            Text(
-                text = state.summary,
-                style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textSecondary,
-            )
-            MetadataRow(label = "Speed tiers", value = state.serviceTierMessage)
-            MetadataRow(label = "Thread forks", value = state.threadForkMessage)
-            Text(
-                text = "Update command: ${state.updateCommand}",
-                style = MaterialTheme.typography.labelSmall,
-                color = RemodexTheme.colors.textTertiary,
-            )
-        }
+        SharedStatusBodyText(state.summary)
+        SharedMetadataRow(label = "Speed tiers", value = state.serviceTierMessage)
+        SharedMetadataRow(label = "Thread forks", value = state.threadForkMessage)
+        SharedMonospaceBlock(
+            label = "Update command",
+            value = state.updateCommand,
+        )
     }
 }
 
@@ -319,95 +248,62 @@ internal fun HostAccountCard(
 ) {
     val geometry = RemodexTheme.geometry
 
-    RemodexGroupedSurface(
+    SharedStatusCard(
         modifier = modifier.fillMaxWidth(),
-        cornerRadius = RemodexTheme.geometry.cornerLarge,
-        tonalColor = RemodexTheme.colors.secondarySurface.copy(alpha = 0.78f),
+        title = state.title,
+        badgeLabel = state.statusLabel,
+        tone = state.tone,
+        leading = {
+            SharedStatusIconBadge(
+                icon = Icons.Outlined.Key,
+                tone = state.tone,
+            )
+        },
     ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = geometry.sidebarOuterHorizontalPadding,
-                vertical = geometry.spacing14,
-            ),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Key,
-                        contentDescription = null,
-                        tint = RemodexTheme.colors.accentBlue,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = state.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = RemodexTheme.colors.textPrimary,
-                    )
-                }
-                StatusPill(label = state.statusLabel)
-            }
-
-            state.detail?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = RemodexTheme.colors.textSecondary,
-                )
-            }
-
-            state.providerLabel?.let { provider ->
-                MetadataRow(label = "Auth", value = provider)
-            }
-            state.sourceLabel?.let { source ->
-                MetadataRow(label = "Source", value = source)
-            }
-            state.authControlLabel?.let { authControl ->
-                MetadataRow(label = "Sign-in", value = authControl)
-            }
-            state.bridgeVersionLabel?.let { version ->
-                MetadataRow(label = "Version", value = version)
-            }
-            if (state.rateLimits.isNotEmpty()) {
-                RemodexDivider()
+        state.detail?.takeIf { it.isNotBlank() }?.let {
+            SharedStatusBodyText(it)
+        }
+        state.providerLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Auth", value = it)
+        }
+        state.sourceLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Source", value = it)
+        }
+        state.authControlLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Sign-in", value = it)
+        }
+        state.bridgeVersionLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Version", value = it)
+        }
+        if (state.rateLimits.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 Text(
                     text = "Rate limits",
                     style = MaterialTheme.typography.labelLarge,
-                    color = RemodexTheme.colors.accentBlue,
+                    color = RemodexTheme.colors.textSecondary,
                 )
                 state.rateLimits.forEach { rateLimit ->
-                    Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                    Surface(
+                        color = RemodexTheme.colors.inputBackground,
+                        shape = MaterialTheme.shapes.small,
+                        border = BorderStroke(1.dp, RemodexTheme.colors.hairlineDivider),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(geometry.spacing12),
+                            verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
                         ) {
                             Text(
                                 text = rateLimit.name,
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = RemodexTheme.colors.textPrimary,
                                 fontWeight = FontWeight.Medium,
                             )
-                            rateLimit.usageLabel?.let {
-                                Text(
-                                    text = it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = RemodexTheme.colors.textSecondary,
-                                )
+                            rateLimit.usageLabel?.takeIf { it.isNotBlank() }?.let {
+                                SharedStatusBodyText(it)
                             }
-                        }
-                        rateLimit.resetLabel?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = RemodexTheme.colors.textSecondary,
-                            )
+                            rateLimit.resetLabel?.takeIf { it.isNotBlank() }?.let {
+                                SharedStatusBodyText(it)
+                            }
                         }
                     }
                 }
@@ -418,7 +314,6 @@ internal fun HostAccountCard(
 
 @Composable
 internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
-    val geometry = RemodexTheme.geometry
     val isStreaming = messages.any { it.isStreaming }
     val activeSystemMessage = messages.lastOrNull {
         it.role == ConversationRole.SYSTEM && it.isStreaming
@@ -426,7 +321,7 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
 
     val activityText = when {
         !isStreaming && activeSystemMessage == null -> null
-        isStreaming -> "Agent is writing a response..."
+        isStreaming -> "Agent is writing a response"
         activeSystemMessage?.kind == ConversationKind.FILE_CHANGE -> {
             val fileName = activeSystemMessage.filePath
                 ?.substringAfterLast('/')
@@ -437,19 +332,19 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
             val title = activeSystemMessage.execution?.title
                 ?: activeSystemMessage.command
                 ?: "command"
-            "Running: ${title.take(40)}"
+            "Running ${title.take(40)}"
         }
         activeSystemMessage?.kind == ConversationKind.EXECUTION -> {
             val execution = activeSystemMessage.execution
             when {
-                execution == null -> "Running activity..."
-                execution.title.isBlank() -> "Running ${execution.label.lowercase()}..."
+                execution == null -> "Running activity"
+                execution.title.isBlank() -> execution.label
                 else -> "${execution.label}: ${execution.title.take(48)}"
             }
         }
-        activeSystemMessage?.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
-        activeSystemMessage?.kind == ConversationKind.THINKING -> "Thinking..."
-        activeSystemMessage?.kind == ConversationKind.PLAN -> "Planning..."
+        activeSystemMessage?.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents"
+        activeSystemMessage?.kind == ConversationKind.THINKING -> "Thinking"
+        activeSystemMessage?.kind == ConversationKind.PLAN -> "Planning"
         else -> null
     }
 
@@ -458,33 +353,249 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut(),
     ) {
-        Surface(
-            color = RemodexTheme.colors.accentBlue.copy(alpha = 0.12f),
-            modifier = Modifier.fillMaxWidth(),
+        SharedActivityCapsule(
+            label = activityText ?: "Working on host",
+            tone = SharedStatusTone.Accent,
+        )
+    }
+}
+
+@Composable
+private fun SharedActivityCapsule(
+    label: String,
+    tone: SharedStatusTone,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = geometry.pageHorizontalPadding,
+                vertical = geometry.spacing8,
+            ),
+    ) {
+        RemodexGroupedSurface(
+            cornerRadius = geometry.cornerLarge,
+            tonalColor = sharedStatusCardColor(),
         ) {
             Row(
                 modifier = Modifier.padding(
-                    horizontal = geometry.sidebarOuterHorizontalPadding,
-                    vertical = geometry.spacing8,
+                    horizontal = geometry.spacing14,
+                    vertical = geometry.spacing10,
                 ),
-                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp,
-                    color = RemodexTheme.colors.accentBlue,
+                    color = sharedStatusToneColor(tone),
                 )
                 Text(
-                    text = activityText ?: "Working...",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = RemodexTheme.colors.accentBlue,
-                    fontWeight = FontWeight.SemiBold,
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = RemodexTheme.colors.textPrimary,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SharedStatusCard(
+    title: String,
+    badgeLabel: String,
+    tone: SharedStatusTone,
+    modifier: Modifier = Modifier,
+    leading: @Composable () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = modifier,
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = sharedStatusCardColor(),
+    ) {
+        Column(
+            modifier = Modifier.padding(
+                horizontal = geometry.spacing14,
+                vertical = geometry.spacing14,
+            ),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                leading()
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = RemodexTheme.colors.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                SharedStatusPill(
+                    label = badgeLabel,
+                    tone = tone,
+                )
+            }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedStatusDot(status: ConnectionStatus) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(RemodexTheme.colors.selectedRowFill),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(connectionStatusDotColor(status)),
+        )
+    }
+}
+
+@Composable
+private fun SharedStatusIconBadge(
+    icon: ImageVector,
+    tone: SharedStatusTone,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Surface(
+        modifier = Modifier.size(36.dp),
+        shape = CircleShape,
+        color = sharedStatusToneColor(tone).copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, RemodexTheme.colors.hairlineDivider),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = sharedStatusToneColor(tone),
+                modifier = Modifier.size(geometry.iconSize),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SharedStatusPill(
+    label: String,
+    tone: SharedStatusTone,
+) {
+    RemodexPill(
+        label = label,
+        style = tone.toPillStyle(),
+    )
+}
+
+@Composable
+private fun SharedStatusBodyText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = RemodexTheme.colors.textSecondary,
+    )
+}
+
+@Composable
+private fun SharedMetadataRow(
+    label: String,
+    value: String,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing2)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = RemodexTheme.colors.textTertiary,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = RemodexTheme.colors.textPrimary,
+        )
+    }
+}
+
+@Composable
+private fun SharedMonospaceBlock(
+    label: String,
+    value: String,
+) {
+    val geometry = RemodexTheme.geometry
+
+    Surface(
+        color = RemodexTheme.colors.inputBackground,
+        shape = MaterialTheme.shapes.small,
+        border = BorderStroke(1.dp, RemodexTheme.colors.hairlineDivider),
+    ) {
+        Column(
+            modifier = Modifier.padding(geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = RemodexTheme.colors.textTertiary,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = RemodexMonoFontFamily),
+                color = RemodexTheme.colors.textPrimary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun sharedStatusCardColor(): Color {
+    return RemodexTheme.colors.secondarySurface.copy(alpha = 0.82f)
+}
+
+@Composable
+private fun sharedStatusToneColor(tone: SharedStatusTone): Color {
+    val colors = RemodexTheme.colors
+    return when (tone) {
+        SharedStatusTone.Neutral -> colors.textSecondary
+        SharedStatusTone.Accent -> colors.accentBlue
+        SharedStatusTone.Success -> colors.accentGreen
+        SharedStatusTone.Warning -> colors.accentOrange
+        SharedStatusTone.Error -> colors.errorRed
+    }
+}
+
+private fun SharedStatusTone.toPillStyle(): RemodexPillStyle {
+    return when (this) {
+        SharedStatusTone.Neutral -> RemodexPillStyle.Neutral
+        SharedStatusTone.Accent -> RemodexPillStyle.Accent
+        SharedStatusTone.Success -> RemodexPillStyle.Success
+        SharedStatusTone.Warning -> RemodexPillStyle.Warning
+        SharedStatusTone.Error -> RemodexPillStyle.Error
     }
 }
 
@@ -503,40 +614,5 @@ private fun updateRequiredGuidance(detail: String?): String {
             "This saved pairing reached a host bridge with a different secure transport version. Update the host bridge or Android app, then reconnect."
         }
         else -> "Update the Android app or host bridge, then reconnect with the saved pairing."
-    }
-}
-
-@Composable
-private fun MetadataRow(
-    label: String,
-    value: String,
-    icon: (@Composable () -> Unit)? = null,
-) {
-    val geometry = RemodexTheme.geometry
-
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            icon()
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .background(RemodexTheme.colors.textTertiary, CircleShape),
-            )
-        }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = RemodexTheme.colors.accentBlue,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            color = RemodexTheme.colors.textSecondary,
-            modifier = Modifier.weight(1f),
-        )
     }
 }

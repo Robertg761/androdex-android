@@ -106,6 +106,14 @@ Phase 9 attachment / queued-draft / tool-input implementation note:
 - `android/app/src/test/java/io/androdex/android/ui/turn/ThreadTimelineFormattingTest.kt` now covers the queued-draft metadata chips plus tool-input summary and custom-answer labels so later thread-surface work is less likely to regress quietly.
 - Fresh Android capture anchors for attachment tiles, queued drafts, and structured tool-input cards are still pending; no attached device or local emulator was available in this workspace, so the Phase 9 row should be treated as implementation-complete but phase-gate-incomplete.
 
+Phase 11 alert / overlay / shared-status implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/shared/AndrodexOverlays.kt` now gives approval, error, missing-thread, and thread-maintenance confirmations the same Remodex-style alert shell, icon badge treatment, action row rhythm, and monospace detail blocks instead of a mix of stock Material dialog styling.
+- `android/app/src/main/java/io/androdex/android/ui/shared/ConnectionStatusUi.kt` now rebuilds the status capsule, busy/activity overlays, trusted-pair card, bridge status card, host account card, metadata rows, and status pills as one consistent status-card family with shared badge tone, denser metadata layout, and calmer inline activity surfaces.
+- `android/app/src/main/java/io/androdex/android/ui/state/AndrodexFeatureState.kt` now exposes status-tone metadata so bridge, account, and trusted-pair surfaces stay visually aligned with the same success/accent/warning/error language instead of inferring tone ad hoc in each composable.
+- `android/app/src/test/java/io/androdex/android/ui/shared/ConnectionStatusUiPresentationTest.kt` and `android/app/src/test/java/io/androdex/android/ui/state/AndrodexFeatureStateTest.kt` now cover the new connection-banner presentation and tone mapping so later overlay/status work is less likely to drift quietly.
+- Fresh Android capture anchors for this pass now include `android-device-captures/phase11/phase11-home-connected-status.png`, `android-device-captures/phase11/phase11-settings-status-cards.png`, `android-device-captures/phase11/phase11-thread-activity-banner.png`, and `android-device-captures/phase11/phase11-thread-rollback-confirmation.png`, with matching XML snapshots alongside them for the connected status family, in-thread activity overlay, and maintenance alert treatment.
+
 The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: attachment/tool-input references, approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.

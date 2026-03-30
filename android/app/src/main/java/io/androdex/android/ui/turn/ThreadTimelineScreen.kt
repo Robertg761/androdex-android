@@ -109,6 +109,7 @@ import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.shared.RemodexInputField
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
+import io.androdex.android.ui.shared.ThreadMaintenanceConfirmationDialog
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
@@ -871,20 +872,12 @@ private fun ThreadMaintenanceDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(message) },
-        confirmButton = {
-            Button(onClick = onConfirm) {
-                Text(confirmLabel)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
+    ThreadMaintenanceConfirmationDialog(
+        title = title,
+        message = message,
+        confirmLabel = confirmLabel,
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
     )
 }
 

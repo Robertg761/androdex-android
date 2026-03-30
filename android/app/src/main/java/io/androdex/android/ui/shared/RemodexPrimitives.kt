@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -48,6 +50,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.androdex.android.ui.theme.RemodexMonoFontFamily
 import io.androdex.android.ui.theme.RemodexTheme
 
@@ -580,45 +583,60 @@ internal fun RemodexAlertDialog(
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
 
-    Dialog(onDismissRequest = onDismissRequest) {
-        Surface(
-            modifier = modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(geometry.cornerComposer),
-            color = colors.sheetBackground,
-            border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = geometry.spacing20),
+            contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier.padding(geometry.spacing20),
-                verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+            Surface(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp),
+                shape = RoundedCornerShape(geometry.cornerComposer),
+                color = colors.sheetBackground,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+                    modifier = Modifier.padding(
+                        horizontal = geometry.spacing20,
+                        vertical = geometry.spacing18,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing18),
                 ) {
-                    if (icon != null) {
-                        icon()
-                    }
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = colors.textPrimary,
-                    )
-                    content()
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (dismissButton != null) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            dismissButton()
-                            confirmButton()
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+                    ) {
+                        if (icon != null) {
+                            icon()
                         }
-                    } else {
-                        Row(content = confirmButton)
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.textPrimary,
+                        )
+                        content()
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (dismissButton != null) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                dismissButton()
+                                confirmButton()
+                            }
+                        } else {
+                            Row(content = confirmButton)
+                        }
                     }
                 }
             }

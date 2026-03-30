@@ -66,8 +66,10 @@ class AndrodexFeatureStateTest {
         assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, route.state.connection.status)
         assertNotNull(route.state.trustedPair)
         assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
+        assertEquals(SharedStatusTone.Success, route.state.hostAccount?.tone)
         assertEquals("host@example.com • pro", route.state.hostAccount?.detail)
         assertEquals("Retrying saved pair", route.state.trustedPair?.statusLabel)
+        assertEquals(SharedStatusTone.Accent, route.state.trustedPair?.tone)
         assertEquals("relay.example.com", route.state.trustedPair?.relayLabel)
         assertTrue(route.state.compatibilityMessage.isNullOrBlank())
     }
@@ -163,15 +165,35 @@ class AndrodexFeatureStateTest {
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
         assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
+        assertEquals("Connected", route.state.bridgeStatus.statusLabel)
+        assertEquals(SharedStatusTone.Success, route.state.bridgeStatus.tone)
         assertNotNull(route.state.trustedPair)
         assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
+        assertEquals(SharedStatusTone.Success, route.state.hostAccount?.tone)
         assertEquals("Connected pair", route.state.trustedPair?.statusLabel)
+        assertEquals(SharedStatusTone.Success, route.state.trustedPair?.tone)
         assertNotNull(route.state.projectPicker)
         assertTrue(route.state.projectPicker?.isBrowsing == true)
         assertEquals(
             WorkspaceRowAction.ACTIVATE,
             route.state.projectPicker?.browserEntries?.single()?.action,
         )
+    }
+
+    @Test
+    fun homeRoute_marksRepairAndUpdateBridgeStatesWithWarningTone() {
+        val repairState = AndrodexUiState(
+            connectionStatus = ConnectionStatus.RECONNECT_REQUIRED,
+        ).toHomeScreenUiState()
+
+        val updateState = AndrodexUiState(
+            connectionStatus = ConnectionStatus.UPDATE_REQUIRED,
+        ).toHomeScreenUiState()
+
+        assertEquals("Repair needed", repairState.bridgeStatus.statusLabel)
+        assertEquals(SharedStatusTone.Warning, repairState.bridgeStatus.tone)
+        assertEquals("Update required", updateState.bridgeStatus.statusLabel)
+        assertEquals(SharedStatusTone.Warning, updateState.bridgeStatus.tone)
     }
 
     @Test

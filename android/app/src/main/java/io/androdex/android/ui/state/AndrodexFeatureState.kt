@@ -69,6 +69,14 @@ internal data class ConnectionBannerUiState(
     val fingerprint: String?,
 )
 
+internal enum class SharedStatusTone {
+    Neutral,
+    Accent,
+    Success,
+    Warning,
+    Error,
+}
+
 internal data class BusyUiState(
     val isVisible: Boolean,
     val label: String?,
@@ -103,6 +111,7 @@ internal data class HomeScreenUiState(
 internal data class TrustedPairUiState(
     val title: String,
     val statusLabel: String,
+    val tone: SharedStatusTone = SharedStatusTone.Neutral,
     val name: String,
     val systemName: String?,
     val detail: String?,
@@ -112,6 +121,8 @@ internal data class TrustedPairUiState(
 
 internal data class BridgeStatusUiState(
     val title: String,
+    val statusLabel: String,
+    val tone: SharedStatusTone = SharedStatusTone.Neutral,
     val summary: String,
     val serviceTierMessage: String,
     val threadForkMessage: String,
@@ -121,6 +132,7 @@ internal data class BridgeStatusUiState(
 internal data class HostAccountUiState(
     val title: String,
     val statusLabel: String,
+    val tone: SharedStatusTone = SharedStatusTone.Neutral,
     val detail: String?,
     val providerLabel: String?,
     val sourceLabel: String?,
@@ -994,6 +1006,14 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.UPDATE_REQUIRED -> "Update Needed"
         ConnectionStatus.DISCONNECTED -> "Host Not Connected"
     }
+    val statusLabel = when (connectionStatus) {
+        ConnectionStatus.CONNECTED -> "Connected"
+        ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Syncing"
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying"
+        ConnectionStatus.RECONNECT_REQUIRED -> "Repair needed"
+        ConnectionStatus.UPDATE_REQUIRED -> "Update required"
+        ConnectionStatus.DISCONNECTED -> "Offline"
+    }
     val summary = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Codex stays on the host machine. Android is acting as the paired remote control for threads, projects, approvals, and runtime changes."
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still present. Automatic reconnect stays available while the host or relay comes back."
@@ -1003,6 +1023,8 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
     }
     return BridgeStatusUiState(
         title = title,
+        statusLabel = statusLabel,
+        tone = connectionStatus.toSharedStatusTone(),
         summary = summary,
         serviceTierMessage = if (supportsServiceTier) {
             "Runtime speed tiers are available from Android."
@@ -1058,6 +1080,7 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
             ConnectionStatus.UPDATE_REQUIRED -> "Update required"
             ConnectionStatus.DISCONNECTED -> "Saved pair"
         },
+        tone = connectionStatus.toSharedStatusTone(),
         name = name,
         systemName = snapshot.deviceId.takeIf { it.isNotBlank() },
         detail = detailParts.joinToString(" • ").takeIf { it.isNotBlank() },
@@ -1087,6 +1110,7 @@ private fun HostAccountSnapshot?.toHostAccountUiState(): HostAccountUiState? {
     return HostAccountUiState(
         title = "Host account",
         statusLabel = statusLabel,
+        tone = snapshot.status.toSharedStatusTone(needsReauth = snapshot.needsReauth),
         detail = detail,
         providerLabel = snapshot.authMethod?.trim()?.takeIf { it.isNotEmpty() },
         sourceLabel = when (snapshot.origin) {
@@ -1104,6 +1128,29 @@ private fun HostAccountSnapshot?.toHostAccountUiState(): HostAccountUiState? {
             )
         },
     )
+}
+
+private fun ConnectionStatus.toSharedStatusTone(): SharedStatusTone {
+    return when (this) {
+        ConnectionStatus.CONNECTED -> SharedStatusTone.Success
+        ConnectionStatus.CONNECTING,
+        ConnectionStatus.HANDSHAKING,
+        ConnectionStatus.RETRYING_SAVED_PAIRING -> SharedStatusTone.Accent
+        ConnectionStatus.RECONNECT_REQUIRED,
+        ConnectionStatus.UPDATE_REQUIRED -> SharedStatusTone.Warning
+        ConnectionStatus.DISCONNECTED -> SharedStatusTone.Neutral
+    }
+}
+
+private fun HostAccountStatus.toSharedStatusTone(needsReauth: Boolean?): SharedStatusTone {
+    return when (this) {
+        HostAccountStatus.AUTHENTICATED -> if (needsReauth == true) SharedStatusTone.Warning else SharedStatusTone.Success
+        HostAccountStatus.EXPIRED -> SharedStatusTone.Error
+        HostAccountStatus.LOGIN_PENDING -> SharedStatusTone.Accent
+        HostAccountStatus.NOT_LOGGED_IN,
+        HostAccountStatus.UNAVAILABLE,
+        HostAccountStatus.UNKNOWN -> SharedStatusTone.Neutral
+    }
 }
 
 private fun io.androdex.android.model.HostRateLimitBucket.usageLabel(): String? {

@@ -107,6 +107,8 @@ SwiftUI confirmation dialogs and alerts do not map 1:1 to Material dialogs. The 
 
 It should avoid heavy, card-like dialogs unless the Remodex state actually reads that way.
 
+Phase 11 note: Android now uses a custom Remodex alert shell instead of stock Material confirmation styling, with tuned width, icon badges, and grouped monospace detail blocks. The March 30, 2026 device pass under `android-device-captures/phase11/` now anchors that shell on hardware; the remaining platform difference is mostly the system-managed dialog dimming and window-edge behavior, which can still vary slightly by OEM build even when the card chrome matches closely.
+
 ## 10. Motion Curves
 
 Only a few timings are explicit in source, and many native iOS transitions come from platform defaults. Android cannot perfectly replicate those defaults.

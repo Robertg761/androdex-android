@@ -1,6 +1,6 @@
 # Android Device Capture Log
 
-This file records the verified Android-side screenshots gathered during the live device pass on March 29, 2026.
+This file records the verified Android-side screenshots gathered during the live device passes on March 29-30, 2026.
 
 ## Device And Method
 
@@ -68,6 +68,19 @@ This file records the verified Android-side screenshots gathered during the live
 | `android-device-captures/phase5/phase5-sidebar-groups-expanded.xml` | UI dump for the expanded grouped drawer state | Confirms the updated expanded section rows, timestamps, and visible grouped-thread content. |
 | `android-device-captures/phase5/phase5-sidebar-empty.xml` | UI dump for the empty drawer state | Confirms the `No conversations yet` drawer copy and the supporting empty-state message in the live hierarchy. |
 
+## Phase 11 Alerts / Overlays / Shared Status Captures
+
+| Android artifact | What it shows | Notes |
+| --- | --- | --- |
+| `android-device-captures/phase11/phase11-home-connected-status.png` | Connected home shell with the refreshed status capsule and trusted-host metadata | Captured on March 30, 2026 after reconnecting the Samsung `SM-S928W` to the host-local Androdex workspace, and used as the primary live reference for the home-side Phase 11 status family. |
+| `android-device-captures/phase11/phase11-settings-status-cards.png` | Settings surface with the trusted pair, bridge, and host account cards | Confirms the shared status-card treatment in the denser settings stack after the Phase 11 redesign. |
+| `android-device-captures/phase11/phase11-thread-activity-banner.png` | Real in-thread activity state during context compaction | Captured from a live thread while the host was processing a compaction request so the calmer activity banner and inline run-state surfaces are anchored on device instead of only in code. |
+| `android-device-captures/phase11/phase11-thread-rollback-confirmation.png` | Thread maintenance confirmation dialog | Captured from the thread overflow menu after selecting `Roll back last turn`, providing the live Android reference for the new Remodex-style alert shell, warning badge, and button rhythm. |
+| `android-device-captures/phase11/phase11-home-connected-status.xml` | UI dump for the connected home status reference | Confirms the live capsule labels, trusted-host metadata, and current-project copy from the same Phase 11 home capture. |
+| `android-device-captures/phase11/phase11-settings-status-cards.xml` | UI dump for the settings status-card stack | Useful for checking the bridge/account metadata rows and pill labels without re-running the device pass. |
+| `android-device-captures/phase11/phase11-thread-activity-banner.xml` | UI dump for the in-thread activity overlay state | Confirms the compaction label, thinking state, and stop affordance from the same live run-state frame. |
+| `android-device-captures/phase11/phase11-thread-rollback-confirmation.xml` | UI dump for the maintenance confirmation dialog | Confirms the confirmation copy and action labels from the live Android dialog variant. |
+
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
@@ -75,6 +88,7 @@ This file records the verified Android-side screenshots gathered during the live
 - Verified Phase 2 shell dumps now include `android-device-captures/phase2/phase2-home-shell.xml`, `android-device-captures/phase2/phase2-sidebar-open-shell.xml`, and `android-device-captures/phase2/phase2-thread-shell.xml`.
 - Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`, `android-device-captures/phase4/phase4-home-empty-no-project.xml`, `android-device-captures/phase4/phase4-home-no-project.xml`, and `android-device-captures/phase4/phase4-home-loading.xml`.
 - Verified Phase 5 sidebar dumps now include `android-device-captures/phase5/phase5-sidebar-closed.xml`, `android-device-captures/phase5/phase5-sidebar-open-default.xml`, `android-device-captures/phase5/phase5-sidebar-search-focused.xml`, `android-device-captures/phase5/phase5-sidebar-groups-expanded.xml`, and `android-device-captures/phase5/phase5-sidebar-empty.xml`.
+- Verified Phase 11 alert / overlay / status dumps now include `android-device-captures/phase11/phase11-home-connected-status.xml`, `android-device-captures/phase11/phase11-settings-status-cards.xml`, `android-device-captures/phase11/phase11-thread-activity-banner.xml`, and `android-device-captures/phase11/phase11-thread-rollback-confirmation.xml`.
 - `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
@@ -85,4 +99,4 @@ This file records the verified Android-side screenshots gathered during the live
 - The Android captures are counterpart references for Androdex, not canonical Remodex screenshots.
 - The Phase 5 device pass now has real empty/loading drawer references, but the loading anchor is still a startup-time runtime variant rather than the ideal steady-state overlay card: Android can retain grouped drawer content while the saved-reconnect flow is still rehydrating workspace context behind it.
 - `android-device-captures/phase5/phase5-sidebar-loading.png` is intentionally screenshot-only for now; repeated `uiautomator dump` attempts kept resolving to the settled default drawer instead of the transient saved-reconnect loading frame.
-- We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 1 blockers.
+- We still do not have real-device Android captures yet for Git/runtime sheets, About, approval dialogs, or notification-open recovery variants. Those remain tracked as later-phase/runtime backlog items rather than Phase 11 blockers.
