@@ -60,37 +60,29 @@ function cleanupDirectory(candidatePath) {
   }
 }
 
-test("workspace browser root view lists drives, home, and recent workspaces on Windows", () => {
+test("workspace browser root view lists root, home, and recent workspaces on macOS", () => {
   const browser = createWorkspaceBrowser({
-    platform: "win32",
-    pathModule: path.win32,
-    osModule: { homedir: () => "C:\\Users\\rober" },
-    fsModule: {
-      existsSync(candidate) {
-        return candidate === "C:\\" || candidate === "D:\\";
-      },
-      statSync() {
-        return { isDirectory: () => true };
-      },
-    },
+    platform: "darwin",
+    pathModule: path.posix,
+    osModule: { homedir: () => "/Users/rober" },
   });
 
   const result = browser.listDirectory({
-    activeCwd: "D:\\Client\\SiteB",
-    recentWorkspaces: ["D:\\Client\\SiteB", "C:\\Projects\\AppA"],
+    activeCwd: "/Users/rober/Client/SiteB",
+    recentWorkspaces: ["/Users/rober/Client/SiteB", "/Users/rober/Projects/AppA"],
   });
 
   assert.deepEqual(
     result.rootEntries.map((entry) => entry.path),
-    ["C:\\", "D:\\", "C:\\Users\\rober", "D:\\Client\\SiteB", "C:\\Projects\\AppA"]
+    ["/", "/Users/rober", "/Users/rober/Client/SiteB", "/Users/rober/Projects/AppA"]
   );
-  assert.equal(result.rootEntries.find((entry) => entry.path === "D:\\Client\\SiteB")?.isActive, true);
+  assert.equal(result.rootEntries.find((entry) => entry.path === "/Users/rober/Client/SiteB")?.isActive, true);
 });
 
 test("workspace browser child listing returns only directories", () => {
   const browser = createWorkspaceBrowser({
-    platform: "win32",
-    pathModule: path.win32,
+    platform: "darwin",
+    pathModule: path.posix,
     fsModule: {
       statSync() {
         return { isDirectory: () => true };
@@ -106,16 +98,16 @@ test("workspace browser child listing returns only directories", () => {
   });
 
   const result = browser.listDirectory({
-    requestedPath: "C:\\Projects",
-    activeCwd: "C:\\Projects\\alpha",
+    requestedPath: "/Users/rober/Projects",
+    activeCwd: "/Users/rober/Projects/alpha",
     recentWorkspaces: [],
   });
 
-  assert.equal(result.requestedPath, "C:\\Projects");
-  assert.equal(result.parentPath, "C:\\");
+  assert.equal(result.requestedPath, "/Users/rober/Projects");
+  assert.equal(result.parentPath, "/Users/rober");
   assert.deepEqual(result.entries.map((entry) => entry.path), [
-    "C:\\Projects\\alpha",
-    "C:\\Projects\\beta",
+    "/Users/rober/Projects/alpha",
+    "/Users/rober/Projects/beta",
   ]);
   assert.equal(result.entries[0].isActive, true);
 });
@@ -131,14 +123,14 @@ test("workspace/listRecent marks the active workspace", async () => {
     }),
     (response) => responses.push(JSON.parse(response)),
     {
-      platform: "win32",
+      platform: "darwin",
       workspaceBrowser: createWorkspaceBrowser({
-        platform: "win32",
-        pathModule: path.win32,
+        platform: "darwin",
+        pathModule: path.posix,
       }),
       getWorkspaceState: () => ({
-        activeCwd: "C:\\Projects\\AppA",
-        recentWorkspaces: ["C:\\Projects\\AppA", "D:\\Client\\SiteB"],
+        activeCwd: "/Users/rober/Projects/AppA",
+        recentWorkspaces: ["/Users/rober/Projects/AppA", "/Users/rober/Client/SiteB"],
       }),
     }
   );
@@ -151,8 +143,8 @@ test("workspace/listRecent marks the active workspace", async () => {
       isActive: entry.isActive,
     })),
     [
-      { path: "C:\\Projects\\AppA", isActive: true },
-      { path: "D:\\Client\\SiteB", isActive: false },
+      { path: "/Users/rober/Projects/AppA", isActive: true },
+      { path: "/Users/rober/Client/SiteB", isActive: false },
     ]
   );
 });
@@ -165,18 +157,18 @@ test("workspace/activate delegates to the runtime activator", async () => {
     JSON.stringify({
       id: "2",
       method: "workspace/activate",
-      params: { cwd: "C:\\Projects\\AppA" },
+      params: { cwd: "/Users/rober/Projects/AppA" },
     }),
     (response) => responses.push(JSON.parse(response)),
     {
-      platform: "win32",
+      platform: "darwin",
       activateWorkspace: async ({ cwd }) => {
         activatedPath = cwd;
         return { currentCwd: cwd, workspaceActive: true };
       },
       workspaceBrowser: createWorkspaceBrowser({
-        platform: "win32",
-        pathModule: path.win32,
+        platform: "darwin",
+        pathModule: path.posix,
         fsModule: {
           statSync() {
             return { isDirectory: () => true };
@@ -188,8 +180,8 @@ test("workspace/activate delegates to the runtime activator", async () => {
 
   await flushMicrotasks();
 
-  assert.equal(activatedPath, "C:\\Projects\\AppA");
-  assert.equal(responses[0].result.currentCwd, "C:\\Projects\\AppA");
+  assert.equal(activatedPath, "/Users/rober/Projects/AppA");
+  assert.equal(responses[0].result.currentCwd, "/Users/rober/Projects/AppA");
 });
 
 test("workspace/activate rejects non-absolute paths", async () => {
@@ -203,10 +195,10 @@ test("workspace/activate rejects non-absolute paths", async () => {
     }),
     (response) => responses.push(JSON.parse(response)),
     {
-      platform: "win32",
+      platform: "darwin",
       workspaceBrowser: createWorkspaceBrowser({
-        platform: "win32",
-        pathModule: path.win32,
+        platform: "darwin",
+        pathModule: path.posix,
       }),
       activateWorkspace: async ({ cwd }) => ({ currentCwd: cwd }),
     }

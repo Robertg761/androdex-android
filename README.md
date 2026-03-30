@@ -7,9 +7,9 @@ Android remote client and host bridge for controlling Codex running on your own 
 
 Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is itself a fork of [Remodex](https://github.com/Emanuele-web04/remodex), focused on one workflow:
 
-- run local Codex on the host machine
-- pair the phone once with `androdex pair`
-- optionally activate the current local workspace with `androdex up`
+- run local Codex on a macOS host machine
+- start the launchd-managed host service with `androdex up`
+- pair the phone from the QR that `androdex up` prints
 - control that local Codex session from Android
 
 Androdex keeps Codex running on your host computer, while the phone connects as a paired remote control client over a secure session that can work across networks through a relay.
@@ -79,13 +79,7 @@ If you want to work from this repo today, use the bridge from npm or source, the
 npm install -g androdex@latest
 ```
 
-Start the pairing daemon and print a QR code:
-
-```sh
-androdex pair
-```
-
-Then run the workspace you want Codex to use:
+Start the macOS host service, print a QR code, and bind the current workspace:
 
 ```sh
 androdex up
@@ -156,47 +150,47 @@ base64 -i android/release-keystore.jks | tr -d '\n'
 
 ## Quick Start
 
-1. Install Node.js and Codex CLI on the host machine
-2. Install the bridge package on the host machine
+1. Install Node.js and Codex CLI on the macOS host machine
+2. Install the bridge package on the macOS host machine
 3. The bridge uses `wss://relay.androdex.xyz/relay` by default. Override it only if you want a different relay path:
    - local-only testing: set `ANDRODEX_RELAY=ws://<your-host-ip>:8787/relay`
    - self-hosted cross-network access: set `ANDRODEX_RELAY=wss://<your-domain>/relay`
-4. Run `androdex pair` once on the host and pair from the Android app
-5. Optionally run `androdex up` in a local project directory if you want to seed the first active workspace from the host
+4. Run `androdex up` once on the host and pair from the Android app
+5. Run `androdex up` inside a local project directory any time you want to make that repo the active host workspace
 6. Open the Android app, choose a project, then open or create a thread and send a message
 
 ## Manual Smoke Checklist
 
-Use this after host-side changes to make sure Windows and macOS still behave the same way where they should.
+Use this after host-side changes to make sure the macOS host service and Android client still behave correctly together.
 
-1. Run `androdex pair` and confirm the phone can pair successfully.
-2. Run `androdex up`, choose a workspace, and confirm the host-local Codex session opens in that project.
+1. Run `androdex up` and confirm the phone can pair successfully.
+2. Run `androdex up` inside a workspace and confirm the host-local Codex session opens in that project.
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
 4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
 5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
 6. On an idle thread with history, confirm Android thread maintenance actions can compact context, roll back the last turn, and clean background terminals when the connected host advertises support. `thread/shellCommand` is still intentionally not exposed on Android.
 7. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
-8. Restart the daemon or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
+8. Restart the launchd service or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
 
 ## Commands
 
 ### `androdex up`
 
-Activates the current local project in the daemon and launches `codex app-server` there if needed.
+Ensures the launchd-managed macOS bridge service is running, waits for a fresh pairing QR, prints it, and activates the current local project for `codex app-server`.
 
 You can still use this as the fastest host-side shortcut, but Android can also switch projects remotely after pairing.
 
-### `androdex pair`
+### `androdex start | restart | stop | status`
 
-Asks the daemon for a fresh pairing QR code and pairing payload without changing the current workspace.
+Manages the background macOS bridge service. `status` reports launchd state, pairing status, and log locations.
 
-### `androdex daemon [start|stop|status]`
+### `androdex run | run-service`
 
-Manages the background daemon that keeps the stable host identity and relay presence alive.
+Runs the bridge in the foreground. `run-service` is the launchd entrypoint; `run` is the direct foreground bridge path.
 
 ### `androdex reset-pairing`
 
-Clears the saved trusted-device state so the next `androdex pair` starts a fresh pairing flow.
+Stops the macOS bridge service and clears the saved trusted-device state so the next `androdex up` starts a fresh pairing flow.
 
 ### `androdex resume`
 
@@ -211,7 +205,7 @@ Tails the rollout log for a thread in real time.
 ```text
 [Android client]
         <-> paired relay WebSocket session keyed by hostId <->
-[androdex daemon on host computer]
+[androdex macOS bridge service on host computer]
         <-> stdin/stdout JSON-RPC <->
 [codex app-server]
 ```
@@ -263,7 +257,7 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_RELAY` | Override the relay URL explicitly |
 | `ANDRODEX_DEFAULT_RELAY_URL` | Override the built-in hosted relay fallback without replacing `ANDRODEX_RELAY` priority |
 | `ANDRODEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
-| `ANDRODEX_REFRESH_ENABLED` | Enable or disable desktop refresh explicitly. Windows and macOS default on |
+| `ANDRODEX_REFRESH_ENABLED` | Enable or disable desktop refresh explicitly |
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
@@ -292,13 +286,13 @@ Typical examples:
 
 ```sh
 # Built-in public relay
-androdex pair
+androdex up
 
 # Local network testing
-ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex pair
+ANDRODEX_RELAY=ws://192.168.x.x:8787/relay androdex up
 
 # Public relay you control
-ANDRODEX_RELAY=wss://relay.example.com/relay androdex pair
+ANDRODEX_RELAY=wss://relay.example.com/relay androdex up
 ```
 
 ### Android Push Environment
@@ -313,7 +307,7 @@ If you want completion notifications while the Android app is backgrounded or te
 - If you build the Android app from source and want device-token registration, provide your own FCM config through `ANDRODEX_FCM_APPLICATION_ID`, `ANDRODEX_FCM_PROJECT_ID`, `ANDRODEX_FCM_API_KEY`, and `ANDRODEX_FCM_GCM_SENDER_ID`.
 - Android now mirrors Remodex-style recovery behavior: completion taps reopen the targeted thread when it can be recovered, keep the target pending across reconnect/background restore, and show a missing-thread prompt instead of silently dropping the tap.
 - `ANDRODEX_PUSH_PREVIEW_MAX_CHARS` only affects the bridge-side completion preview cache; it does not change Android UI rendering.
-- Apple-specific launchd or APNs host setup from Remodex is intentionally not part of Androdex.
+- The macOS launchd host model is now part of Androdex. APNs-specific Remodex pieces are still intentionally out of scope.
 - The bundled relay helper is intentionally generic and still expects you to point it at your own notification webhook.
 
 Example:
@@ -351,10 +345,7 @@ For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/
 ## FAQ
 
 **Does this work on Windows?**  
-Yes. This fork is currently aimed at the host-machine-plus-Android workflow, with Windows as the main supported host setup today.
-
-**How does desktop sync work on Windows?**  
-The bridge watches phone-authored thread activity and nudges the installed Codex desktop app onto the same thread. For repeated phone activity on an already-open thread, the Windows path may use a stronger refresh or relaunch workaround so the desktop transcript catches up without reopening the wrong Electron build through a stale `codex://` registration.
+No. The host bridge is macOS-only right now.
 
 **How does desktop sync work on macOS?**  
 The bridge opens the target `codex://threads/<id>` route directly for live phone activity and only escalates to a Codex relaunch on completion when the desktop needs a stronger remount. It intentionally avoids the older Settings-page bounce so macOS does not flicker away from the active thread during phone-authored runs.
@@ -363,10 +354,10 @@ The bridge opens the target `codex://threads/<id>` route directly for live phone
 No. Codex runs on the host machine. The phone is only a paired remote client.
 
 **What happens if I close the terminal running `androdex up`?**  
-The daemon keeps running in the background. You can reactivate a project later with `androdex up`, or switch projects from the Android app once you reconnect.
+The launchd service keeps running in the background. You can reactivate a project later with `androdex up`, or switch projects from the Android app once you reconnect.
 
 **How do I force a clean pairing state?**  
-Run `androdex reset-pairing`, then pair again with `androdex pair`.
+Run `androdex reset-pairing`, then pair again with `androdex up`.
 
 **Can I self-host the relay?**  
 Yes. That is one of the intended public-repo paths.

@@ -63,7 +63,7 @@ function createWorkspaceBrowser({
         return;
       }
 
-      const dedupeKey = platform === "win32" ? normalized.toLowerCase() : normalized;
+      const dedupeKey = normalized;
       if (seen.has(dedupeKey)) {
         return;
       }
@@ -95,23 +95,8 @@ function createWorkspaceBrowser({
   }
 
   function listRootDirectories() {
-    if (platform !== "win32") {
-      const root = pathModule.parse(osModule.homedir()).root || pathModule.sep;
-      return [normalizeAbsolutePath(root)].filter(Boolean);
-    }
-
-    const drives = [];
-    for (let charCode = 65; charCode <= 90; charCode += 1) {
-      const drivePath = `${String.fromCharCode(charCode)}:\\`;
-      try {
-        if (fsModule.existsSync(drivePath) && fsModule.statSync(drivePath).isDirectory()) {
-          drives.push(drivePath);
-        }
-      } catch {
-        // Skip unavailable drives.
-      }
-    }
-    return drives;
+    const root = pathModule.parse(osModule.homedir()).root || pathModule.sep;
+    return [normalizeAbsolutePath(root)].filter(Boolean);
   }
 
   function readChildDirectories(directoryPath) {
@@ -194,7 +179,7 @@ function createWorkspaceBrowser({
 
     const parsed = pathModule.parse(normalized);
     if (arePathsEqual(normalized, parsed.root, platform)) {
-      return platform === "win32" ? normalized.replace(/\\+$/, "") : normalized;
+      return normalized;
     }
 
     return pathModule.basename(normalized) || normalized;
@@ -214,9 +199,7 @@ function arePathsEqual(left, right, platform = process.platform) {
   if (!normalizedLeft || !normalizedRight) {
     return false;
   }
-  return platform === "win32"
-    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
-    : normalizedLeft === normalizedRight;
+  return normalizedLeft === normalizedRight;
 }
 
 function workspaceBrowseError(errorCode, userMessage) {

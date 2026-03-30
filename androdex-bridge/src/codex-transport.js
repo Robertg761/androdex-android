@@ -2,28 +2,27 @@
 // Purpose: Abstracts the Codex-side transport so the bridge can talk to either a spawned app-server or an existing WebSocket endpoint.
 // Layer: CLI helper
 // Exports: createCodexTransport
-// Depends on: child_process, ws, ./platform
+// Depends on: child_process, ws
 
 const { spawn } = require("child_process");
-const { createHostPlatform } = require("./platform");
+const WebSocket = require("ws");
 
 function createCodexTransport({
   endpoint = "",
   env = process.env,
   cwd = "",
-  platformAdapter = createHostPlatform({ env }),
-  spawnFn = spawn,
+  WebSocketImpl = WebSocket,
 } = {}) {
   if (endpoint) {
-    return createWebSocketTransport({ endpoint });
+    return createWebSocketTransport({ endpoint, WebSocketImpl });
   }
 
-  return createSpawnTransport({ env, cwd, platformAdapter, spawnFn });
+  return createSpawnTransport({ env, cwd });
 }
 
-function createSpawnTransport({ env, cwd, platformAdapter, spawnFn }) {
-  const launch = createCodexLaunchPlan({ env, cwd, platformAdapter });
-  const codex = spawnFn(launch.command, launch.args, launch.options);
+function createSpawnTransport({ env, cwd }) {
+  const launch = createCodexLaunchPlan({ env, cwd });
+  const codex = spawn(launch.command, launch.args, launch.options);
 
   let stdoutBuffer = "";
   let stderrBuffer = "";
@@ -48,6 +47,18 @@ function createSpawnTransport({ env, cwd, platformAdapter, spawnFn }) {
     }
 
     listeners.emitClose(code, signal);
+  });
+  codex.stdin.on("error", (error) => {
+    if (didRequestShutdown && isIgnorableStdinShutdownError(error)) {
+      return;
+    }
+
+    if (isIgnorableStdinShutdownError(error)) {
+      return;
+    }
+
+    didReportError = true;
+    listeners.emitError(error);
   });
   // Keep stderr muted during normal operation, but preserve enough output to
   // explain launch failures when the child exits before the bridge can use it.
@@ -74,7 +85,7 @@ function createSpawnTransport({ env, cwd, platformAdapter, spawnFn }) {
       return launch.description;
     },
     send(message) {
-      if (!codex.stdin.writable) {
+      if (!codex.stdin.writable || codex.stdin.destroyed || codex.stdin.writableEnded) {
         return;
       }
 
@@ -91,25 +102,30 @@ function createSpawnTransport({ env, cwd, platformAdapter, spawnFn }) {
     },
     shutdown() {
       didRequestShutdown = true;
-      shutdownCodexProcess(codex, platformAdapter);
+      shutdownCodexProcess(codex);
     },
   };
 }
 
-// Builds a single, platform-aware launch path so the bridge never "guesses"
-// between multiple commands and accidentally starts duplicate runtimes.
-function createCodexLaunchPlan({
-  env = process.env,
-  cwd = "",
-  platformAdapter = createHostPlatform({ env }),
-} = {}) {
-  return platformAdapter.createCodexLaunchPlan({ env, cwd });
+function createCodexLaunchPlan({ env = process.env, cwd = "" }) {
+  return {
+    command: "codex",
+    args: ["app-server"],
+    options: {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...env },
+      cwd: cwd || process.cwd(),
+    },
+    description: "`codex app-server`",
+  };
 }
 
-// Stops the exact process tree we launched on Windows so the shell wrapper
-// does not leave a child Codex process running in the background.
-function shutdownCodexProcess(codex, platformAdapter = createHostPlatform()) {
-  platformAdapter.shutdownCodexProcess(codex);
+function shutdownCodexProcess(codex) {
+  if (codex.killed || codex.exitCode !== null) {
+    return;
+  }
+
+  codex.kill("SIGTERM");
 }
 
 function createCodexCloseError({ code, signal, stderrBuffer, launchDescription }) {
@@ -123,10 +139,15 @@ function appendOutputBuffer(buffer, chunk) {
   return next.slice(-4_096);
 }
 
-function createWebSocketTransport({ endpoint }) {
-  const WebSocket = require("ws");
-  const socket = new WebSocket(endpoint);
+function isIgnorableStdinShutdownError(error) {
+  return error?.code === "EPIPE" || error?.code === "ERR_STREAM_DESTROYED";
+}
+
+function createWebSocketTransport({ endpoint, WebSocketImpl = WebSocket }) {
+  const socket = new WebSocketImpl(endpoint);
   const listeners = createListenerBag();
+  const openState = WebSocketImpl.OPEN ?? WebSocket.OPEN ?? 1;
+  const connectingState = WebSocketImpl.CONNECTING ?? WebSocket.CONNECTING ?? 0;
 
   socket.on("message", (chunk) => {
     const message = typeof chunk === "string" ? chunk : chunk.toString("utf8");
@@ -148,11 +169,9 @@ function createWebSocketTransport({ endpoint }) {
       return endpoint;
     },
     send(message) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        return;
+      if (socket.readyState === openState) {
+        socket.send(message);
       }
-
-      socket.send(message);
     },
     onMessage(handler) {
       listeners.onMessage = handler;
@@ -164,7 +183,7 @@ function createWebSocketTransport({ endpoint }) {
       listeners.onError = handler;
     },
     shutdown() {
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      if (socket.readyState === openState || socket.readyState === connectingState) {
         socket.close();
       }
     },

@@ -1,41 +1,32 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const path = require("path");
+const path = require("node:path");
 
 const { arePathsEqual, createWorkspaceBrowser } = require("../src/workspace-browser");
 
-test("arePathsEqual respects Windows case-insensitive paths and macOS case-sensitive paths", () => {
-  assert.equal(arePathsEqual("C:\\Projects\\AppA", "c:\\projects\\appa", "win32"), true);
+test("arePathsEqual keeps macOS path comparisons case-sensitive", () => {
   assert.equal(arePathsEqual("/Users/rober/Work", "/users/rober/work", "darwin"), false);
 });
 
-test("Windows root browsing dedupes case-variant recent workspaces", () => {
+test("root browsing dedupes repeated recent workspaces on macOS", () => {
   const browser = createWorkspaceBrowser({
-    platform: "win32",
-    pathModule: path.win32,
-    osModule: { homedir: () => "C:\\Users\\rober" },
-    fsModule: {
-      existsSync(candidate) {
-        return candidate === "C:\\";
-      },
-      statSync() {
-        return { isDirectory: () => true };
-      },
-    },
+    platform: "darwin",
+    pathModule: path.posix,
+    osModule: { homedir: () => "/Users/rober" },
   });
 
   const result = browser.listDirectory({
-    activeCwd: "C:\\Projects\\AppA",
+    activeCwd: "/Users/rober/Projects/AppA",
     recentWorkspaces: [
-      "C:\\Projects\\AppA",
-      "c:\\projects\\appa",
-      "D:\\Client\\SiteB",
+      "/Users/rober/Projects/AppA",
+      "/Users/rober/Projects/AppA",
+      "/Users/rober/Client/SiteB",
     ],
   });
 
   assert.deepEqual(
     result.rootEntries.map((entry) => entry.path),
-    ["C:\\", "C:\\Users\\rober", "C:\\Projects\\AppA", "D:\\Client\\SiteB"]
+    ["/", "/Users/rober", "/Users/rober/Projects/AppA", "/Users/rober/Client/SiteB"]
   );
-  assert.equal(result.rootEntries.find((entry) => entry.path === "C:\\Projects\\AppA")?.isActive, true);
+  assert.equal(result.rootEntries.find((entry) => entry.path === "/Users/rober/Projects/AppA")?.isActive, true);
 });

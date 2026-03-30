@@ -1,38 +1,35 @@
 // FILE: index.js
-// Purpose: Small entrypoint wrapper for the daemon-backed bridge runtime.
+// Purpose: Small entrypoint wrapper for bridge lifecycle commands.
 // Layer: CLI entry
-// Exports: daemon-backed CLI actions and thread helpers.
-// Depends on: ./daemon-control, ./daemon-runtime, ./secure-device-state, ./session-state, ./rollout-watch
+// Exports: bridge lifecycle, pairing reset, thread resume/watch, and macOS service helpers.
+// Depends on: ./bridge, ./secure-device-state, ./session-state, ./rollout-watch, ./macos-launch-agent
 
-const {
-  createPairing,
-  getDaemonStatus,
-  startBridge,
-  startDaemonCli,
-  stopDaemonCli,
-} = require("./daemon-control");
-const { runDaemonProcess } = require("./daemon-runtime");
+const { startBridge } = require("./bridge");
 const { resetBridgeDeviceState } = require("./secure-device-state");
 const { openLastActiveThread } = require("./session-state");
 const { watchThreadRollout } = require("./rollout-watch");
-
-async function resetBridgePairing() {
-  try {
-    await stopDaemonCli();
-  } catch {
-    // Reset should still proceed if the daemon is already down or stale.
-  }
-  return resetBridgeDeviceState();
-}
+const { readBridgeConfig } = require("./codex-desktop-refresher");
+const {
+  getMacOSBridgeServiceStatus,
+  printMacOSBridgePairingQr,
+  printMacOSBridgeServiceStatus,
+  resetMacOSBridgePairing,
+  runMacOSBridgeService,
+  startMacOSBridgeService,
+  stopMacOSBridgeService,
+} = require("./macos-launch-agent");
 
 module.exports = {
-  createPairing,
-  getDaemonStatus,
-  openLastActiveThread,
-  resetBridgePairing,
-  runDaemonProcess,
+  getMacOSBridgeServiceStatus,
+  printMacOSBridgePairingQr,
+  printMacOSBridgeServiceStatus,
+  readBridgeConfig,
+  resetMacOSBridgePairing,
   startBridge,
-  startDaemonCli,
-  stopDaemonCli,
+  runMacOSBridgeService,
+  startMacOSBridgeService,
+  stopMacOSBridgeService,
+  resetBridgePairing: resetBridgeDeviceState,
+  openLastActiveThread,
   watchThreadRollout,
 };

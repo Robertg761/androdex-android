@@ -1,105 +1,208 @@
 #!/usr/bin/env node
 // FILE: cli.js
-// Purpose: CLI surface for daemon start, workspace activation, pairing, thread resume, and rollout tailing.
+// Purpose: CLI surface for foreground bridge runs, pairing reset, thread resume, and macOS service control.
 // Layer: CLI binary
 // Exports: none
 // Depends on: ../src
 
 const {
-  createPairing,
-  getDaemonStatus,
-  runDaemonProcess,
+  printMacOSBridgePairingQr,
+  printMacOSBridgeServiceStatus,
+  readBridgeConfig,
+  resetMacOSBridgePairing,
+  runMacOSBridgeService,
   startBridge,
-  startDaemonCli,
-  stopDaemonCli,
+  startMacOSBridgeService,
+  stopMacOSBridgeService,
   resetBridgePairing,
   openLastActiveThread,
   watchThreadRollout,
 } = require("../src");
-const { printQR } = require("../src/qr");
+const { version } = require("../package.json");
 
-const command = process.argv[2] || "up";
-const CLI_NAME = "androdex";
-const CLI_PREFIX = `[${CLI_NAME}]`;
+const defaultDeps = {
+  printMacOSBridgePairingQr,
+  printMacOSBridgeServiceStatus,
+  readBridgeConfig,
+  resetMacOSBridgePairing,
+  runMacOSBridgeService,
+  startBridge,
+  startMacOSBridgeService,
+  stopMacOSBridgeService,
+  resetBridgePairing,
+  openLastActiveThread,
+  watchThreadRollout,
+};
 
-void main().catch((error) => {
-  console.error(`${CLI_PREFIX} ${(error && error.message) || "Command failed."}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  void main();
+}
 
-async function main() {
-  if (command === "__daemon-run") {
-    await runDaemonProcess();
+async function main({
+  argv = process.argv,
+  platform = process.platform,
+  consoleImpl = console,
+  exitImpl = process.exit,
+  deps = defaultDeps,
+} = {}) {
+  const command = argv[2] || "up";
+
+  if (isVersionCommand(command)) {
+    consoleImpl.log(version);
     return;
   }
 
   if (command === "up") {
-    const status = await startBridge();
-    console.log(`${CLI_PREFIX} Active workspace: ${status.currentCwd || process.cwd()}`);
-    console.log(`${CLI_PREFIX} Relay: ${status.relayStatus}`);
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.readBridgeConfig();
+    const result = await deps.startMacOSBridgeService({
+      waitForPairing: true,
+      activeCwd: process.cwd(),
+    });
+    deps.printMacOSBridgePairingQr({
+      pairingSession: result.pairingSession,
+    });
     return;
   }
 
-  if (command === "pair") {
-    const response = await createPairing();
-    printQR(response.pairingPayload);
+  if (command === "run") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.startBridge();
     return;
   }
 
-  if (command === "daemon") {
-    await handleDaemonCommand(process.argv[3] || "status");
+  if (command === "run-service") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.runMacOSBridgeService();
+    return;
+  }
+
+  if (command === "start") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.readBridgeConfig();
+    await deps.startMacOSBridgeService({
+      waitForPairing: false,
+    });
+    consoleImpl.log("[androdex] macOS bridge service is running.");
+    return;
+  }
+
+  if (command === "restart") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.readBridgeConfig();
+    await deps.startMacOSBridgeService({
+      waitForPairing: false,
+    });
+    consoleImpl.log("[androdex] macOS bridge service restarted.");
+    return;
+  }
+
+  if (command === "stop") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.stopMacOSBridgeService();
+    consoleImpl.log("[androdex] macOS bridge service stopped.");
+    return;
+  }
+
+  if (command === "status") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    deps.printMacOSBridgeServiceStatus();
     return;
   }
 
   if (command === "reset-pairing") {
-    await resetBridgePairing();
-    console.log(`${CLI_PREFIX} Cleared the saved pairing state. Run \`${CLI_NAME} pair\` to create a fresh pairing QR.`);
+    try {
+      if (platform === "darwin") {
+        deps.resetMacOSBridgePairing();
+        consoleImpl.log("[androdex] Stopped the macOS bridge service and cleared the saved pairing state. Run `androdex up` to pair again.");
+      } else {
+        deps.resetBridgePairing();
+        consoleImpl.log("[androdex] Cleared the saved pairing state. Run `androdex up` to pair again.");
+      }
+    } catch (error) {
+      consoleImpl.error(`[androdex] ${(error && error.message) || "Failed to clear the saved pairing state."}`);
+      exitImpl(1);
+    }
     return;
   }
 
   if (command === "resume") {
-    const state = openLastActiveThread();
-    console.log(
-      `${CLI_PREFIX} Opened last active thread: ${state.threadId} (${state.source || "unknown"})`
-    );
+    try {
+      const state = deps.openLastActiveThread();
+      consoleImpl.log(
+        `[androdex] Opened last active thread: ${state.threadId} (${state.source || "unknown"})`
+      );
+    } catch (error) {
+      consoleImpl.error(`[androdex] ${(error && error.message) || "Failed to reopen the last thread."}`);
+      exitImpl(1);
+    }
     return;
   }
 
   if (command === "watch") {
-    watchThreadRollout(process.argv[3] || "");
+    try {
+      deps.watchThreadRollout(argv[3] || "");
+    } catch (error) {
+      consoleImpl.error(`[androdex] ${(error && error.message) || "Failed to watch the thread rollout."}`);
+      exitImpl(1);
+    }
     return;
   }
 
-  console.error(`Unknown command: ${command}`);
-  console.error("Usage: androdex up | androdex pair | androdex daemon [start|stop|status] | androdex reset-pairing | androdex resume | androdex watch [threadId]");
-  process.exit(1);
+  consoleImpl.error(`Unknown command: ${command}`);
+  consoleImpl.error(
+    "Usage: androdex up | androdex run | androdex start | androdex restart | androdex stop | androdex status | "
+    + "androdex reset-pairing | androdex resume | androdex watch [threadId] | androdex --version"
+  );
+  exitImpl(1);
 }
 
-async function handleDaemonCommand(subcommand) {
-  if (subcommand === "start") {
-    const response = await startDaemonCli();
-    printDaemonStatus(response.status);
+function assertMacOSCommand(name, {
+  platform = process.platform,
+  consoleImpl = console,
+  exitImpl = process.exit,
+} = {}) {
+  if (platform === "darwin") {
     return;
   }
 
-  if (subcommand === "stop") {
-    await stopDaemonCli();
-    console.log(`${CLI_PREFIX} Daemon stopped.`);
-    return;
-  }
-
-  if (subcommand === "status") {
-    const response = await getDaemonStatus();
-    printDaemonStatus(response.status);
-    return;
-  }
-
-  throw new Error(`Unknown daemon subcommand: ${subcommand}`);
+  consoleImpl.error(`[androdex] \`${name}\` is only available on macOS right now.`);
+  exitImpl(1);
 }
 
-function printDaemonStatus(status) {
-  console.log(`${CLI_PREFIX} Relay: ${status.relayStatus || "unknown"}`);
-  console.log(`${CLI_PREFIX} Host ID: ${status.hostId || "unavailable"}`);
-  console.log(`${CLI_PREFIX} Workspace: ${status.currentCwd || "none"}`);
-  console.log(`${CLI_PREFIX} Workspace active: ${status.workspaceActive ? "yes" : "no"}`);
+function isVersionCommand(value) {
+  return value === "-v" || value === "--v" || value === "-V" || value === "--version" || value === "version";
 }
+
+module.exports = {
+  isVersionCommand,
+  main,
+};

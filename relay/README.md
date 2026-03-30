@@ -165,7 +165,7 @@ wss://your-relay.example/relay
 After that, set the bridge relay explicitly before pairing:
 
 ```sh
-ANDRODEX_RELAY=wss://your-relay.example/relay androdex pair
+ANDRODEX_RELAY=wss://your-relay.example/relay androdex up
 ```
 
 Recommended production shape:

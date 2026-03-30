@@ -71,7 +71,6 @@ function getStatePaths(tempHome) {
   return {
     storeDir,
     primaryFile: path.join(storeDir, "device-state.json"),
-    backupFile: path.join(storeDir, "device-state.backup.json"),
   };
 }
 
@@ -88,19 +87,17 @@ test("trusted phone state is reloaded from persisted bridge device state", () =>
     const reloadedModule = require(modulePath);
     const reloadedState = reloadedModule.loadOrCreateBridgeDeviceState();
 
-    assert.equal(reloadedState.hostId, updatedState.hostId);
     assert.equal(reloadedState.macDeviceId, updatedState.macDeviceId);
     assert.equal(
       reloadedModule.getTrustedPhonePublicKey(reloadedState, "phone-1"),
       "public-key-1"
     );
-    const { primaryFile, backupFile } = getStatePaths(tempHome);
+    const { primaryFile } = getStatePaths(tempHome);
     assert.equal(fs.existsSync(primaryFile), true);
-    assert.equal(fs.existsSync(backupFile), true);
   });
 });
 
-test("resetBridgeDeviceState removes persisted trusted phone state", () => {
+test("resetBridgeDeviceState removes persisted trust and regenerates a fresh identity", () => {
   withTempHome(({ tempHome, secureDeviceState }) => {
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
     secureDeviceState.rememberTrustedPhone(initialState, "phone-2", "public-key-2");
@@ -112,86 +109,31 @@ test("resetBridgeDeviceState removes persisted trusted phone state", () => {
     const reloadedModule = require(modulePath);
     const reloadedState = reloadedModule.loadOrCreateBridgeDeviceState();
 
+    assert.notEqual(reloadedState.macDeviceId, initialState.macDeviceId);
     assert.equal(
       reloadedModule.getTrustedPhonePublicKey(reloadedState, "phone-2"),
       null
     );
-    assert.deepEqual(reloadedState.trustedPhones, {});
-    const { primaryFile, backupFile } = getStatePaths(tempHome);
-    assert.equal(fs.existsSync(primaryFile), true);
-    assert.equal(fs.existsSync(backupFile), true);
-  });
-});
-
-test("reloads host identity and trusted phone state from the backup file when the primary file is missing", () => {
-  withTempHome(({ tempHome, secureDeviceState }) => {
-    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
-    const updatedState = secureDeviceState.rememberTrustedPhone(
-      initialState,
-      "phone-backup",
-      "public-key-backup"
-    );
-    const { primaryFile, backupFile } = getStatePaths(tempHome);
-
-    fs.rmSync(primaryFile, { force: true });
-    assert.equal(fs.existsSync(backupFile), true);
-
-    delete require.cache[modulePath];
-    const reloadedModule = require(modulePath);
-    const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
-
-    assert.equal(recoveredState.hostId, updatedState.hostId);
-    assert.equal(recoveredState.macDeviceId, updatedState.macDeviceId);
-    assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-backup"),
-      "public-key-backup"
-    );
-  });
-});
-
-test("reloads host identity and trusted phone state from the backup file when the primary file is corrupted", () => {
-  withTempHome(({ tempHome, secureDeviceState }) => {
-    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
-    const updatedState = secureDeviceState.rememberTrustedPhone(
-      initialState,
-      "phone-corrupt",
-      "public-key-corrupt"
-    );
     const { primaryFile } = getStatePaths(tempHome);
-
-    fs.writeFileSync(primaryFile, "{not-json", "utf8");
-
-    delete require.cache[modulePath];
-    const reloadedModule = require(modulePath);
-    const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
-
-    assert.equal(recoveredState.hostId, updatedState.hostId);
-    assert.equal(recoveredState.macDeviceId, updatedState.macDeviceId);
-    assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-corrupt"),
-      "public-key-corrupt"
-    );
+    assert.equal(fs.existsSync(primaryFile), true);
   });
 });
 
-test("darwin prefers fresher file state over stale keychain state", () => {
-  let staleKeychainState = "";
+test("corrupted canonical state is recovered from the legacy keychain mirror on darwin", () => {
+  let mirroredState = "";
+
   withTempHome({
     platform: "darwin",
     execFileSyncHandler(execFileSync, command, args, options) {
-      if (
-        command === "security"
-        && Array.isArray(args)
-        && args[0] === "find-generic-password"
-        && args.includes("-w")
-      ) {
-        return staleKeychainState;
+      if (command === "security" && Array.isArray(args) && args[0] === "find-generic-password") {
+        return mirroredState;
       }
-      if (
-        command === "security"
-        && Array.isArray(args)
-        && (args[0] === "add-generic-password" || args[0] === "delete-generic-password")
-      ) {
+      if (command === "security" && Array.isArray(args) && args[0] === "add-generic-password") {
+        mirroredState = args.at(-1);
+        return "";
+      }
+      if (command === "security" && Array.isArray(args) && args[0] === "delete-generic-password") {
+        mirroredState = "";
         return "";
       }
       return execFileSync(command, args, options);
@@ -200,33 +142,63 @@ test("darwin prefers fresher file state over stale keychain state", () => {
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
     const updatedState = secureDeviceState.rememberTrustedPhone(
       initialState,
-      "phone-file",
-      "public-key-file"
+      "phone-corrupt",
+      "public-key-corrupt"
     );
     const { primaryFile } = getStatePaths(tempHome);
-    const staleState = {
-      ...updatedState,
-      trustedPhones: {
-        "phone-stale": "public-key-stale",
-      },
-    };
-    staleKeychainState = JSON.stringify(staleState);
+    mirroredState = JSON.stringify(updatedState, null, 2);
 
-    fs.writeFileSync(primaryFile, JSON.stringify(updatedState, null, 2), "utf8");
+    fs.writeFileSync(primaryFile, "{not-json", "utf8");
 
     delete require.cache[modulePath];
     const reloadedModule = require(modulePath);
     const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
 
-    assert.equal(recoveredState.hostId, updatedState.hostId);
+    assert.equal(recoveredState.macDeviceId, updatedState.macDeviceId);
     assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-file"),
-      "public-key-file"
+      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-corrupt"),
+      "public-key-corrupt"
     );
-    assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-stale"),
-      null
-    );
+  });
+});
+
+test("resolveBridgeRelaySession issues a fresh relay session id without changing the host identity", () => {
+  withTempHome(({ secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const firstSession = secureDeviceState.resolveBridgeRelaySession(initialState);
+    const secondSession = secureDeviceState.resolveBridgeRelaySession(initialState);
+
+    assert.equal(firstSession.deviceState.macDeviceId, initialState.macDeviceId);
+    assert.equal(secondSession.deviceState.macDeviceId, initialState.macDeviceId);
+    assert.notEqual(firstSession.sessionId, secondSession.sessionId);
+    assert.equal(firstSession.isPersistent, false);
+  });
+});
+
+test("loadOrCreateBridgeDeviceState does not require a legacy keychain read when the canonical file exists", () => {
+  let keychainReadAttempts = 0;
+
+  withTempHome({
+    platform: "darwin",
+    execFileSyncHandler(execFileSync, command, args, options) {
+      if (command === "security" && Array.isArray(args) && args[0] === "find-generic-password") {
+        keychainReadAttempts += 1;
+        throw new Error("simulated keychain stall");
+      }
+      if (command === "security" && Array.isArray(args) && args[0] === "add-generic-password") {
+        return "";
+      }
+      return execFileSync(command, args, options);
+    },
+  }, ({ secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    assert.equal(keychainReadAttempts, 1);
+
+    keychainReadAttempts = 0;
+    const reloadedState = secureDeviceState.loadOrCreateBridgeDeviceState();
+
+    assert.equal(reloadedState.macDeviceId, initialState.macDeviceId);
+    assert.equal(keychainReadAttempts, 0);
   });
 });
 
@@ -241,10 +213,6 @@ test("rememberTrustedPhone trims identifiers and replaces older trusted phone en
 
     assert.equal(
       secureDeviceState.getTrustedPhonePublicKey(updatedState, "phone-trimmed"),
-      "public-key-trimmed"
-    );
-    assert.equal(
-      secureDeviceState.getTrustedPhonePublicKey(updatedState, "  phone-trimmed  "),
       "public-key-trimmed"
     );
     assert.deepEqual(Object.keys(updatedState.trustedPhones), ["phone-trimmed"]);

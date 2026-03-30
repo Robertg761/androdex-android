@@ -1,7 +1,7 @@
 // FILE: secure-device-state.js
-// Purpose: Persists the bridge device identity and trusted phone registry for E2EE pairing.
+// Purpose: Persists canonical bridge identity and trusted-phone state for local QR pairing.
 // Layer: CLI helper
-// Exports: loadOrCreateBridgeDeviceState, resetBridgeDeviceState, rememberTrustedPhone, getTrustedPhonePublicKey
+// Exports: loadOrCreateBridgeDeviceState, resetBridgeDeviceState, rememberTrustedPhone, getTrustedPhonePublicKey, resolveBridgeRelaySession
 // Depends on: fs, os, path, crypto, child_process
 
 const fs = require("fs");
@@ -10,19 +10,37 @@ const path = require("path");
 const { randomUUID, generateKeyPairSync } = require("crypto");
 const { execFileSync } = require("child_process");
 
-const STORE_DIR = path.join(os.homedir(), ".androdex");
-const STORE_FILE = path.join(STORE_DIR, "device-state.json");
-const STORE_BACKUP_FILE = path.join(STORE_DIR, "device-state.backup.json");
+const DEFAULT_STORE_DIR = path.join(os.homedir(), ".androdex");
 const KEYCHAIN_SERVICE = "io.androdex.bridge.device-state";
 const KEYCHAIN_ACCOUNT = "default";
+const KEYCHAIN_COMMAND_TIMEOUT_MS = 1_500;
+let hasLoggedMismatch = false;
 
 function loadOrCreateBridgeDeviceState() {
-  const existingState = readBridgeDeviceState();
-  if (existingState) {
-    if (!existingState.hostId || existingState.version < 2) {
-      writeBridgeDeviceState(existingState);
+  const fileRecord = readCanonicalFileStateRecord();
+
+  if (fileRecord.state) {
+    return fileRecord.state;
+  }
+
+  if (fileRecord.error) {
+    const keychainRecord = readKeychainStateRecord();
+    if (keychainRecord.state) {
+      warnOnce("[androdex] Recovering the canonical device-state.json from the legacy Keychain pairing mirror.");
+      writeBridgeDeviceState(keychainRecord.state);
+      return keychainRecord.state;
     }
-    return existingState;
+    throw corruptedStateError("device-state.json", fileRecord.error);
+  }
+
+  const keychainRecord = readKeychainStateRecord();
+  if (keychainRecord.error) {
+    throw corruptedStateError("legacy Keychain bridge state", keychainRecord.error);
+  }
+
+  if (keychainRecord.state) {
+    writeBridgeDeviceState(keychainRecord.state);
+    return keychainRecord.state;
   }
 
   const nextState = createBridgeDeviceState();
@@ -31,30 +49,39 @@ function loadOrCreateBridgeDeviceState() {
 }
 
 function resetBridgeDeviceState() {
-  const removedFileState = deleteStoredDeviceStateString();
-  const removedKeychainState = deleteKeychainStateString();
+  const removedCanonicalFile = deleteCanonicalFileState();
+  const removedKeychainMirror = deleteKeychainStateString();
   return {
-    hadState: removedFileState || removedKeychainState,
-    removedFileState,
-    removedKeychainState,
+    hadState: removedCanonicalFile || removedKeychainMirror,
+    removedCanonicalFile,
+    removedKeychainMirror,
   };
 }
 
-function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey) {
+function resolveBridgeRelaySession(state) {
+  return {
+    deviceState: state,
+    isPersistent: false,
+    sessionId: randomUUID(),
+  };
+}
+
+function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { persist = true } = {}) {
   const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
   const normalizedPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
   if (!normalizedDeviceId || !normalizedPublicKey) {
     return state;
   }
 
-  // Androdex supports one trusted mobile client per bridge state, so a new trust record replaces old ones.
-  const nextState = {
+  const nextState = normalizeBridgeDeviceState({
     ...state,
     trustedPhones: {
       [normalizedDeviceId]: normalizedPublicKey,
     },
-  };
-  writeBridgeDeviceState(nextState);
+  });
+  if (persist) {
+    writeBridgeDeviceState(nextState);
+  }
   return nextState;
 }
 
@@ -72,8 +99,7 @@ function createBridgeDeviceState() {
   const publicJwk = publicKey.export({ format: "jwk" });
 
   return {
-    version: 2,
-    hostId: randomUUID(),
+    version: 1,
     macDeviceId: randomUUID(),
     macIdentityPublicKey: base64UrlToBase64(publicJwk.x),
     macIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
@@ -81,89 +107,70 @@ function createBridgeDeviceState() {
   };
 }
 
-function readBridgeDeviceState() {
-  for (const rawState of readStoredDeviceStateStrings()) {
-    try {
-      return normalizeBridgeDeviceState(JSON.parse(rawState));
-    } catch {
-      // Try the next persisted copy before giving up and minting a new host identity.
-    }
+function readCanonicalFileStateRecord() {
+  const storeFile = resolveStoreFile();
+  if (!fs.existsSync(storeFile)) {
+    return { state: null, error: null };
   }
-  return null;
+
+  try {
+    return {
+      state: normalizeBridgeDeviceState(JSON.parse(fs.readFileSync(storeFile, "utf8"))),
+      error: null,
+    };
+  } catch (error) {
+    return { state: null, error };
+  }
+}
+
+function readKeychainStateRecord() {
+  const rawState = readKeychainStateString();
+  if (!rawState) {
+    return { state: null, error: null };
+  }
+
+  try {
+    return {
+      state: normalizeBridgeDeviceState(JSON.parse(rawState)),
+      error: null,
+    };
+  } catch (error) {
+    return { state: null, error };
+  }
 }
 
 function writeBridgeDeviceState(state) {
   const serialized = JSON.stringify(state, null, 2);
-  if (process.platform === "darwin") {
-    writeKeychainStateString(serialized);
-  }
-
-  writeStateFile(STORE_FILE, serialized);
-  try {
-    writeStateFile(STORE_BACKUP_FILE, serialized);
-  } catch {
-    // Keep the primary identity state even if the recovery copy cannot be refreshed.
-  }
+  writeCanonicalFileStateString(serialized);
+  writeKeychainStateString(serialized);
 }
 
-function readStoredDeviceStateStrings() {
-  const candidates = [];
-  const primaryState = readStateFile(STORE_FILE);
-  if (primaryState) {
-    candidates.push(primaryState);
-  }
-
-  const backupState = readStateFile(STORE_BACKUP_FILE);
-  if (backupState) {
-    candidates.push(backupState);
-  }
-
-  if (process.platform === "darwin") {
-    const keychainValue = readKeychainStateString();
-    if (keychainValue) {
-      candidates.push(keychainValue);
-    }
-  }
-
-  return candidates;
-}
-
-function writeStateFile(filePath, serialized) {
-  fs.mkdirSync(STORE_DIR, { recursive: true });
-  const tempFilePath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempFilePath, serialized, { mode: 0o600 });
+function writeCanonicalFileStateString(serialized) {
+  const storeDir = resolveStoreDir();
+  const storeFile = resolveStoreFile();
+  fs.mkdirSync(storeDir, { recursive: true });
+  fs.writeFileSync(storeFile, serialized, { mode: 0o600 });
   try {
-    fs.chmodSync(tempFilePath, 0o600);
+    fs.chmodSync(storeFile, 0o600);
   } catch {
     // Best-effort only on filesystems that support POSIX modes.
   }
-
-  try {
-    fs.rmSync(filePath, { force: true });
-    fs.renameSync(tempFilePath, filePath);
-  } catch (error) {
-    try {
-      fs.rmSync(tempFilePath, { force: true });
-    } catch {
-      // Ignore temp cleanup failures and surface the original write problem.
-    }
-    throw error;
-  }
 }
 
-function readStateFile(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
+function resolveStoreDir() {
+  return normalizeNonEmptyString(process.env.ANDRODEX_DEVICE_STATE_DIR) || DEFAULT_STORE_DIR;
+}
 
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
+function resolveStoreFile() {
+  return normalizeNonEmptyString(process.env.ANDRODEX_DEVICE_STATE_FILE)
+    || path.join(resolveStoreDir(), "device-state.json");
 }
 
 function readKeychainStateString() {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+
   try {
     return execFileSync(
       "security",
@@ -175,7 +182,11 @@ function readKeychainStateString() {
         KEYCHAIN_ACCOUNT,
         "-w",
       ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: KEYCHAIN_COMMAND_TIMEOUT_MS,
+      }
     ).trim();
   } catch {
     return null;
@@ -183,6 +194,10 @@ function readKeychainStateString() {
 }
 
 function writeKeychainStateString(value) {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+
   try {
     execFileSync(
       "security",
@@ -196,7 +211,10 @@ function writeKeychainStateString(value) {
         "-w",
         value,
       ],
-      { stdio: ["ignore", "ignore", "ignore"] }
+      {
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: KEYCHAIN_COMMAND_TIMEOUT_MS,
+      }
     );
     return true;
   } catch {
@@ -204,11 +222,11 @@ function writeKeychainStateString(value) {
   }
 }
 
-function deleteStoredDeviceStateString() {
-  const existed = fs.existsSync(STORE_FILE) || fs.existsSync(STORE_BACKUP_FILE);
+function deleteCanonicalFileState() {
+  const storeFile = resolveStoreFile();
+  const existed = fs.existsSync(storeFile);
   try {
-    fs.rmSync(STORE_FILE, { force: true });
-    fs.rmSync(STORE_BACKUP_FILE, { force: true });
+    fs.rmSync(storeFile, { force: true });
     return existed;
   } catch {
     return false;
@@ -230,7 +248,10 @@ function deleteKeychainStateString() {
         "-a",
         KEYCHAIN_ACCOUNT,
       ],
-      { stdio: ["ignore", "ignore", "ignore"] }
+      {
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: KEYCHAIN_COMMAND_TIMEOUT_MS,
+      }
     );
     return true;
   } catch {
@@ -239,7 +260,6 @@ function deleteKeychainStateString() {
 }
 
 function normalizeBridgeDeviceState(rawState) {
-  const hostId = normalizeNonEmptyString(rawState?.hostId) || randomUUID();
   const macDeviceId = normalizeNonEmptyString(rawState?.macDeviceId);
   const macIdentityPublicKey = normalizeNonEmptyString(rawState?.macIdentityPublicKey);
   const macIdentityPrivateKey = normalizeNonEmptyString(rawState?.macIdentityPrivateKey);
@@ -261,8 +281,7 @@ function normalizeBridgeDeviceState(rawState) {
   }
 
   return {
-    version: 2,
-    hostId,
+    version: 1,
     macDeviceId,
     macIdentityPublicKey,
     macIdentityPrivateKey,
@@ -270,20 +289,26 @@ function normalizeBridgeDeviceState(rawState) {
   };
 }
 
-function normalizeNonEmptyString(value) {
-  if (typeof value !== "string") {
-    return "";
+function corruptedStateError(source, cause) {
+  const error = new Error(`Saved bridge identity state is corrupted in ${source}. Reset pairing to generate a fresh Androdex host identity.`);
+  error.cause = cause;
+  return error;
+}
+
+function warnOnce(message) {
+  if (hasLoggedMismatch) {
+    return;
   }
-  return value.trim();
+  hasLoggedMismatch = true;
+  console.warn(message);
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function base64UrlToBase64(value) {
-  if (typeof value !== "string" || value.length === 0) {
-    return "";
-  }
-
-  const padded = `${value}${"=".repeat((4 - (value.length % 4 || 4)) % 4)}`;
-  return padded.replace(/-/g, "+").replace(/_/g, "/");
+  return String(value).replace(/-/g, "+").replace(/_/g, "/");
 }
 
 module.exports = {
@@ -291,4 +316,5 @@ module.exports = {
   loadOrCreateBridgeDeviceState,
   rememberTrustedPhone,
   resetBridgeDeviceState,
+  resolveBridgeRelaySession,
 };

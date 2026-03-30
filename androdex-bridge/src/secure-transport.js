@@ -44,7 +44,6 @@ function createBridgeSecureTransport({
 } = {}) {
   const stableHostId = normalizeNonEmptyString(hostId)
     || normalizeNonEmptyString(sessionId)
-    || normalizeNonEmptyString(deviceState?.hostId)
     || randomUUID();
   let currentDeviceState = deviceState;
   let pendingHandshake = null;

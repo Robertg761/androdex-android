@@ -5,4 +5,6 @@
 // Exports: none
 // Depends on: ./cli
 
-require("./cli");
+const { main } = require("./cli");
+
+void main();

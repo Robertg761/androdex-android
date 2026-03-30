@@ -1,14 +1,13 @@
 // FILE: session-state.js
-// Purpose: Persists the latest active Androdex thread so the user can reopen it on the host for handoff.
+// Purpose: Persists the latest active Androdex thread so the user can reopen it on the Mac for handoff.
 // Layer: CLI helper
 // Exports: rememberActiveThread, openLastActiveThread, readLastActiveThread
-// Depends on: fs, os, path, ./codex-desktop-launcher, ./platform
+// Depends on: fs, os, path, child_process
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { openCodexDesktopTargetSync } = require("./codex-desktop-launcher");
-const { createHostPlatform } = require("./platform");
+const { execFileSync } = require("child_process");
 
 const STATE_DIR = path.join(os.homedir(), ".androdex");
 const STATE_FILE = path.join(STATE_DIR, "last-thread.json");
@@ -30,10 +29,7 @@ function rememberActiveThread(threadId, source) {
   return true;
 }
 
-function openLastActiveThread({
-  bundleId = DEFAULT_BUNDLE_ID,
-  platformAdapter = createHostPlatform(),
-} = {}) {
+function openLastActiveThread({ bundleId = DEFAULT_BUNDLE_ID } = {}) {
   const state = readState();
   const threadId = state?.threadId;
   if (!threadId) {
@@ -41,11 +37,7 @@ function openLastActiveThread({
   }
 
   const targetUrl = `codex://threads/${threadId}`;
-  openCodexDesktopTargetSync({
-    targetUrl,
-    bundleId,
-    platformAdapter,
-  });
+  execFileSync("open", ["-b", bundleId, targetUrl], { stdio: "ignore" });
   return state;
 }
 

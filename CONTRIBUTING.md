@@ -2,7 +2,7 @@
 
 Thanks for taking a look.
 
-Androdex is maintained as a fork focused on the Windows host + Android client workflow, with Codex running locally on the host and remote access supported through relay-based connections. Please keep changes aligned with that direction.
+Androdex is maintained as a fork focused on the macOS host + Android client workflow, with Codex running locally on the host and remote access supported through relay-based connections. Please keep changes aligned with that direction.
 
 ## Project direction
 

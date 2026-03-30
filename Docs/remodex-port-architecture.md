@@ -10,7 +10,7 @@ Compared on 2026-03-25 using:
 This document describes how to move Androdex closer to Remodex structurally without losing Androdex's product constraints:
 
 - host-local Codex execution remains the core runtime model
-- Android stays a paired remote client for a host machine, including Windows-safe behavior
+- Android stays a paired remote client for a macOS host machine
 - timeline correctness must preserve the `AGENTS.md` guardrails around turn fallback, reconnect recovery, and item-aware history merge
 - work should stay incremental and non-destructive so the app remains working during the refactor
 
