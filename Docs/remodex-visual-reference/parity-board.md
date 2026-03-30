@@ -98,13 +98,21 @@ Phase 8 composer implementation note:
 - `android/app/src/test/java/io/androdex/android/ui/turn/ComposerBarPresentationTest.kt` now covers the accessory button state machine and the icon-vs-text send control presentation so later composer work is less likely to drift.
 - Fresh Android capture anchors for composer idle, focused, armed, and autocomplete states are still pending; no attached device or local emulator was available in this workspace, so the composer row should be treated as implementation-complete but phase-gate-incomplete.
 
-The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
+Phase 9 attachment / queued-draft / tool-input implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/turn/AttachmentTiles.kt` now uses tighter Remodex-style attachment tiles with updated corner geometry, a compact remove affordance, clearer loading treatment, and a quieter failed-state shell instead of the earlier stock thumbnail cards.
+- `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` now restyles queued drafts and structured tool-input requests as grouped Remodex surfaces with pill-based metadata, inline restore/pause/resume controls, per-question option rows, and denser multi-question grouping above the composer.
+- `android/app/src/main/java/io/androdex/android/ui/shared/RemodexPrimitives.kt` now lets the shared Remodex input field handle secure tool-input answers without falling back to Material outlined text fields.
+- `android/app/src/test/java/io/androdex/android/ui/turn/ThreadTimelineFormattingTest.kt` now covers the queued-draft metadata chips plus tool-input summary and custom-answer labels so later thread-surface work is less likely to regress quietly.
+- Fresh Android capture anchors for attachment tiles, queued drafts, and structured tool-input cards are still pending; no attached device or local emulator was available in this workspace, so the Phase 9 row should be treated as implementation-complete but phase-gate-incomplete.
+
+The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: attachment/tool-input references, approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.
 
 ## Highest-Risk Visual Mismatches To Fix First
 
-1. Composer verification follow-up. The Android composer now tracks the floating shell, chips, and autocomplete structure much more closely in code, but a later capture pass should still archive idle/focused/armed/autocomplete references and compare the inline overlay layering against Remodex.
+1. Composer and input-surface verification follow-up. The Android composer, attachment tiles, queued drafts, and structured tool-input cards now track the Remodex layout much more closely in code, but a later capture pass should still archive idle/focused/armed/autocomplete plus Phase 9 input-surface references and compare their overlay layering against Remodex.
 2. Thread shell artifact follow-up. The Android thread header and shell spacing now track the Remodex structure much more closely in code, but a later device pass should still archive refreshed running and fork-banner references alongside the new idle capture.
 3. Color semantics. Remodex leans on iOS semantic fills and glass/translucency; Androdex still reads like Material 3 with iOS-colored paint on top.
 4. Sidebar reconnect loading fidelity. The refreshed drawer now has real empty/loading Android anchors, but the saved-reconnect loading variant can still momentarily retain grouped drawer content while the home shell is rehydrating workspace context behind it.

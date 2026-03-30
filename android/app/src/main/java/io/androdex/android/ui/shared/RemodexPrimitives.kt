@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -479,6 +480,7 @@ internal fun RemodexInputField(
     minLines: Int = 1,
     mono: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
@@ -517,6 +519,7 @@ internal fun RemodexInputField(
                     onValueChange = onValueChange,
                     minLines = minLines,
                     keyboardOptions = keyboardOptions,
+                    visualTransformation = visualTransformation,
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         color = colors.textPrimary,
                         fontFamily = if (mono) RemodexMonoFontFamily else MaterialTheme.typography.bodySmall.fontFamily,

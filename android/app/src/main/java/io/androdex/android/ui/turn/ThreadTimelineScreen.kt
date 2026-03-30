@@ -101,8 +101,12 @@ import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.shared.RemodexButton
+import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.RemodexDivider
 import io.androdex.android.ui.shared.RemodexGroupedSurface
 import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.RemodexInputField
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
@@ -259,6 +263,39 @@ internal fun findingReferenceText(finding: CodeCommentDirectiveFinding): String 
             }
         }
     }
+}
+
+internal fun queuedDraftMetadataLabels(draft: QueuedTurnDraft): List<String> {
+    val labels = mutableListOf<String>()
+    if (draft.collaborationMode == CollaborationModeKind.PLAN) {
+        labels += "Plan"
+    }
+    if (draft.subagentsSelectionEnabled) {
+        labels += "Subagents"
+    }
+    if (draft.attachments.isNotEmpty()) {
+        labels += if (draft.attachments.size == 1) "1 photo" else "${draft.attachments.size} photos"
+    }
+    if (draft.mentionedFiles.isNotEmpty()) {
+        labels += if (draft.mentionedFiles.size == 1) "1 file" else "${draft.mentionedFiles.size} files"
+    }
+    if (draft.mentionedSkills.isNotEmpty()) {
+        labels += if (draft.mentionedSkills.size == 1) "1 skill" else "${draft.mentionedSkills.size} skills"
+    }
+    return labels
+}
+
+internal fun queuedDraftSummaryText(draftCount: Int, isPaused: Boolean): String {
+    val countLabel = if (draftCount == 1) "1 queued draft" else "$draftCount queued drafts"
+    return if (isPaused) "$countLabel paused" else "$countLabel waiting"
+}
+
+internal fun pendingToolInputSummary(requestCount: Int): String {
+    return if (requestCount == 1) "1 request waiting" else "$requestCount requests waiting"
+}
+
+internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): String {
+    return if (question.options.isEmpty()) "Answer" else "Other answer"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -872,158 +909,89 @@ private fun QueuedDraftsCard(
         tonalColor = colors.secondarySurface.copy(alpha = 0.9f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing14),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "Queued follow-ups",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = colors.textPrimary,
+                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing4)) {
+                    RemodexPill(
+                        label = if (canResumeQueue) "Paused queue" else "Queued drafts",
+                        style = if (canResumeQueue) RemodexPillStyle.Warning else RemodexPillStyle.Neutral,
                     )
                     Text(
-                        text = "${drafts.size} waiting",
+                        text = "Queued follow-ups",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = queuedDraftSummaryText(
+                            draftCount = drafts.size,
+                            isPaused = canResumeQueue,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textSecondary,
                     )
                 }
 
-                when {
-                    canResumeQueue -> {
-                        TextButton(onClick = onResumeQueue) {
-                            Text("Resume")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    when {
+                        canResumeQueue -> {
+                            InlineActionPill(
+                                label = "Resume",
+                                onClick = onResumeQueue,
+                                accent = colors.accentBlue,
+                            )
                         }
-                    }
 
-                    canPauseQueue -> {
-                        TextButton(onClick = onPauseQueue) {
-                            Text("Pause")
+                        canPauseQueue -> {
+                            InlineActionPill(
+                                label = "Pause",
+                                onClick = onPauseQueue,
+                                accent = colors.accentOrange,
+                            )
                         }
                     }
                 }
             }
 
             queuePauseMessage?.let { message ->
-                Surface(
-                    color = colors.accentOrange.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(geometry.cornerMedium),
+                RemodexGroupedSurface(
+                    cornerRadius = geometry.cornerMedium,
+                    tonalColor = colors.accentOrange.copy(alpha = 0.08f),
                 ) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textPrimary,
-                        modifier = Modifier.padding(horizontal = geometry.spacing10, vertical = geometry.spacing8),
-                    )
+                    Column(
+                        modifier = Modifier.padding(horizontal = geometry.spacing12, vertical = geometry.spacing10),
+                        verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                    ) {
+                        RemodexPill(
+                            label = "Needs attention",
+                            style = RemodexPillStyle.Warning,
+                        )
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textPrimary,
+                        )
+                    }
                 }
             }
 
             drafts.forEachIndexed { index, draft ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        color = colors.selectedRowFill,
-                        shape = CircleShape,
-                        modifier = Modifier.size(22.dp),
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            Text(
-                                text = "${index + 1}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = colors.textSecondary,
-                            )
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (draft.collaborationMode == CollaborationModeKind.PLAN) {
-                                Surface(
-                                    color = colors.accentGreen.copy(alpha = 0.14f),
-                                    shape = RoundedCornerShape(999.dp),
-                                ) {
-                                    Text(
-                                        text = "PLAN",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colors.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                            if (draft.subagentsSelectionEnabled) {
-                                Surface(
-                                    color = colors.accentBlue.copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(999.dp),
-                                ) {
-                                    Text(
-                                        text = "SUBAGENTS",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colors.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                            if (draft.attachments.isNotEmpty()) {
-                                Surface(
-                                    color = colors.selectedRowFill,
-                                    shape = RoundedCornerShape(999.dp),
-                                ) {
-                                    Text(
-                                        text = if (draft.attachments.size == 1) "1 PHOTO" else "${draft.attachments.size} PHOTOS",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colors.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                        }
-                        Text(
-                            text = applyingSubagentsSelection(draft.text, draft.subagentsSelectionEnabled),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.textPrimary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    TextButton(
-                        onClick = { onRestoreDraft(draft.id) },
-                        enabled = canRestoreDrafts,
-                    ) {
-                        Text("Restore")
-                    }
-
-                    TextButton(
-                        onClick = { onRemoveDraft(draft.id) },
-                    ) {
-                        Text("Remove")
-                    }
-                }
-
-                if (index < drafts.lastIndex) {
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(colors.hairlineDivider.copy(alpha = 0.8f)),
-                    )
-                }
+                QueuedDraftRowCard(
+                    index = index,
+                    draft = draft,
+                    canRestoreDraft = canRestoreDrafts,
+                    onRestoreDraft = onRestoreDraft,
+                    onRemoveDraft = onRemoveDraft,
+                )
             }
         }
     }
@@ -1044,9 +1012,27 @@ private fun PendingToolInputsCard(
         tonalColor = colors.secondarySurface.copy(alpha = 0.9f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
+            modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing14),
             verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing4)) {
+                RemodexPill(
+                    label = "Tool input",
+                    style = RemodexPillStyle.Accent,
+                )
+                Text(
+                    text = "Action requested",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = pendingToolInputSummary(requests.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
+
             requests.forEachIndexed { index, request ->
                 ToolInputRequestCard(
                     request = request,
@@ -1073,46 +1059,70 @@ private fun ToolInputRequestCard(
     onSubmit: (String) -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = request.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.textPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            request.message?.takeIf { it.isNotBlank() }?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textSecondary,
-                )
-            }
-        }
-
-        request.questions.forEach { question ->
-            ToolInputQuestionCard(
-                requestId = request.requestId,
-                question = question,
-                enabled = !request.isSubmitting,
-                onAnswerChanged = onAnswerChanged,
-            )
-        }
-
-        Button(
-            onClick = { onSubmit(request.requestId) },
-            enabled = request.submitEnabled && !request.isSubmitting,
-            modifier = Modifier.align(Alignment.End),
+    RemodexGroupedSurface(
+        cornerRadius = geometry.cornerMedium,
+        tonalColor = colors.raisedSurface.copy(alpha = 0.82f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing14),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
-            if (request.isSubmitting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing6)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = request.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    RemodexPill(
+                        label = if (request.questions.size == 1) "1 question" else "${request.questions.size} questions",
+                        style = RemodexPillStyle.Neutral,
+                    )
+                }
+                request.message?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                    )
+                }
+            }
+
+            request.questions.forEachIndexed { index, question ->
+                ToolInputQuestionCard(
+                    requestId = request.requestId,
+                    question = question,
+                    enabled = !request.isSubmitting,
+                    onAnswerChanged = onAnswerChanged,
                 )
-            } else {
-                Text("Submit")
+                if (index < request.questions.lastIndex) {
+                    RemodexDivider(color = colors.hairlineDivider.copy(alpha = 0.9f))
+                }
+            }
+
+            RemodexButton(
+                onClick = { onSubmit(request.requestId) },
+                enabled = request.submitEnabled && !request.isSubmitting,
+                modifier = Modifier.align(Alignment.End),
+                style = RemodexButtonStyle.Primary,
+            ) {
+                if (request.isSubmitting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.primaryButtonForeground,
+                    )
+                } else {
+                    Text("Submit answers")
+                }
             }
         }
     }
@@ -1126,14 +1136,13 @@ private fun ToolInputQuestionCard(
     onAnswerChanged: (String, String, String) -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing10)) {
         question.header?.takeIf { it.isNotBlank() }?.let { header ->
-            Text(
-                text = header,
-                style = MaterialTheme.typography.labelLarge,
-                color = colors.accentBlue,
-                fontWeight = FontWeight.SemiBold,
+            RemodexPill(
+                label = header,
+                style = RemodexPillStyle.Accent,
             )
         }
         Text(
@@ -1143,53 +1152,245 @@ private fun ToolInputQuestionCard(
         )
 
         question.options.forEach { option ->
-            OutlinedButton(
-                onClick = { onAnswerChanged(requestId, question.id, option.label) },
+            ToolInputOptionRow(
+                option = option,
                 enabled = enabled,
+                onClick = { onAnswerChanged(requestId, question.id, option.label) },
+            )
+        }
+
+        if (question.allowsCustomAnswer) {
+            ToolInputAnswerField(
+                value = question.answer,
+                onValueChange = { onAnswerChanged(requestId, question.id, it) },
+                enabled = enabled,
+                label = toolInputCustomFieldLabel(question),
+                isSecret = question.isSecret,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueuedDraftRowCard(
+    index: Int,
+    draft: QueuedTurnDraft,
+    canRestoreDraft: Boolean,
+    onRestoreDraft: (String) -> Unit,
+    onRemoveDraft: (String) -> Unit,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val metadataLabels = queuedDraftMetadataLabels(draft)
+
+    RemodexGroupedSurface(
+        cornerRadius = geometry.cornerMedium,
+        tonalColor = colors.raisedSurface.copy(alpha = 0.84f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.spacing12, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Surface(
+                        color = colors.selectedRowFill,
+                        shape = CircleShape,
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.textSecondary,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                     Text(
-                        text = option.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (option.isSelected) {
-                            colors.accentBlue
-                        } else {
-                            colors.textPrimary
-                        },
-                        fontWeight = if (option.isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        text = "Queued reply",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textSecondary,
                     )
-                    option.description?.takeIf { it.isNotBlank() }?.let { description ->
-                        Text(
-                            text = description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.textSecondary,
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    InlineActionPill(
+                        label = "Restore",
+                        onClick = { onRestoreDraft(draft.id) },
+                        accent = colors.accentBlue,
+                        enabled = canRestoreDraft,
+                    )
+                    InlineActionPill(
+                        label = "Remove",
+                        onClick = { onRemoveDraft(draft.id) },
+                        accent = colors.textSecondary,
+                    )
+                }
+            }
+
+            Text(
+                text = applyingSubagentsSelection(draft.text, draft.subagentsSelectionEnabled),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textPrimary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            if (metadataLabels.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing6),
+                ) {
+                    metadataLabels.forEach { label ->
+                        RemodexPill(
+                            label = label,
+                            style = when {
+                                label == "Plan" -> RemodexPillStyle.Success
+                                label == "Subagents" -> RemodexPillStyle.Accent
+                                else -> RemodexPillStyle.Neutral
+                            },
                         )
                     }
                 }
             }
-        }
 
-        if (question.allowsCustomAnswer) {
-            OutlinedTextField(
-                value = question.answer,
-                onValueChange = { onAnswerChanged(requestId, question.id, it) },
-                enabled = enabled,
-                label = {
-                    Text(if (question.options.isEmpty()) "Answer" else "Other")
-                },
-                visualTransformation = if (question.isSecret) {
-                    PasswordVisualTransformation()
-                } else {
-                    VisualTransformation.None
-                },
-                modifier = Modifier.fillMaxWidth(),
+            if (draft.attachments.isNotEmpty()) {
+                MessageAttachmentStrip(
+                    attachments = draft.attachments,
+                    tileSize = 64.dp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineActionPill(
+    label: String,
+    onClick: () -> Unit,
+    accent: Color,
+    enabled: Boolean = true,
+) {
+    val colors = RemodexTheme.colors
+
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(999.dp),
+        color = if (enabled) accent.copy(alpha = 0.12f) else colors.disabledFill,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (enabled) accent.copy(alpha = 0.18f) else colors.hairlineDivider,
+        ),
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (enabled) accent else colors.disabledForeground,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
+}
+
+@Composable
+private fun ToolInputOptionRow(
+    option: io.androdex.android.ui.state.ToolUserInputOptionUiState,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val borderColor = if (option.isSelected) colors.accentBlue.copy(alpha = 0.28f) else colors.hairlineDivider
+    val containerColor = when {
+        option.isSelected -> colors.accentBlue.copy(alpha = 0.09f)
+        else -> colors.inputBackground
+    }
+
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(geometry.cornerMedium),
+        color = containerColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = geometry.spacing12, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = option.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (option.isSelected) colors.accentBlue else colors.textPrimary,
+                    fontWeight = if (option.isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.weight(1f),
+                )
+                if (option.isSelected) {
+                    RemodexPill(
+                        label = "Selected",
+                        style = RemodexPillStyle.Accent,
+                    )
+                }
+            }
+            option.description?.takeIf { it.isNotBlank() }?.let { description ->
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolInputAnswerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    label: String,
+    isSecret: Boolean,
+) {
+    RemodexInputField(
+        value = value,
+        onValueChange = {
+            if (enabled) {
+                onValueChange(it)
+            }
+        },
+        label = label,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = if (isSecret) "Enter secure response" else "Type a response",
+        visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
+    )
 }
 
 @Composable

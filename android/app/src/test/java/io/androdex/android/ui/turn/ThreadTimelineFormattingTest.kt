@@ -3,8 +3,15 @@ package io.androdex.android.ui.turn
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.CollaborationModeKind
+import io.androdex.android.model.ComposerMentionedFile
+import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ExecutionContent
 import io.androdex.android.model.ExecutionKind
+import io.androdex.android.model.ImageAttachment
+import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.ui.state.ToolUserInputOptionUiState
+import io.androdex.android.ui.state.ToolUserInputQuestionUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -82,6 +89,65 @@ class ThreadTimelineFormattingTest {
         assertTrue(looksLikeFileReference("[Main.kt](/tmp/Main.kt:12)"))
         assertTrue(looksLikeFileReference("/tmp/Main.kt"))
         assertFalse(looksLikeFileReference("Plain assistant response"))
+    }
+
+    @Test
+    fun queuedDraftMetadataLabels_includesModeAttachmentsAndContext() {
+        val labels = queuedDraftMetadataLabels(
+            QueuedTurnDraft(
+                id = "draft-1",
+                text = "Follow up",
+                attachments = listOf(ImageAttachment(thumbnailBase64Jpeg = "a")),
+                createdAtEpochMs = 1L,
+                collaborationMode = CollaborationModeKind.PLAN,
+                subagentsSelectionEnabled = true,
+                mentionedFiles = listOf(
+                    ComposerMentionedFile(
+                        fileName = "Main.kt",
+                        path = "/tmp/Main.kt",
+                    )
+                ),
+                mentionedSkills = listOf(
+                    ComposerMentionedSkill(
+                        name = "checks",
+                    )
+                ),
+            )
+        )
+
+        assertEquals(
+            listOf("Plan", "Subagents", "1 photo", "1 file", "1 skill"),
+            labels,
+        )
+    }
+
+    @Test
+    fun queuedDraftSummaryText_tracksPauseState() {
+        assertEquals("1 queued draft waiting", queuedDraftSummaryText(draftCount = 1, isPaused = false))
+        assertEquals("3 queued drafts paused", queuedDraftSummaryText(draftCount = 3, isPaused = true))
+    }
+
+    @Test
+    fun toolInputHelpers_chooseOtherFieldLabelAndSummaryPluralization() {
+        val question = ToolUserInputQuestionUiState(
+            id = "branch",
+            header = "Branch",
+            question = "Which branch?",
+            answer = "",
+            options = listOf(
+                ToolUserInputOptionUiState(
+                    label = "main",
+                    description = null,
+                    isSelected = false,
+                )
+            ),
+            allowsCustomAnswer = true,
+            isSecret = false,
+        )
+
+        assertEquals("Other answer", toolInputCustomFieldLabel(question))
+        assertEquals("1 request waiting", pendingToolInputSummary(1))
+        assertEquals("2 requests waiting", pendingToolInputSummary(2))
     }
 
     private fun chatMessage(
