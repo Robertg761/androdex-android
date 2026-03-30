@@ -20,6 +20,7 @@ import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitOperationException
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.MissingNotificationThreadPrompt
@@ -33,6 +34,8 @@ import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedPairSnapshot
+import io.androdex.android.model.TurnFileMention
+import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceDirectoryEntry
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.requestId
@@ -1187,18 +1190,29 @@ class MainViewModel(
 
     fun createThread() {
         clearComposerAutocomplete()
-        runBusyAction("Creating thread...") {
-            service.createThread()
-            val createdThreadId = service.state.value.selectedThreadId
-            if (createdThreadId != null) {
-                gitWorkingDirectoryForThread(createdThreadId, uiStateFlow.value)?.let { workingDirectory ->
-                    loadGitSnapshot(
-                        threadId = createdThreadId,
-                        workingDirectory = workingDirectory,
-                        loadDiff = false,
-                        suppressErrors = true,
-                    )
+        viewModelScope.launch {
+            uiStateFlow.update { it.copy(isBusy = true, busyLabel = "Creating thread...") }
+            var createdThreadId: String? = null
+            var workingDirectory: String? = null
+            try {
+                service.createThread()
+                createdThreadId = service.state.value.selectedThreadId
+                workingDirectory = createdThreadId?.let { threadId ->
+                    gitWorkingDirectoryForThread(threadId, uiStateFlow.value)
                 }
+            } catch (error: Throwable) {
+                service.reportError(error.message ?: "Request failed.")
+            } finally {
+                uiStateFlow.update { it.copy(isBusy = false, busyLabel = null) }
+            }
+
+            if (createdThreadId != null && workingDirectory != null) {
+                loadGitSnapshot(
+                    threadId = createdThreadId,
+                    workingDirectory = workingDirectory,
+                    loadDiff = false,
+                    suppressErrors = true,
+                )
             }
         }
     }
@@ -1236,6 +1250,9 @@ class MainViewModel(
         } else {
             null
         }
+        val knownActiveTurnId = current.activeTurnIdByThread[threadId]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
 
         if (reviewSelection != null) {
             if (current.isThreadRunning(threadId)) {
@@ -1291,88 +1308,79 @@ class MainViewModel(
             return
         }
 
-        if (current.isThreadRunning(threadId)) {
-            val queuedDraft = QueuedTurnDraft(
-                id = UUID.randomUUID().toString(),
-                text = rawInput,
+        if (knownActiveTurnId != null) {
+            queueFollowUpDraft(
+                threadId = threadId,
+                rawInput = rawInput,
                 attachments = readyAttachments,
-                createdAtEpochMs = System.currentTimeMillis(),
                 collaborationMode = collaborationMode,
-                subagentsSelectionEnabled = subagentsEnabled,
+                subagentsEnabled = subagentsEnabled,
                 mentionedFiles = mentionedFiles,
                 mentionedSkills = mentionedSkills,
             )
-            uiStateFlow.update { state ->
-                val existingQueueState = state.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
-                state.copy(
-                    composerText = "",
-                    composerDraftsByThread = state.composerDraftsByThread - threadId,
-                    composerSubagentsByThread = state.composerSubagentsByThread - threadId,
-                    composerAttachmentsByThread = state.composerAttachmentsByThread - threadId,
-                    composerMentionedFilesByThread = state.composerMentionedFilesByThread - threadId,
-                    composerMentionedSkillsByThread = state.composerMentionedSkillsByThread - threadId,
-                    isComposerSubagentsEnabled = false,
-                    queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
-                        threadId = threadId,
-                        queueState = existingQueueState.copy(
-                            drafts = existingQueueState.drafts + queuedDraft,
-                        ).normalized(),
-                    ),
-                )
+            return
+        }
+
+        if (current.isThreadRunning(threadId)) {
+            uiStateFlow.update { it.copy(isSendingMessage = true) }
+            viewModelScope.launch {
+                try {
+                    if (service.shouldQueueFollowUp(threadId)) {
+                        queueFollowUpDraft(
+                            threadId = threadId,
+                            rawInput = rawInput,
+                            attachments = readyAttachments,
+                            collaborationMode = collaborationMode,
+                            subagentsEnabled = subagentsEnabled,
+                            mentionedFiles = mentionedFiles,
+                            mentionedSkills = mentionedSkills,
+                        )
+                    } else {
+                        performImmediateComposerSend(
+                            threadId = threadId,
+                            rawInput = rawInput,
+                            payload = payload,
+                            composerAttachments = composerAttachments,
+                            readyAttachments = readyAttachments,
+                            mentionedFiles = mentionedFiles,
+                            mentionedSkills = mentionedSkills,
+                            fileMentions = fileMentions,
+                            skillMentions = skillMentions,
+                            collaborationMode = collaborationMode,
+                            subagentsEnabled = subagentsEnabled,
+                            manageSendingState = false,
+                        )
+                    }
+                } catch (error: Throwable) {
+                    service.reportError(error.message ?: "Failed to confirm the active run state.")
+                } finally {
+                    uiStateFlow.update { it.copy(isSendingMessage = false) }
+                    flushEligibleQueues()
+                }
             }
-            clearComposerAutocomplete()
             return
         }
 
         uiStateFlow.update {
             it.copy(
-                composerText = "",
-                composerDraftsByThread = it.composerDraftsByThread - threadId,
-                composerSubagentsByThread = it.composerSubagentsByThread - threadId,
-                composerAttachmentsByThread = it.composerAttachmentsByThread - threadId,
-                composerMentionedFilesByThread = it.composerMentionedFilesByThread - threadId,
-                composerMentionedSkillsByThread = it.composerMentionedSkillsByThread - threadId,
-                isComposerSubagentsEnabled = false,
                 isSendingMessage = true,
             )
         }
-        clearComposerAutocomplete()
         viewModelScope.launch {
-            try {
-                service.sendMessage(
-                    input = payload,
-                    preferredThreadId = threadId,
-                    attachments = readyAttachments,
-                    fileMentions = fileMentions,
-                    skillMentions = skillMentions,
-                    collaborationMode = collaborationMode,
-                )
-            } catch (error: Throwable) {
-                uiStateFlow.update {
-                    val nextSubagents = if (subagentsEnabled) {
-                        it.composerSubagentsByThread + threadId
-                    } else {
-                        it.composerSubagentsByThread - threadId
-                    }
-                    it.copy(
-                        composerText = rawInput,
-                        composerDraftsByThread = it.composerDraftsByThread + (threadId to rawInput),
-                        composerSubagentsByThread = nextSubagents,
-                        composerAttachmentsByThread = it.composerAttachmentsByThread.updatedComposerAttachments(
-                            threadId,
-                            composerAttachments,
-                        ),
-                        composerMentionedFilesByThread = it.composerMentionedFilesByThread + (threadId to mentionedFiles),
-                        composerMentionedSkillsByThread = it.composerMentionedSkillsByThread + (threadId to mentionedSkills),
-                        isComposerSubagentsEnabled = threadId in nextSubagents,
-                    )
-                }
-                refreshComposerAutocomplete(rawInput)
-                service.reportError(error.message ?: "Failed to send message.")
-            } finally {
-                uiStateFlow.update { it.copy(isSendingMessage = false) }
-                flushEligibleQueues()
-            }
+            performImmediateComposerSend(
+                threadId = threadId,
+                rawInput = rawInput,
+                payload = payload,
+                composerAttachments = composerAttachments,
+                readyAttachments = readyAttachments,
+                mentionedFiles = mentionedFiles,
+                mentionedSkills = mentionedSkills,
+                fileMentions = fileMentions,
+                skillMentions = skillMentions,
+                collaborationMode = collaborationMode,
+                subagentsEnabled = subagentsEnabled,
+                manageSendingState = true,
+            )
         }
     }
 
@@ -2029,6 +2037,111 @@ class MainViewModel(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: state.activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun queueFollowUpDraft(
+        threadId: String,
+        rawInput: String,
+        attachments: List<ImageAttachment>,
+        collaborationMode: CollaborationModeKind?,
+        subagentsEnabled: Boolean,
+        mentionedFiles: List<ComposerMentionedFile>,
+        mentionedSkills: List<ComposerMentionedSkill>,
+    ) {
+        val queuedDraft = QueuedTurnDraft(
+            id = UUID.randomUUID().toString(),
+            text = rawInput,
+            attachments = attachments,
+            createdAtEpochMs = System.currentTimeMillis(),
+            collaborationMode = collaborationMode,
+            subagentsSelectionEnabled = subagentsEnabled,
+            mentionedFiles = mentionedFiles,
+            mentionedSkills = mentionedSkills,
+        )
+        uiStateFlow.update { state ->
+            val existingQueueState = state.queuedDraftStateByThread[threadId] ?: ThreadQueuedDraftState()
+            state.copy(
+                composerText = "",
+                composerDraftsByThread = state.composerDraftsByThread - threadId,
+                composerSubagentsByThread = state.composerSubagentsByThread - threadId,
+                composerAttachmentsByThread = state.composerAttachmentsByThread - threadId,
+                composerMentionedFilesByThread = state.composerMentionedFilesByThread - threadId,
+                composerMentionedSkillsByThread = state.composerMentionedSkillsByThread - threadId,
+                isComposerSubagentsEnabled = false,
+                queuedDraftStateByThread = state.queuedDraftStateByThread.updatedQueueEntry(
+                    threadId = threadId,
+                    queueState = existingQueueState.copy(
+                        drafts = existingQueueState.drafts + queuedDraft,
+                    ).normalized(),
+                ),
+            )
+        }
+        clearComposerAutocomplete()
+    }
+
+    private suspend fun performImmediateComposerSend(
+        threadId: String,
+        rawInput: String,
+        payload: String,
+        composerAttachments: List<ComposerImageAttachment>,
+        readyAttachments: List<ImageAttachment>,
+        mentionedFiles: List<ComposerMentionedFile>,
+        mentionedSkills: List<ComposerMentionedSkill>,
+        fileMentions: List<TurnFileMention>,
+        skillMentions: List<TurnSkillMention>,
+        collaborationMode: CollaborationModeKind?,
+        subagentsEnabled: Boolean,
+        manageSendingState: Boolean,
+    ) {
+        uiStateFlow.update {
+            it.copy(
+                composerText = "",
+                composerDraftsByThread = it.composerDraftsByThread - threadId,
+                composerSubagentsByThread = it.composerSubagentsByThread - threadId,
+                composerAttachmentsByThread = it.composerAttachmentsByThread - threadId,
+                composerMentionedFilesByThread = it.composerMentionedFilesByThread - threadId,
+                composerMentionedSkillsByThread = it.composerMentionedSkillsByThread - threadId,
+                isComposerSubagentsEnabled = false,
+            )
+        }
+        clearComposerAutocomplete()
+        try {
+            service.sendMessage(
+                input = payload,
+                preferredThreadId = threadId,
+                attachments = readyAttachments,
+                fileMentions = fileMentions,
+                skillMentions = skillMentions,
+                collaborationMode = collaborationMode,
+            )
+        } catch (error: Throwable) {
+            uiStateFlow.update {
+                val nextSubagents = if (subagentsEnabled) {
+                    it.composerSubagentsByThread + threadId
+                } else {
+                    it.composerSubagentsByThread - threadId
+                }
+                it.copy(
+                    composerText = rawInput,
+                    composerDraftsByThread = it.composerDraftsByThread + (threadId to rawInput),
+                    composerSubagentsByThread = nextSubagents,
+                    composerAttachmentsByThread = it.composerAttachmentsByThread.updatedComposerAttachments(
+                        threadId,
+                        composerAttachments,
+                    ),
+                    composerMentionedFilesByThread = it.composerMentionedFilesByThread + (threadId to mentionedFiles),
+                    composerMentionedSkillsByThread = it.composerMentionedSkillsByThread + (threadId to mentionedSkills),
+                    isComposerSubagentsEnabled = threadId in nextSubagents,
+                )
+            }
+            refreshComposerAutocomplete(rawInput)
+            service.reportError(error.message ?: "Failed to send message.")
+        } finally {
+            if (manageSendingState) {
+                uiStateFlow.update { it.copy(isSendingMessage = false) }
+                flushEligibleQueues()
+            }
+        }
     }
 
     private fun flushEligibleQueues() {

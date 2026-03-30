@@ -121,6 +121,29 @@ class MainViewModelWorkspaceTest {
     }
 
     @Test
+    fun createThread_keepsThreadOpenWhenGitSnapshotFails() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true))
+            )
+            gitBranchesWithStatusError = IllegalStateException("Timed out waiting for 20000 ms")
+        }
+        val viewModel = MainViewModel(repository)
+
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+        viewModel.createThread()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("C:\\Projects\\AppA", repository.startedThreadCwds.single())
+        assertEquals("thread-created", viewModel.uiState.value.selectedThreadId)
+        assertFalse(viewModel.uiState.value.isBusy)
+        assertEquals(null, viewModel.uiState.value.errorMessage)
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.gitBranchesWithStatusRequests)
+    }
+
+    @Test
     fun connect_doesNotAutoOpenProjectPicker() = runTest(dispatcher) {
         val repository = FakeRepository()
         val viewModel = MainViewModel(repository)
@@ -260,6 +283,79 @@ class MainViewModelWorkspaceTest {
             repository.startedTurns,
         )
         assertTrue(viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts.isNullOrEmpty())
+    }
+
+    @Test
+    fun protectedFallbackSend_startsImmediatelyWhenSnapshotShowsNoActiveRun() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-old",
+                latestTurnTerminalState = io.androdex.android.model.TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", null))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Send now")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1"), repository.readThreadRunSnapshotIds)
+        assertEquals(listOf("thread-1:Send now"), repository.startedTurns)
+        assertTrue(viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts.isNullOrEmpty())
+    }
+
+    @Test
+    fun protectedFallbackSend_staysQueuedWhenSnapshotConfirmsActiveRun() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = true,
+                latestTurnId = "turn-live",
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, null, null, null))
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", null))
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.updateComposerText("Queue me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("thread-1"), repository.readThreadRunSnapshotIds)
+        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals(
+            listOf("Queue me"),
+            viewModel.uiState.value.queuedDraftStateByThread["thread-1"]?.drafts?.map { it.text },
+        )
     }
 
     @Test
@@ -511,10 +607,20 @@ private class FakeRepository : AndrodexRepositoryContract {
     var recentStateLoads = 0
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
+    val readThreadRunSnapshotIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
+    val gitBranchesWithStatusRequests = mutableListOf<String>()
     val startedTurns = mutableListOf<String>()
     val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val startTurnFailures = mutableListOf<Throwable>()
+    var gitBranchesWithStatusError: Throwable? = null
+    var runSnapshot = ThreadRunSnapshot(
+        interruptibleTurnId = null,
+        hasInterruptibleTurnWithoutId = false,
+        latestTurnId = null,
+        latestTurnTerminalState = null,
+        shouldAssumeRunningFromLatestTurn = false,
+    )
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -561,13 +667,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
-        return ThreadRunSnapshot(
-            interruptibleTurnId = null,
-            hasInterruptibleTurnWithoutId = false,
-            latestTurnId = null,
-            latestTurnTerminalState = null,
-            shouldAssumeRunningFromLatestTurn = false,
-        )
+        readThreadRunSnapshotIds += threadId
+        return runSnapshot
     }
 
     override suspend fun fuzzyFileSearch(
@@ -694,6 +795,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
+        gitBranchesWithStatusRequests += workingDirectory
+        gitBranchesWithStatusError?.let { throw it }
         return GitBranchesWithStatusResult(
             branches = listOf("main"),
             branchesCheckedOutElsewhere = emptySet(),

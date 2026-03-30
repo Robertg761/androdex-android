@@ -11,6 +11,7 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
+const { createDesktopThreadReadRefresher } = require("./codex-desktop-thread-sync");
 const { createCodexRpcClient } = require("./codex-rpc-client");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
@@ -131,12 +132,18 @@ function startBridge({
     },
     requestIdPrefix: `androdex-bridge-${sessionId}`,
   });
+  const refreshDesktopThreadState = createDesktopThreadReadRefresher({
+    sendCodexRequest(method, params) {
+      return codexRpcClient.sendRequest(method, params);
+    },
+  });
   const desktopRefresher = new CodexDesktopRefresher({
     enabled: config.refreshEnabled,
     debounceMs: config.refreshDebounceMs,
     refreshCommand: config.refreshCommand,
     bundleId: config.codexBundleId,
     appPath: config.codexAppPath,
+    refreshThreadState: refreshDesktopThreadState,
   });
   const workspaceRuntime = createWorkspaceRuntime({
     config,

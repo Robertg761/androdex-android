@@ -36,6 +36,7 @@ class CodexDesktopRefresher {
     now = () => Date.now(),
     refreshExecutor = null,
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
+    refreshThreadState = null,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
   } = {}) {
@@ -52,6 +53,7 @@ class CodexDesktopRefresher {
     this.now = now;
     this.refreshExecutor = refreshExecutor;
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
+    this.refreshThreadState = refreshThreadState;
     this.refreshBackend = refreshBackend
       || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
@@ -302,11 +304,13 @@ class CodexDesktopRefresher {
       const completionThreadId = this.pendingCompletionTargetThreadId;
       const watcherThreadIdToStop = this.stopWatcherAfterRefreshThreadId;
       const targetUrl = this.pendingTargetUrl;
+      const targetThreadId = this.pendingTargetThreadId;
       const refreshKinds = new Set(this.pendingRefreshKinds);
 
       this.clearPendingState();
 
       if (completionTargetUrl) {
+        await this.syncThreadStateBeforeRefresh(completionThreadId);
         await this.runRefresh(completionTargetUrl, {
           reason,
           refreshKinds,
@@ -320,6 +324,7 @@ class CodexDesktopRefresher {
       }
 
       if (targetUrl) {
+        await this.syncThreadStateBeforeRefresh(targetThreadId || null);
         await this.runRefresh(targetUrl, {
           reason,
           refreshKinds,
@@ -338,6 +343,18 @@ class CodexDesktopRefresher {
       if (this.hasPendingRefreshWork()) {
         this.scheduleRefresh("follow-up refresh");
       }
+    }
+  }
+
+  async syncThreadStateBeforeRefresh(threadId) {
+    if (!threadId || typeof this.refreshThreadState !== "function") {
+      return;
+    }
+
+    try {
+      await this.refreshThreadState({ threadId });
+    } catch (error) {
+      this.log(`thread state refresh failed for ${threadId}: ${extractErrorMessage(error)}`);
     }
   }
 

@@ -97,6 +97,33 @@ test("turn/completed stops the active watcher after the completion refresh", asy
   assert.equal(stopCount, 1);
 });
 
+test("thread-targeted refresh syncs thread state before nudging the desktop UI", async () => {
+  const callOrder = [];
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    refreshThreadState: async ({ threadId }) => {
+      callOrder.push(`thread:${threadId}`);
+    },
+    refreshExecutor: async ({ targetUrl }) => {
+      callOrder.push(`refresh:${targetUrl}`);
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-sync",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(callOrder, [
+    "thread:thread-sync",
+    "refresh:codex://threads/thread-sync",
+  ]);
+});
+
 test("completion refresh is retried after a slow in-flight refresh finishes", async () => {
   const refreshCalls = [];
   let releaseSlowRefresh = null;

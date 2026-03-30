@@ -277,13 +277,13 @@ class AndrodexService(
         val thread = repository.startThread(preferredWorkspace)
         stateFlow.update { current ->
             current.copy(
+                threads = mergeRecoveredNotificationThread(current.threads, thread),
                 selectedThreadId = thread.id,
                 selectedThreadTitle = thread.title.ifBlank { "Conversation" },
                 timelineByThread = current.timelineByThread + (thread.id to emptyList()),
             )
         }
-        refreshThreadsInternal()
-        loadWorkspaceState()
+        scheduleThreadCollectionsRefresh()
     }
 
     suspend fun sendMessage(
@@ -300,17 +300,20 @@ class AndrodexService(
         }
 
         val preferredWorkspace = stateFlow.value.activeWorkspacePath
-        val threadId = preferredThreadId?.trim()?.takeIf { it.isNotEmpty() }
-            ?: repository.startThread(preferredWorkspace).id.also { newThreadId ->
-            refreshThreadsInternal()
-            loadWorkspaceState()
+        val threadId = preferredThreadId?.trim()?.takeIf { it.isNotEmpty() } ?: run {
+            val thread = repository.startThread(preferredWorkspace)
             stateFlow.update { current ->
                 current.copy(
-                    selectedThreadId = newThreadId,
-                    selectedThreadTitle = current.threads.firstOrNull { it.id == newThreadId }?.title ?: "Conversation",
-                    timelineByThread = current.timelineByThread + (newThreadId to current.timelineByThread[newThreadId].orEmpty()),
+                    threads = mergeRecoveredNotificationThread(current.threads, thread),
+                    selectedThreadId = thread.id,
+                    selectedThreadTitle = thread.title.ifBlank { "Conversation" },
+                    timelineByThread = current.timelineByThread + (
+                        thread.id to current.timelineByThread[thread.id].orEmpty()
+                    ),
                 )
             }
+            scheduleThreadCollectionsRefresh()
+            thread.id
         }
 
         clearThreadOutcome(threadId)
@@ -374,6 +377,23 @@ class AndrodexService(
                 createdAtEpochMs = System.currentTimeMillis(),
             )
         )
+    }
+
+    suspend fun shouldQueueFollowUp(threadId: String): Boolean {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return false
+        stateFlow.value.activeTurnIdByThread[normalizedThreadId]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return true }
+        if (!isThreadConsideredRunning(normalizedThreadId)) {
+            return false
+        }
+
+        val snapshot = repository.readThreadRunSnapshot(normalizedThreadId)
+        syncThreadRunStateFromSnapshot(normalizedThreadId, snapshot)
+        return snapshot.interruptibleTurnId != null
+            || snapshot.hasInterruptibleTurnWithoutId
+            || (snapshot.shouldAssumeRunningFromLatestTurn && snapshot.latestTurnId != null)
     }
 
     suspend fun startReview(
@@ -638,6 +658,13 @@ class AndrodexService(
                 delay(remainingMs)
             }
             stateFlow.update { it.copy(isLoadingThreadList = false) }
+        }
+    }
+
+    private fun scheduleThreadCollectionsRefresh() {
+        scope.launch {
+            runCatching { refreshThreadsInternal() }
+            runCatching { loadWorkspaceState() }
         }
     }
 
@@ -2140,23 +2167,24 @@ private fun mergeThreadMessages(
     incoming: List<ConversationMessage>,
     keepStreamingRows: Boolean,
 ): List<ConversationMessage> {
-    if (existing.isEmpty()) {
-        return incoming
-    }
     if (incoming.isEmpty()) {
         return existing
     }
 
-    val merged = existing.toMutableList()
-    val existingCount = existing.size
-    val consumedExistingIndexes = mutableSetOf<Int>()
+    val merged = if (keepStreamingRows) existing.toMutableList() else mutableListOf()
+    val originalExistingCount = merged.size
+    val consumedOriginalExistingIndexes = mutableSetOf<Int>()
     incoming.forEach { incomingMessage ->
-        val existingIndex = (0 until existingCount).firstOrNull { index ->
-            index !in consumedExistingIndexes
+        val existingIndex = (((minOf(originalExistingCount, merged.size) - 1) downTo 0).firstOrNull { index ->
+            index !in consumedOriginalExistingIndexes
                 && timelineMessagesRepresentSameItem(merged[index], incomingMessage)
-        }
-        if (existingIndex != null) {
-            consumedExistingIndexes += existingIndex
+        } ?: ((merged.size - 1) downTo originalExistingCount).firstOrNull { index ->
+            chatTimelineMessagesRepresentSameItem(merged[index], incomingMessage)
+        }) ?: -1
+        if (existingIndex >= 0) {
+            if (existingIndex < originalExistingCount) {
+                consumedOriginalExistingIndexes += existingIndex
+            }
             merged[existingIndex] = mergeMatchedMessage(
                 existing = merged[existingIndex],
                 incoming = incomingMessage,
@@ -2214,7 +2242,32 @@ private fun timelineMessagesRepresentSameItem(
             subagentMessagesRepresentSameItem(existing, incoming)
         }
 
-        else -> messagesRepresentSameItem(existing, incoming)
+        else -> {
+            messagesRepresentSameItem(existing, incoming)
+                || chatTimelineMessagesRepresentSameItem(existing, incoming)
+        }
+    }
+}
+
+private fun chatTimelineMessagesRepresentSameItem(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    if (existing.threadId != incoming.threadId
+        || existing.role != incoming.role
+        || existing.kind != ConversationKind.CHAT
+        || incoming.kind != ConversationKind.CHAT
+        || existing.text != incoming.text
+        || attachmentSignature(existing.attachments) != attachmentSignature(incoming.attachments)
+    ) {
+        return false
+    }
+
+    val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() }
+    val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        existingTurnId != null && incomingTurnId != null -> existingTurnId == incomingTurnId
+        else -> kotlin.math.abs(existing.createdAtEpochMs - incoming.createdAtEpochMs) <= 60_000L
     }
 }
 
@@ -2235,6 +2288,15 @@ private fun messagesRepresentSameItem(
             && existing.role == incoming.role
             && existing.kind == incoming.kind
             && existingTurnId == incomingTurnId
+    }
+
+    if (existing.threadId == incoming.threadId
+        && existing.role == incoming.role
+        && existing.kind == incoming.kind
+        && ((existingTurnId == null && incomingTurnId != null) || (existingTurnId != null && incomingTurnId == null))
+        && (existing.isStreaming || incoming.isStreaming)
+    ) {
+        return kotlin.math.abs(existing.createdAtEpochMs - incoming.createdAtEpochMs) <= 60_000L
     }
 
     if (existing.role == ConversationRole.USER

@@ -1356,7 +1356,14 @@ class AndrodexClient(
         val payload = JSONObject(plaintext.toString(Charsets.UTF_8))
         session.lastInboundCounter = counter
         val bridgeOutboundSeq = payload.optInt("bridgeOutboundSeq", -1)
-        if (bridgeOutboundSeq > lastAppliedBridgeOutboundSeq) {
+        if (!shouldApplyBridgeOutboundSeq(
+                incomingBridgeOutboundSeq = bridgeOutboundSeq,
+                lastAppliedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq,
+            )
+        ) {
+            return
+        }
+        if (bridgeOutboundSeq > 0) {
             lastAppliedBridgeOutboundSeq = bridgeOutboundSeq
             persistence.saveLastAppliedBridgeOutboundSeq(bridgeOutboundSeq)
         }
@@ -1508,20 +1515,8 @@ class AndrodexClient(
     private suspend fun handleThreadLifecycleNotification(method: String, params: JSONObject?): Boolean {
         return when (method) {
             "thread/started", "thread/name/updated", "thread/status/changed" -> {
-                if (method == "thread/started") {
-                    updatesFlow.emit(
-                        ClientUpdate.TurnStarted(
-                            threadId = extractThreadId(params),
-                            turnId = extractTurnId(params),
-                        )
-                    )
-                } else if (method == "thread/status/changed") {
-                    updatesFlow.emit(
-                        ClientUpdate.ThreadStatusChanged(
-                            threadId = extractThreadId(params),
-                            status = extractThreadStatus(params),
-                        )
-                    )
+                threadLifecycleUpdateForNotification(method, params)?.let { update ->
+                    updatesFlow.emit(update)
                 }
                 try {
                     listThreads()
@@ -3071,6 +3066,20 @@ internal fun buildInitializePayload(includeCapabilities: Boolean): JSONObject {
     }
 }
 
+internal fun threadLifecycleUpdateForNotification(
+    method: String,
+    params: JSONObject?,
+): ClientUpdate? {
+    return when (method.trim()) {
+        "thread/status/changed" -> ClientUpdate.ThreadStatusChanged(
+            threadId = params?.stringOrNull("threadId", "thread_id", "id"),
+            status = params?.stringOrNull("status", "state"),
+        )
+
+        else -> null
+    }
+}
+
 internal suspend fun performInitializeSessionRequest(
     sendInitializeRequest: suspend (JSONObject) -> Unit,
 ) {
@@ -3658,6 +3667,16 @@ private fun terminalStateForStatus(normalizedStatus: String?): TurnTerminalState
         isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
         else -> null
     }
+}
+
+internal fun shouldApplyBridgeOutboundSeq(
+    incomingBridgeOutboundSeq: Int,
+    lastAppliedBridgeOutboundSeq: Int,
+): Boolean {
+    if (incomingBridgeOutboundSeq <= 0) {
+        return true
+    }
+    return incomingBridgeOutboundSeq > lastAppliedBridgeOutboundSeq
 }
 
 private fun JSONObject.hasAnyKey(vararg names: String): Boolean {
