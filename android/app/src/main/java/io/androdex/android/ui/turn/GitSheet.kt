@@ -28,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,6 +36,8 @@ import io.androdex.android.GitActionKind
 import io.androdex.android.model.GitChangedFile
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.ui.state.ThreadGitUiState
+import io.androdex.android.ui.theme.RemodexMonoFontFamily
+import io.androdex.android.ui.theme.RemodexTheme
 
 internal const val GIT_CHANGED_FILES_PREVIEW_LIMIT = 6
 
@@ -525,28 +526,30 @@ internal fun DiffView(
     diffText: String,
     modifier: Modifier = Modifier,
 ) {
-    val addedBg = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-    val removedBg = MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
-    val addedText = MaterialTheme.colorScheme.tertiary
-    val removedText = MaterialTheme.colorScheme.error
-    val hunkText = MaterialTheme.colorScheme.secondary
-    val contextText = MaterialTheme.colorScheme.onSurfaceVariant
+    val colors = RemodexTheme.colors
+    val addedBg = colors.accentGreen.copy(alpha = 0.12f)
+    val removedBg = colors.errorRed.copy(alpha = 0.12f)
+    val addedText = colors.accentGreen
+    val removedText = colors.errorRed
+    val hunkText = colors.accentBlue
+    val contextText = colors.textSecondary
     val scrollState = rememberScrollState()
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        shape = RoundedCornerShape(0.dp),
+        color = colors.groupedBackground.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(14.dp),
         modifier = modifier.fillMaxWidth(),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Column(
             modifier = Modifier
                 .horizontalScroll(scrollState)
-                .padding(vertical = 4.dp),
+                .padding(vertical = 6.dp),
         ) {
             diffText.lines().forEach { line ->
                 val (bgColor, fgColor) = when {
                     line.startsWith("+++") || line.startsWith("---") -> {
-                        Color.Transparent to MaterialTheme.colorScheme.onSurfaceVariant
+                        Color.Transparent to colors.textTertiary
                     }
                     line.startsWith("+") -> addedBg to addedText
                     line.startsWith("-") -> removedBg to removedText
@@ -557,7 +560,7 @@ internal fun DiffView(
                 Text(
                     text = line.ifEmpty { " " },
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = RemodexMonoFontFamily,
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                     ),

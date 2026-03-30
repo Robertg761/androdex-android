@@ -85,6 +85,13 @@ Phase 6 thread-shell implementation note:
 - `android/app/src/main/java/io/androdex/android/ui/state/AndrodexFeatureState.kt` now exposes project-name subtitle metadata so the thread header can show thread-level context when it exists.
 - Fresh Android capture anchors for this pass now include `android-device-captures/phase6/phase6-thread-idle.png` as the archived post-refresh idle reference. The matching `active` and fork-banner captures remain follow-up artifact work rather than a blocker for the completed shell implementation.
 
+Phase 7 timeline-message implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` now replaces the heavier Material-style message treatment with Remodex-style grouped chat bubbles, lighter timestamps, embedded streaming pills, calmer system/activity shells, denser review finding cards, plan step cards, and richer message-body handling for fenced mono blocks and file-reference lines.
+- `android/app/src/main/java/io/androdex/android/ui/turn/GitSheet.kt` now shares the updated diff styling tokens so in-message file-change diffs and sheet diffs no longer drift apart visually.
+- `android/app/src/test/java/io/androdex/android/ui/turn/ThreadTimelineFormattingTest.kt` now covers bubble grouping, streaming activity text, and message-body parsing so later timeline work is less likely to regress quietly.
+- Fresh Android capture anchors for this pass now include `android-device-captures/phase7/phase7-thread-streaming.png` and `android-device-captures/phase7/phase7-thread-mixed-content.png`, with matching XML snapshots alongside them for the archived streaming and mixed-content message states.
+
 The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.

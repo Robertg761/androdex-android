@@ -7,17 +7,15 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -50,7 +48,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
@@ -74,7 +71,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -107,19 +103,32 @@ import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.shared.RemodexGroupedSurface
 import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.RemodexPill
+import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
 import io.androdex.android.ui.state.ToolUserInputQuestionUiState
+import io.androdex.android.ui.theme.RemodexMonoFontFamily
 import io.androdex.android.ui.theme.RemodexTheme
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 
-private data class BubbleContext(
+internal data class BubbleContext(
     val message: ConversationMessage,
     val isFirstInGroup: Boolean,
     val isLastInGroup: Boolean,
+)
+
+internal sealed interface TimelineBodyBlock {
+    data class Paragraph(val text: String) : TimelineBodyBlock
+    data class CodeFence(val language: String?, val code: String) : TimelineBodyBlock
+}
+
+private data class TimelineStatusTone(
+    val pillStyle: RemodexPillStyle,
+    val accent: Color,
 )
 
 @Composable
@@ -130,7 +139,7 @@ private fun runStateDotColor(runState: ThreadRunBadgeUiState?): Color = when (ru
     null -> Color.Transparent
 }
 
-private fun buildBubbleContexts(messages: List<ConversationMessage>): List<BubbleContext> {
+internal fun buildBubbleContexts(messages: List<ConversationMessage>): List<BubbleContext> {
     if (messages.isEmpty()) return emptyList()
     val result = mutableListOf<BubbleContext>()
     for (i in messages.indices) {
@@ -162,7 +171,7 @@ private fun buildBubbleContexts(messages: List<ConversationMessage>): List<Bubbl
     return result
 }
 
-private fun buildAgentActivityText(messages: List<ConversationMessage>): String? {
+internal fun buildAgentActivityText(messages: List<ConversationMessage>): String? {
     val isStreaming = messages.any { it.isStreaming }
     if (!isStreaming) return null
 
@@ -196,6 +205,59 @@ private fun buildAgentActivityText(messages: List<ConversationMessage>): String?
         activeSystemMessage.kind == ConversationKind.THINKING -> "Thinking..."
         activeSystemMessage.kind == ConversationKind.PLAN -> "Planning..."
         else -> null
+    }
+}
+
+internal fun parseTimelineBodyBlocks(text: String): List<TimelineBodyBlock> {
+    if (text.isBlank()) return emptyList()
+
+    val fenceRegex = Regex("""(?s)```([^\n`]*)\n(.*?)\n```""")
+    val blocks = mutableListOf<TimelineBodyBlock>()
+    var cursor = 0
+
+    fenceRegex.findAll(text).forEach { match ->
+        if (match.range.first > cursor) {
+            val plainText = text.substring(cursor, match.range.first)
+            plainText.split(Regex("""\n{2,}"""))
+                .map { it.trim('\n') }
+                .filter { it.isNotBlank() }
+                .forEach { paragraph ->
+                    blocks += TimelineBodyBlock.Paragraph(paragraph)
+                }
+        }
+
+        val language = match.groupValues.getOrNull(1)?.trim().takeUnless { it.isNullOrBlank() }
+        val code = match.groupValues.getOrNull(2).orEmpty().trim('\n')
+        if (code.isNotBlank()) {
+            blocks += TimelineBodyBlock.CodeFence(language = language, code = code)
+        }
+        cursor = match.range.last + 1
+    }
+
+    if (cursor < text.length) {
+        text.substring(cursor)
+            .split(Regex("""\n{2,}"""))
+            .map { it.trim('\n') }
+            .filter { it.isNotBlank() }
+            .forEach { paragraph ->
+                blocks += TimelineBodyBlock.Paragraph(paragraph)
+            }
+    }
+
+    return if (blocks.isEmpty()) listOf(TimelineBodyBlock.Paragraph(text.trim())) else blocks
+}
+
+internal fun findingReferenceText(finding: CodeCommentDirectiveFinding): String {
+    return buildString {
+        append(finding.file)
+        finding.startLine?.let { start ->
+            append(":")
+            append(start)
+            finding.endLine?.takeIf { it != start }?.let { end ->
+                append("-")
+                append(end)
+            }
+        }
     }
 }
 
@@ -1412,6 +1474,8 @@ private fun MessageBubble(
     isFirstInGroup: Boolean = true,
     isLastInGroup: Boolean = true,
 ) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val isUser = message.role == ConversationRole.USER
     val isSystem = message.role == ConversationRole.SYSTEM
 
@@ -1430,32 +1494,6 @@ private fun MessageBubble(
         return
     }
 
-    val alignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
-    val bubbleShape = if (isUser) {
-        when {
-            isFirstInGroup && isLastInGroup -> RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
-            isFirstInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 20.dp)
-            isLastInGroup -> RoundedCornerShape(20.dp, 6.dp, 6.dp, 20.dp)
-            else -> RoundedCornerShape(20.dp, 6.dp, 6.dp, 20.dp)
-        }
-    } else {
-        when {
-            isFirstInGroup && isLastInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
-            isFirstInGroup -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 20.dp)
-            isLastInGroup -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp)
-            else -> RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp)
-        }
-    }
-    val containerColor = if (isUser) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
-    val textColor = if (isUser) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
     val directiveContent = remember(message.text) {
         if (isUser) {
             CodeCommentDirectiveContent(
@@ -1466,24 +1504,51 @@ private fun MessageBubble(
             CodeCommentDirectiveParser.parse(message.text)
         }
     }
+    val bubbleShape = remember(isUser, isFirstInGroup, isLastInGroup) {
+        messageBubbleShape(
+            isUser = isUser,
+            isFirstInGroup = isFirstInGroup,
+            isLastInGroup = isLastInGroup,
+        )
+    }
+    val containerColor = if (isUser) {
+        colors.selectedRowFill.copy(alpha = 0.94f)
+    } else {
+        colors.subtleGlassTint.copy(alpha = 0.82f)
+    }
+    val borderColor = if (isUser) {
+        colors.separator.copy(alpha = 0.32f)
+    } else {
+        colors.hairlineDivider.copy(alpha = 0.92f)
+    }
+    val bodyText = if (isUser) message.text else directiveContent.fallbackText
 
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = if (isFirstInGroup) 10.dp else 2.dp),
-        contentAlignment = alignment,
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
     ) {
+        if (isUser) {
+            Spacer(
+                modifier = Modifier
+                    .weight(1f)
+                    .widthIn(min = 60.dp),
+            )
+        }
         Surface(
             shape = bubbleShape,
             color = containerColor,
-            modifier = Modifier.fillMaxWidth(0.88f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+            modifier = Modifier.widthIn(max = 560.dp),
         ) {
             Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing12),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
             ) {
                 if (message.isStreaming) {
-                    StreamingIndicator()
+                    StreamingIndicator(tint = colors.accentBlue)
                 }
 
                 if (message.attachments.isNotEmpty()) {
@@ -1496,12 +1561,13 @@ private fun MessageBubble(
                     }
                 }
 
-                val bodyText = if (isUser) message.text else directiveContent.fallbackText
                 if (bodyText.isNotBlank() || message.attachments.isEmpty()) {
-                    Text(
+                    TimelineBodyContent(
                         text = bodyText.ifBlank { " " },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = textColor,
+                        textColor = colors.textPrimary,
+                        secondaryTextColor = colors.textSecondary,
+                        referenceColor = colors.accentBlue,
+                        codeSurface = colors.groupedBackground.copy(alpha = 0.82f),
                     )
                 }
 
@@ -1510,47 +1576,53 @@ private fun MessageBubble(
                         text = DateFormat.getTimeInstance(DateFormat.SHORT)
                             .format(Date(message.createdAtEpochMs)),
                         style = MaterialTheme.typography.labelSmall,
-                        color = textColor.copy(alpha = 0.5f),
+                        color = if (isUser) {
+                            colors.textSecondary.copy(alpha = 0.78f)
+                        } else {
+                            colors.textTertiary
+                        },
                     )
                 }
             }
+        }
+        if (!isUser) {
+            Spacer(
+                modifier = Modifier
+                    .weight(1f)
+                    .widthIn(min = 44.dp),
+            )
         }
     }
 }
 
 @Composable
 private fun ReviewFindingCard(finding: CodeCommentDirectiveFinding) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val priorityLabel = finding.priority?.let { "P$it" } ?: "Finding"
+    val tone = reviewFindingTone(finding.priority)
+
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
-        shape = RoundedCornerShape(14.dp),
+        color = colors.raisedSurface.copy(alpha = 0.84f),
+        shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth(),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = geometry.spacing12, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(999.dp),
-                ) {
-                    Text(
-                        text = priorityLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
+                RemodexPill(label = priorityLabel, style = tone.pillStyle)
                 finding.confidence?.let { confidence ->
                     Text(
                         text = "${(confidence * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textTertiary,
                     )
                 }
             }
@@ -1558,31 +1630,22 @@ private fun ReviewFindingCard(finding: CodeCommentDirectiveFinding) {
             Text(
                 text = finding.title,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = colors.textPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 text = finding.body,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
             )
             Text(
-                text = buildString {
-                    append(finding.file)
-                    finding.startLine?.let { start ->
-                        append(":")
-                        append(start)
-                        finding.endLine?.takeIf { it != start }?.let { end ->
-                            append("-")
-                            append(end)
-                        }
-                    }
-                },
+                text = findingReferenceText(finding),
                 style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = RemodexMonoFontFamily,
                     fontSize = 11.sp,
+                    lineHeight = 15.sp,
                 ),
-                color = MaterialTheme.colorScheme.primary,
+                color = tone.accent,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1592,19 +1655,24 @@ private fun ReviewFindingCard(finding: CodeCommentDirectiveFinding) {
 
 @Composable
 private fun SystemCapsule(message: ConversationMessage) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-            shape = RoundedCornerShape(12.dp),
+            color = colors.secondarySurface.copy(alpha = 0.76f),
+            shape = RoundedCornerShape(999.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+            modifier = Modifier.widthIn(max = 520.dp),
         ) {
             Text(
                 text = message.text.ifBlank { " " },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                color = colors.textSecondary,
+                modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing8),
             )
         }
     }
@@ -1612,6 +1680,8 @@ private fun SystemCapsule(message: ConversationMessage) {
 
 @Composable
 private fun ThinkingBubble(message: ConversationMessage) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val infiniteTransition = rememberInfiniteTransition(label = "thinking")
     val alpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
@@ -1620,16 +1690,12 @@ private fun ThinkingBubble(message: ConversationMessage) {
         label = "thinkingPulse",
     )
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    TimelineSystemCard {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            RemodexPill(label = "Thinking", style = RemodexPillStyle.Accent)
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 repeat(3) { index ->
                     val dotAlpha by infiniteTransition.animateFloat(
@@ -1645,16 +1711,17 @@ private fun ThinkingBubble(message: ConversationMessage) {
                         modifier = Modifier
                             .size(5.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = dotAlpha)),
+                            .background(colors.accentBlue.copy(alpha = dotAlpha)),
                     )
                 }
             }
             Text(
                 text = message.text.ifBlank { "Thinking..." },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+                color = colors.textSecondary.copy(alpha = alpha),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -1662,96 +1729,69 @@ private fun ThinkingBubble(message: ConversationMessage) {
 
 @Composable
 private fun FileChangeBubble(message: ConversationMessage) {
-    val isCompleted = message.status?.lowercase() == "completed"
-    val statusColor = if (isCompleted) Color(0xFF34D399) else Color(0xFFFBBF24)
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val tone = executionStatusTone(message.status)
     var expanded by remember { mutableStateOf(true) }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+    TimelineSystemCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded },
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(statusColor),
-                    )
-                    Text(
-                        text = message.filePath
-                            ?.substringAfterLast('/')
-                            ?.substringAfterLast('\\')
-                            ?: "File Change",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Surface(
-                        color = statusColor.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(6.dp),
-                    ) {
-                        Text(
-                            text = (message.status ?: "changed").replaceFirstChar(Char::uppercase),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
-                }
-            }
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(tone.accent),
+            )
+            Text(
+                text = message.filePath
+                    ?.substringAfterLast('/')
+                    ?.substringAfterLast('\\')
+                    ?: "File change",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontFamily = RemodexMonoFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = colors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            RemodexPill(
+                label = (message.status ?: "changed").normalizedExecutionStatusLabel(),
+                style = tone.pillStyle,
+            )
+        }
 
-            message.filePath?.let { path ->
-                Text(
-                    text = path,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                )
-            }
+        message.filePath?.let { path ->
+            Text(
+                text = path,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = RemodexMonoFontFamily,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                ),
+                color = colors.accentBlue,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
 
-            AnimatedVisibility(visible = expanded) {
+        AnimatedVisibility(visible = expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 if (!message.diffText.isNullOrBlank()) {
-                    DiffView(
-                        diffText = message.diffText,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
+                    DiffView(diffText = message.diffText)
                 } else {
-                    val summaryText = message.text
-                        .removePrefix("Status: ${message.status ?: "completed"}")
-                        .removePrefix("\n\n")
-                        .removePrefix("Path: ${message.filePath ?: ""}")
-                        .removePrefix("\n\n")
-                        .trim()
-                    if (summaryText.isNotBlank()) {
+                    fileChangeSummaryText(message)?.let { summaryText ->
                         Text(
                             text = summaryText,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = colors.textSecondary,
                         )
                     }
                 }
@@ -1767,26 +1807,15 @@ private fun CommandBubble(message: ConversationMessage) {
 
 @Composable
 private fun ExecutionBubble(message: ConversationMessage) {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.1f
-    val terminalSurface = if (isDark) Color(0xFF1E1E2E) else MaterialTheme.colorScheme.surfaceContainerLowest
-    val terminalHeader = if (isDark) Color(0xFF313244) else MaterialTheme.colorScheme.surfaceContainerLow
-    val terminalText = if (isDark) Color(0xFFCDD6F4) else MaterialTheme.colorScheme.onSurface
-    val terminalSubtext = if (isDark) Color(0xFFBAC2DE) else MaterialTheme.colorScheme.onSurfaceVariant
-    val outputSurface = if (isDark) Color(0xFF111827) else MaterialTheme.colorScheme.surfaceContainerLowest
-    val outputText = if (isDark) Color(0xFFCBD5E1) else MaterialTheme.colorScheme.onSurfaceVariant
-    val labelPill = if (isDark) Color(0xFF313244) else MaterialTheme.colorScheme.surfaceContainerHighest
-    val labelPillText = if (isDark) Color(0xFFCDD6F4) else MaterialTheme.colorScheme.onSurfaceVariant
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val execution = remember(message) { message.execution ?: fallbackExecutionContent(message) }
     val normalizedStatus = execution.status.trim().lowercase()
     val isRunning = normalizedStatus == "running" || normalizedStatus == "in_progress"
     val isFailed = normalizedStatus == "failed" || normalizedStatus == "error"
-    val statusColor = when {
-        isRunning -> Color(0xFFFBBF24)
-        isFailed -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.tertiary
-    }
+    val tone = executionStatusTone(execution.status)
     val titleStyle = if (execution.kind == ExecutionKind.COMMAND) {
-        MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+        MaterialTheme.typography.bodyMedium.copy(fontFamily = RemodexMonoFontFamily)
     } else {
         MaterialTheme.typography.bodyMedium
     }
@@ -1797,136 +1826,92 @@ private fun ExecutionBubble(message: ConversationMessage) {
         mutableStateOf(message.isStreaming || isFailed)
     }
 
-    Surface(
-        color = terminalSurface,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column {
-            Surface(
-                color = terminalHeader,
-                shape = if (expanded && hasDetails) {
-                    RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-                } else {
-                    RoundedCornerShape(12.dp)
-                },
-                modifier = Modifier.fillMaxWidth(),
+    TimelineSystemCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = hasDetails) { expanded = !expanded },
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = hasDetails) { expanded = !expanded }
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFFF5F57)),
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFFFBD2E)),
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF28C840)),
-                            )
-                        }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFF5F57)),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFBD2E)),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF28C840)),
+                    )
+                }
+                RemodexPill(label = execution.label.uppercase(), style = RemodexPillStyle.Neutral)
+                Spacer(modifier = Modifier.weight(1f))
+                RemodexPill(
+                    label = execution.status.normalizedExecutionStatusLabel(),
+                    style = tone.pillStyle,
+                )
+            }
 
-                        Surface(
-                            color = labelPill,
-                            shape = RoundedCornerShape(999.dp),
-                        ) {
-                            Text(
-                                text = execution.label.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = labelPillText,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing6)) {
+                Text(
+                    text = execution.title,
+                    style = titleStyle,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
 
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        Surface(
-                            color = statusColor.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(4.dp),
-                        ) {
-                            Text(
-                                text = execution.status.normalizedExecutionStatusLabel(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusColor,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = execution.title,
-                            style = titleStyle,
-                            color = terminalText,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-
-                        execution.summary?.takeIf { it.isNotBlank() }?.let { summary ->
-                            Text(
-                                text = summary,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = terminalSubtext,
-                                maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-
-                    if (isRunning) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = statusColor,
-                            trackColor = terminalSurface,
-                        )
-                    } else if (hasDetails) {
-                        Text(
-                            text = if (expanded) "Hide details" else "Show details",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = terminalSubtext,
-                        )
-                    }
+                execution.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        maxLines = if (expanded || !hasDetails) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
 
+            if (isRunning) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = tone.accent,
+                    trackColor = colors.selectedRowFill,
+                )
+            } else if (hasDetails) {
+                Text(
+                    text = if (expanded) "Hide details" else "Show details",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textTertiary,
+                )
+            }
+
             AnimatedVisibility(visible = expanded && hasDetails) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                     execution.details.forEach { detail ->
                         ExecutionDetailRow(
                             detail = detail,
-                            labelColor = terminalSubtext,
-                            textColor = terminalText,
+                            labelColor = colors.textTertiary,
+                            textColor = colors.textPrimary,
                         )
                     }
                     execution.output?.takeIf { it.isNotBlank() }?.let { output ->
                         ExecutionOutputView(
                             output = output,
-                            surfaceColor = outputSurface,
-                            textColor = outputText,
+                            surfaceColor = colors.groupedBackground.copy(alpha = 0.9f),
+                            textColor = colors.textSecondary,
                         )
                     }
                 }
@@ -1939,8 +1924,8 @@ private fun ExecutionBubble(message: ConversationMessage) {
 private fun ExecutionDetailRow(detail: ExecutionDetail) {
     ExecutionDetailRow(
         detail = detail,
-        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        textColor = MaterialTheme.colorScheme.onSurface,
+        labelColor = RemodexTheme.colors.textTertiary,
+        textColor = RemodexTheme.colors.textPrimary,
     )
 }
 
@@ -1950,8 +1935,9 @@ private fun ExecutionDetailRow(
     labelColor: Color,
     textColor: Color,
 ) {
+    val geometry = RemodexTheme.geometry
     Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
         verticalAlignment = Alignment.Top,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1959,12 +1945,12 @@ private fun ExecutionDetailRow(
             text = detail.label,
             style = MaterialTheme.typography.labelSmall,
             color = labelColor,
-            modifier = Modifier.width(120.dp),
+            modifier = Modifier.width(104.dp),
         )
         Text(
             text = detail.value,
             style = if (detail.isMonospace) {
-                MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                MaterialTheme.typography.bodySmall.copy(fontFamily = RemodexMonoFontFamily)
             } else {
                 MaterialTheme.typography.bodySmall
             },
@@ -1980,11 +1966,13 @@ private fun ExecutionOutputView(
     surfaceColor: Color,
     textColor: Color,
 ) {
+    val colors = RemodexTheme.colors
     val scrollState = rememberScrollState()
     Surface(
         color = surfaceColor,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth(),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Column(
             modifier = Modifier
@@ -1995,7 +1983,7 @@ private fun ExecutionOutputView(
                 Text(
                     text = line.ifEmpty { " " },
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = RemodexMonoFontFamily,
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                     ),
@@ -2022,6 +2010,8 @@ private fun fallbackExecutionContent(message: ConversationMessage): ExecutionCon
 
 @Composable
 private fun PlanBubble(message: ConversationMessage) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val planSteps = message.planSteps.orEmpty()
     val completedCount = planSteps.count { it.isCompleted() }
     val activeCount = planSteps.count { it.isInProgress() }
@@ -2035,82 +2025,58 @@ private fun PlanBubble(message: ConversationMessage) {
         ?.takeIf { it.isNotBlank() }
         ?: message.text.takeIf { it.isNotBlank() && it != "Planning..." }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    TimelineSystemCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(999.dp),
-                ) {
-                    Text(
-                        text = "PLAN",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
-
+            RemodexPill(label = "Plan", style = RemodexPillStyle.Accent)
+            Text(
+                text = planStatus,
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.accentBlue,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (planSteps.isNotEmpty()) {
                 Text(
-                    text = planStatus,
+                    text = "$completedCount/${planSteps.size}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium,
-                )
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                if (planSteps.isNotEmpty()) {
-                    Text(
-                        text = "$completedCount/${planSteps.size}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            if (planSteps.isNotEmpty()) {
-                LinearProgressIndicator(
-                    progress = { completedCount.toFloat() / planSteps.size.coerceAtLeast(1).toFloat() },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    color = colors.textTertiary,
                 )
             }
+        }
 
-            summary?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
+        if (planSteps.isNotEmpty()) {
+            LinearProgressIndicator(
+                progress = { completedCount.toFloat() / planSteps.size.coerceAtLeast(1).toFloat() },
+                modifier = Modifier.fillMaxWidth(),
+                color = colors.accentBlue,
+                trackColor = colors.selectedRowFill,
+            )
+        }
 
-            if (planSteps.isNotEmpty()) {
+        summary?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textPrimary,
+            )
+        }
+
+        if (planSteps.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 planSteps.forEachIndexed { index, step ->
                     PlanStepRow(index = index + 1, step = step)
-                    if (index < planSteps.lastIndex) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
                 }
-            } else if (summary == null) {
-                Text(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
             }
+        } else if (summary == null) {
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textPrimary,
+            )
         }
     }
 }
@@ -2120,12 +2086,14 @@ private fun PlanStepRow(
     index: Int,
     step: PlanStep,
 ) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val isComplete = step.isCompleted()
     val isActive = step.isInProgress()
     val stepColor = when {
-        isComplete -> MaterialTheme.colorScheme.primary
-        isActive -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+        isComplete -> colors.accentGreen
+        isActive -> colors.accentBlue
+        else -> colors.textTertiary
     }
     val indicator = when {
         isComplete -> "✓"
@@ -2133,44 +2101,55 @@ private fun PlanStepRow(
         else -> "$index"
     }
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
-        modifier = Modifier.fillMaxWidth(),
+    Surface(
+        color = colors.raisedSurface.copy(alpha = 0.72f),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
-        Surface(
-            color = stepColor.copy(alpha = 0.15f),
-            shape = CircleShape,
-            modifier = Modifier.size(22.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = geometry.spacing12, vertical = geometry.spacing10),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            verticalAlignment = Alignment.Top,
         ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.fillMaxSize(),
+            Surface(
+                color = stepColor.copy(alpha = 0.14f),
+                shape = CircleShape,
+                modifier = Modifier.size(22.dp),
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Text(
+                        text = indicator,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = stepColor,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
             ) {
                 Text(
-                    text = indicator,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = stepColor,
-                    fontWeight = FontWeight.Bold,
+                    text = step.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isComplete) {
+                        colors.textSecondary
+                    } else {
+                        colors.textPrimary
+                    },
                 )
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = step.text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isComplete) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-            step.status?.takeIf { it.isNotBlank() && !isComplete }?.let {
-                Text(
-                    text = it.normalizedPlanStatusLabel(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = stepColor,
-                )
+                step.status?.takeIf { it.isNotBlank() && !isComplete }?.let {
+                    Text(
+                        text = it.normalizedPlanStatusLabel(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = stepColor,
+                    )
+                }
             }
         }
     }
@@ -2178,45 +2157,41 @@ private fun PlanStepRow(
 
 @Composable
 private fun SubagentActionBubble(message: ConversationMessage) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
     val action = message.subagentAction
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (message.isStreaming) {
-                StreamingIndicator()
+
+    TimelineSystemCard {
+        if (message.isStreaming) {
+            StreamingIndicator(tint = colors.accentBlue)
+        }
+
+        Text(
+            text = action?.summaryText ?: message.text,
+            style = MaterialTheme.typography.titleSmall,
+            color = colors.textPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
+
+        action?.let { subagentAction ->
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            ) {
+                CapsuleLabel(text = subagentAction.tool, emphasized = true)
+                CapsuleLabel(text = subagentAction.status)
+                subagentAction.model?.let { CapsuleLabel(text = it) }
             }
 
-            Text(
-                text = action?.summaryText ?: message.text,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                fontWeight = FontWeight.SemiBold,
-            )
+            subagentAction.prompt?.let { prompt ->
+                Text(
+                    text = prompt,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
 
-            action?.let { subagentAction ->
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CapsuleLabel(text = subagentAction.tool, emphasized = true)
-                    CapsuleLabel(text = subagentAction.status)
-                    subagentAction.model?.let { CapsuleLabel(text = it) }
-                }
-
-                subagentAction.prompt?.let { prompt ->
-                    Text(
-                        text = prompt,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
-                    )
-                }
-
+            Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 subagentAction.agentRows.forEach { row ->
                     SubagentAgentRow(row)
                 }
@@ -2227,15 +2202,19 @@ private fun SubagentActionBubble(message: ConversationMessage) {
 
 @Composable
 private fun SubagentAgentRow(row: SubagentThreadPresentation) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+        color = colors.raisedSurface.copy(alpha = 0.78f),
         shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(horizontal = geometry.spacing12, vertical = geometry.spacing10),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2245,7 +2224,7 @@ private fun SubagentAgentRow(row: SubagentThreadPresentation) {
                 Text(
                     text = row.displayLabel,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = colors.textPrimary,
                     fontWeight = FontWeight.SemiBold,
                 )
                 row.fallbackStatus?.let { CapsuleLabel(text = it) }
@@ -2261,7 +2240,7 @@ private fun SubagentAgentRow(row: SubagentThreadPresentation) {
                 Text(
                     text = detailParts.joinToString(" • "),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                 )
             }
         }
@@ -2270,25 +2249,208 @@ private fun SubagentAgentRow(row: SubagentThreadPresentation) {
 
 @Composable
 private fun CapsuleLabel(text: String, emphasized: Boolean = false) {
+    RemodexPill(
+        label = text.normalizedExecutionStatusLabel(),
+        style = if (emphasized) RemodexPillStyle.Accent else RemodexPillStyle.Neutral,
+    )
+}
+
+@Composable
+private fun TimelineBodyContent(
+    text: String,
+    textColor: Color,
+    secondaryTextColor: Color,
+    referenceColor: Color,
+    codeSurface: Color,
+) {
+    val geometry = RemodexTheme.geometry
+    val bodyBlocks = remember(text) { parseTimelineBodyBlocks(text) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
+        bodyBlocks.forEach { block ->
+            when (block) {
+                is TimelineBodyBlock.CodeFence -> TimelineCodeFence(
+                    code = block.code,
+                    language = block.language,
+                    surfaceColor = codeSurface,
+                    textColor = textColor,
+                )
+
+                is TimelineBodyBlock.Paragraph -> {
+                    block.text.lineSequence()
+                        .map { it.trimEnd() }
+                        .filter { it.isNotBlank() }
+                        .forEach { line ->
+                            val trimmedLine = line.trim()
+                            val lineStyle = if (looksLikeFileReference(trimmedLine)) {
+                                MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = RemodexMonoFontFamily,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                )
+                            } else {
+                                MaterialTheme.typography.bodyLarge
+                            }
+                            Text(
+                                text = trimmedLine,
+                                style = lineStyle,
+                                color = if (looksLikeFileReference(trimmedLine)) {
+                                    referenceColor
+                                } else {
+                                    if (trimmedLine.startsWith("- ") || Regex("""^\d+\.""").containsMatchIn(trimmedLine)) {
+                                        secondaryTextColor
+                                    } else {
+                                        textColor
+                                    }
+                                },
+                            )
+                        }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineCodeFence(
+    code: String,
+    language: String?,
+    surfaceColor: Color,
+    textColor: Color,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val scrollState = rememberScrollState()
+
     Surface(
-        color = if (emphasized) {
-            MaterialTheme.colorScheme.secondary
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        shape = RoundedCornerShape(999.dp),
+        color = surfaceColor,
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.onSecondary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = geometry.spacing10, vertical = geometry.spacing8),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+        ) {
+            language?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textTertiary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Column(modifier = Modifier.horizontalScroll(scrollState)) {
+                code.lines().forEach { line ->
+                    Text(
+                        text = line.ifEmpty { " " },
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = RemodexMonoFontFamily,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        color = textColor,
+                        softWrap = false,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineSystemCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerMedium,
+        tonalColor = colors.subtleGlassTint.copy(alpha = 0.78f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            content = content,
         )
     }
+}
+
+@Composable
+private fun reviewFindingTone(priority: Int?): TimelineStatusTone {
+    return when (priority) {
+        0, 1 -> TimelineStatusTone(RemodexPillStyle.Error, RemodexTheme.colors.errorRed)
+        2 -> TimelineStatusTone(RemodexPillStyle.Warning, RemodexTheme.colors.accentOrange)
+        3 -> TimelineStatusTone(RemodexPillStyle.Accent, RemodexTheme.colors.accentBlue)
+        else -> TimelineStatusTone(RemodexPillStyle.Neutral, RemodexTheme.colors.textSecondary)
+    }
+}
+
+@Composable
+private fun executionStatusTone(status: String?): TimelineStatusTone {
+    return when (status?.trim()?.lowercase()) {
+        "running", "in_progress", "active" -> TimelineStatusTone(
+            RemodexPillStyle.Warning,
+            RemodexTheme.colors.accentOrange,
+        )
+
+        "failed", "error", "cancelled", "stopped" -> TimelineStatusTone(
+            RemodexPillStyle.Error,
+            RemodexTheme.colors.errorRed,
+        )
+
+        "completed", "done", "success" -> TimelineStatusTone(
+            RemodexPillStyle.Success,
+            RemodexTheme.colors.accentGreen,
+        )
+
+        else -> TimelineStatusTone(RemodexPillStyle.Accent, RemodexTheme.colors.accentBlue)
+    }
+}
+
+private fun messageBubbleShape(
+    isUser: Boolean,
+    isFirstInGroup: Boolean,
+    isLastInGroup: Boolean,
+): RoundedCornerShape {
+    val outer = 24.dp
+    val inner = 10.dp
+    return if (isUser) {
+        when {
+            isFirstInGroup && isLastInGroup -> RoundedCornerShape(outer)
+            isFirstInGroup -> RoundedCornerShape(outer, outer, inner, outer)
+            isLastInGroup -> RoundedCornerShape(outer, inner, outer, outer)
+            else -> RoundedCornerShape(outer, inner, inner, outer)
+        }
+    } else {
+        when {
+            isFirstInGroup && isLastInGroup -> RoundedCornerShape(outer)
+            isFirstInGroup -> RoundedCornerShape(outer, outer, outer, inner)
+            isLastInGroup -> RoundedCornerShape(inner, outer, outer, outer)
+            else -> RoundedCornerShape(inner, outer, outer, inner)
+        }
+    }
+}
+
+private fun fileChangeSummaryText(message: ConversationMessage): String? {
+    return message.text
+        .removePrefix("Status: ${message.status ?: "completed"}")
+        .removePrefix("\n\n")
+        .removePrefix("Path: ${message.filePath ?: ""}")
+        .removePrefix("\n\n")
+        .trim()
+        .takeIf { it.isNotBlank() }
+}
+
+internal fun looksLikeFileReference(text: String): Boolean {
+    val trimmed = text.trim()
+    return trimmed.startsWith("[") && trimmed.contains("](/")
+        || trimmed.startsWith("/")
+        || trimmed.startsWith("./")
 }
 
 private fun PlanStep.isCompleted(): Boolean {
@@ -2299,7 +2461,7 @@ private fun PlanStep.isInProgress(): Boolean {
     return status?.trim()?.lowercase() in setOf("in_progress", "active", "running")
 }
 
-private fun String.normalizedPlanStatusLabel(): String {
+internal fun String.normalizedPlanStatusLabel(): String {
     return trim()
         .replace('_', ' ')
         .split(' ')
@@ -2315,7 +2477,7 @@ private fun String.normalizedPlanStatusLabel(): String {
         }
 }
 
-private fun String.normalizedExecutionStatusLabel(): String {
+internal fun String.normalizedExecutionStatusLabel(): String {
     return trim()
         .replace('_', ' ')
         .split(' ')
@@ -2332,7 +2494,8 @@ private fun String.normalizedExecutionStatusLabel(): String {
 }
 
 @Composable
-private fun StreamingIndicator() {
+private fun StreamingIndicator(tint: Color = RemodexTheme.colors.accentBlue) {
+    val colors = RemodexTheme.colors
     val infiniteTransition = rememberInfiniteTransition(label = "streaming")
 
     Row(
@@ -2344,9 +2507,9 @@ private fun StreamingIndicator() {
             repeat(3) { index ->
                 val dotScale by infiniteTransition.animateFloat(
                     initialValue = 0.5f,
-                    targetValue = 1.2f,
+                    targetValue = 1.15f,
                     animationSpec = infiniteRepeatable(
-                        tween(500, delayMillis = index * 120),
+                        tween(520, delayMillis = index * 130),
                         RepeatMode.Reverse,
                     ),
                     label = "streamDot$index",
@@ -2356,7 +2519,7 @@ private fun StreamingIndicator() {
                         .size(5.dp)
                         .scale(dotScale)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
+                        .background(tint),
                 )
             }
         }
@@ -2364,7 +2527,7 @@ private fun StreamingIndicator() {
         Text(
             text = "Writing",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.textSecondary,
             fontWeight = FontWeight.SemiBold,
         )
     }
