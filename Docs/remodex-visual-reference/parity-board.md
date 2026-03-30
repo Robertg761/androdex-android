@@ -10,29 +10,40 @@ This board is the screen-by-screen mapping from canonical Remodex state to the A
 
 ## Board
 
-| Area | Remodex state | Remodex evidence | Androdex target | Board status |
-| --- | --- | --- | --- | --- |
-| Pairing | QR scanner idle / overlay / permission states | `Views/QRScannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready |
-| Onboarding | Welcome hero and feature pages | `Views/Onboarding/OnboardingWelcomePage.swift`, `Views/Onboarding/OnboardingFeaturesPage.swift`, `Views/Onboarding/OnboardingStepPage.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready |
-| Home | Offline / connected / syncing empty state | `Views/Home/HomeEmptyStateView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready |
-| Home | Trusted pair summary and completion banner | `Views/Shared/TrustedPairSummaryView.swift`, `Views/Home/ThreadCompletionBannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready |
-| Sidebar | Header, search, new chat, grouped threads | `Views/SidebarView.swift`, `Views/Sidebar/SidebarHeaderView.swift`, `Views/Sidebar/SidebarSearchField.swift`, `Views/Sidebar/SidebarThreadRowView.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
-| Sidebar | Grouping, expansion, archived bucket, worktree labeling | `Views/Sidebar/SidebarThreadGrouping.swift`, `CodexMobileTests/SidebarThreadGroupingTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
-| Sidebar | Initial loading overlay behavior | `Views/SidebarView.swift`, `CodexMobileTests/SidebarThreadsLoadingPresentationTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready |
-| Thread shell | Navigation title, subtitle, thread actions, git pills | `Views/Turn/TurnView.swift`, `Views/Turn/TurnToolbarContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
-| Thread timeline | Empty state, scroll container, pinned plan accessory | `Views/Turn/TurnConversationContainerView.swift`, `Views/Turn/TurnTimelineView.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
-| Thread messages | User / assistant / system / thinking / file-change / execution / review content | `Views/Turn/TurnMessageComponents.swift`, `Views/Turn/CommandExecutionViews.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
-| Composer | Floating shell, placeholder, chips, attachments, send / stop controls | `Views/Turn/TurnComposerView.swift`, `Views/Turn/ComposerBottomBar.swift`, `Views/Turn/ComposerAttachmentsPreview.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
-| Composer | File / skill / slash autocomplete panels | `Views/Turn/FileAutocompletePanel.swift`, `Views/Turn/SkillAutocompletePanel.swift`, `Views/Turn/SlashCommandAutocompletePanel.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
-| Composer | Review and subagents armed states | `Views/Turn/TurnComposerView.swift`, `CodexMobileTests/TurnComposerReviewModeTests.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
-| Composer | Queued drafts and voice recording | `Views/Turn/QueuedDraftsPanel.swift`, `Views/Turn/VoiceRecordingCapsule.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready |
-| Git | Toolbar actions, branch selector, diff sheet, worktree handoff | `Views/Turn/TurnGitActionsToolbar.swift`, `Views/Turn/TurnGitBranchSelector.swift`, `Views/Turn/TurnDiffSheet.swift`, `Views/Turn/TurnWorktreeHandoffOverlay.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/GitSheet.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready |
-| Runtime | Status sheet and usage summary | `Views/Turn/TurnStatusSheet.swift`, `Views/Shared/UsageStatusSummaryContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadRuntimeSheet.kt` | ready |
-| Project picker | New chat project chooser | `Views/SidebarView.swift`, `Views/Sidebar/SidebarThreadGrouping.swift` | `android/app/src/main/java/io/androdex/android/ui/home/ProjectPickerSheet.kt` | ready |
-| Settings | Settings cards, trusted Mac card, runtime defaults | `Views/SettingsView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/RuntimeSettingsSheet.kt` | ready |
-| About | Editorial about screen and architecture diagram | `Views/AboutRemodexView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/AboutAndrodexSheet.kt` | ready |
-| Dialogs | Confirmation dialogs and alerts | `Views/SidebarView.swift`, `Views/Turn/TurnViewAlertModifier.swift` | thread and sidebar alert surfaces in Android | ready |
-| Recovery | Missing thread, reconnect fallback, notification-open states | `CodexMobileTests/CodexPushNotificationRegistrationTests.swift`, app runtime flow plus push/open navigation behavior | `android/app/src/main/java/io/androdex/android/MainViewModel.kt`, pairing/home/thread recovery surfaces | runtime capture backlog only |
+| Area | Remodex state | Remodex evidence | Androdex target | Board status | Phase 13 audit |
+| --- | --- | --- | --- | --- | --- |
+| Pairing | QR scanner idle / overlay / permission states | `Views/QRScannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready | `Not matched` |
+| Onboarding | Welcome hero and feature pages | `Views/Onboarding/OnboardingWelcomePage.swift`, `Views/Onboarding/OnboardingFeaturesPage.swift`, `Views/Onboarding/OnboardingStepPage.swift` | `android/app/src/main/java/io/androdex/android/ui/pairing/PairingScreen.kt` | ready | `Acceptable Android compromise` |
+| Home | Offline / connected / syncing empty state | `Views/Home/HomeEmptyStateView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready | `Perceptually exact` |
+| Home | Trusted pair summary and completion banner | `Views/Shared/TrustedPairSummaryView.swift`, `Views/Home/ThreadCompletionBannerView.swift` | `android/app/src/main/java/io/androdex/android/ui/home/HomeScreen.kt` | ready | `Acceptable Android compromise` |
+| Sidebar | Header, search, new chat, grouped threads | `Views/SidebarView.swift`, `Views/Sidebar/SidebarHeaderView.swift`, `Views/Sidebar/SidebarSearchField.swift`, `Views/Sidebar/SidebarThreadRowView.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready | `Perceptually exact` |
+| Sidebar | Grouping, expansion, archived bucket, worktree labeling | `Views/Sidebar/SidebarThreadGrouping.swift`, `CodexMobileTests/SidebarThreadGroupingTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready | `Perceptually exact` |
+| Sidebar | Initial loading overlay behavior | `Views/SidebarView.swift`, `CodexMobileTests/SidebarThreadsLoadingPresentationTests.swift` | `android/app/src/main/java/io/androdex/android/ui/sidebar/SidebarContent.kt` | ready | `Acceptable Android compromise` |
+| Thread shell | Navigation title, subtitle, thread actions, git pills | `Views/Turn/TurnView.swift`, `Views/Turn/TurnToolbarContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready | `Acceptable Android compromise` |
+| Thread timeline | Empty state, scroll container, pinned plan accessory | `Views/Turn/TurnConversationContainerView.swift`, `Views/Turn/TurnTimelineView.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready | `Acceptable Android compromise` |
+| Thread messages | User / assistant / system / thinking / file-change / execution / review content | `Views/Turn/TurnMessageComponents.swift`, `Views/Turn/CommandExecutionViews.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready | `Perceptually exact` |
+| Composer | Floating shell, placeholder, chips, attachments, send / stop controls | `Views/Turn/TurnComposerView.swift`, `Views/Turn/ComposerBottomBar.swift`, `Views/Turn/ComposerAttachmentsPreview.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready | `Not matched` |
+| Composer | File / skill / slash autocomplete panels | `Views/Turn/FileAutocompletePanel.swift`, `Views/Turn/SkillAutocompletePanel.swift`, `Views/Turn/SlashCommandAutocompletePanel.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready | `Not matched` |
+| Composer | Review and subagents armed states | `Views/Turn/TurnComposerView.swift`, `CodexMobileTests/TurnComposerReviewModeTests.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready | `Not matched` |
+| Composer | Queued drafts and voice recording | `Views/Turn/QueuedDraftsPanel.swift`, `Views/Turn/VoiceRecordingCapsule.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` | ready | `Not matched` |
+| Git | Toolbar actions, branch selector, diff sheet, worktree handoff | `Views/Turn/TurnGitActionsToolbar.swift`, `Views/Turn/TurnGitBranchSelector.swift`, `Views/Turn/TurnDiffSheet.swift`, `Views/Turn/TurnWorktreeHandoffOverlay.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/GitSheet.kt`, `android/app/src/main/java/io/androdex/android/ui/turn/ThreadTimelineScreen.kt` | ready | `Not matched` |
+| Runtime | Status sheet and usage summary | `Views/Turn/TurnStatusSheet.swift`, `Views/Shared/UsageStatusSummaryContent.swift` | `android/app/src/main/java/io/androdex/android/ui/turn/ThreadRuntimeSheet.kt` | ready | `Not matched` |
+| Project picker | New chat project chooser | `Views/SidebarView.swift`, `Views/Sidebar/SidebarThreadGrouping.swift` | `android/app/src/main/java/io/androdex/android/ui/home/ProjectPickerSheet.kt` | ready | `Not matched` |
+| Settings | Settings cards, trusted Mac card, runtime defaults | `Views/SettingsView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/RuntimeSettingsSheet.kt` | ready | `Perceptually exact` |
+| About | Editorial about screen and architecture diagram | `Views/AboutRemodexView.swift` | `android/app/src/main/java/io/androdex/android/ui/settings/AboutAndrodexSheet.kt` | ready | `Not matched` |
+| Dialogs | Confirmation dialogs and alerts | `Views/SidebarView.swift`, `Views/Turn/TurnViewAlertModifier.swift` | thread and sidebar alert surfaces in Android | ready | `Perceptually exact` |
+| Recovery | Missing thread, reconnect fallback, notification-open states | `CodexMobileTests/CodexPushNotificationRegistrationTests.swift`, app runtime flow plus push/open navigation behavior | `android/app/src/main/java/io/androdex/android/MainViewModel.kt`, pairing/home/thread recovery surfaces | runtime capture backlog only | `Not matched` |
+
+## Phase 13 Audit Notes
+
+Status labels follow the clone plan language:
+
+- `Exact`: no meaningful visible drift remains
+- `Perceptually exact`: Android matches the same product feel in current archived evidence
+- `Acceptable Android compromise`: remaining differences are documented platform limits or runtime constraints
+- `Not matched`: either the surface still drifts visibly or the archival Android evidence is still missing
+
+The repo-wide enforcement and backlog note for these statuses now lives in [`phase13-parity-audit.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/phase13-parity-audit.md).
 
 ## Android Capture Anchors
 

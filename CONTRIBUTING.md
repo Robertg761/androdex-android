@@ -48,3 +48,18 @@ gradlew assembleDebug
 - Do not commit private relay hostnames, credentials, signing secrets, or device-specific overrides.
 - If you touch docs, keep the distinction clear between the host-local Codex runtime and remote relay-backed device access.
 - Keep local scratch files and one-off generated outputs under `tmp/` or `tmp-gh-artifact/`; those paths are intentionally gitignored.
+
+## UI Parity Workflow
+
+Remodex is the visual source of truth for Androdex UI work during the clone effort.
+
+If a change touches user-visible Android UI, use the reference package in [`Docs/remodex-visual-reference/README.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/README.md) before merging.
+
+That means:
+
+- compare against the mapped Remodex state in [`Docs/remodex-visual-reference/parity-board.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/parity-board.md)
+- include Android screenshots or recordings for each touched state, or explicitly call out the missing capture as backlog
+- update the parity docs when a status, evidence link, or allowed compromise changes
+- prefer shared Remodex primitives and tokens over raw Material defaults or one-off screen-local styling
+
+The current enforcement summary and explicit backlog live in [`Docs/remodex-visual-reference/phase13-parity-audit.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/phase13-parity-audit.md).

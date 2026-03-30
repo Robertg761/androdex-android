@@ -24,6 +24,8 @@ This package was assembled from these sources on March 29, 2026:
   Exact route and state inventory, with screenshot/video filenames and current evidence status.
 - [`parity-board.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/parity-board.md)
   Side-by-side board mapping each Remodex state to the Androdex surface that must match it.
+- [`phase13-parity-audit.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/phase13-parity-audit.md)
+  Final audit note describing the source of truth, enforcement rules, current parity status, and explicit backlog.
 - [`token-sheet.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/token-sheet.md)
   Code-derived visual tokens and geometry extracted from the Remodex app.
 - [`known-platform-compromises.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/known-platform-compromises.md)
@@ -68,3 +70,13 @@ As of March 29, 2026 we now have verified Androdex runtime captures for:
 - Phase 1 sidebar open shell refresh
 
 Prefer the route-based `*--androdex.png` files when a canonical Android counterpart exists. Older `androdex-*.png` files are retained as exploratory scratch captures for states that do not yet have a route-based filename.
+
+## Phase 13 Enforcement
+
+The verification and enforcement closeout now lives in [`phase13-parity-audit.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/phase13-parity-audit.md).
+
+That note is the repo-level answer to three questions:
+
+- what counts as the visual source of truth
+- which Android compromises are allowed
+- what evidence a UI change needs before it should be treated as parity-preserving
