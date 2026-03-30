@@ -165,6 +165,23 @@ The acceptable Android compromise is:
 - accept small device-specific differences in the exact vertical emptiness above the composer, but keep the perceptual split between timeline stage and footer region
 - allow later capture passes to fill in additional running or banner-bearing device references without reopening the completed shell implementation work
 
+## 15. Composer Overlay Layering And Accessory Stacking
+
+Remodex presents autocomplete, review controls, and future voice/media accessories as a tightly layered control cluster hovering above the iOS keyboard and home-indicator region.
+
+Android Compose can match most of the visual density, but it cannot reproduce the exact same overlay choreography on every device because:
+
+- IME inset timing and z-order differ across gesture modes and OEM builds
+- Android popup/menu primitives do not line up cleanly with the shared floating composer shell we need to keep stable across phones and tablets
+- the same composer has to host review controls, runtime controls, autocomplete, and later attachment/voice states without causing footer jumps during reconnect or active turns
+
+The acceptable Android compromise is:
+
+- keep accessory, review, and autocomplete content visually nested inside the same large-radius composer shell instead of splitting them into separate Material menus or sheets
+- preserve the Remodex row heights, inset padding, focus border, and chip density so the whole footer still reads as one floating control cluster
+- accept that Android may read as a tighter inline stack than the iOS overlay choreography in some states
+- revisit the exact layering only when the later voice/accessory work lands; do not use this as permission to fall back to stock Android text fields, chips, or dropdown menus
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:

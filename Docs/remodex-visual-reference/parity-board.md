@@ -92,13 +92,19 @@ Phase 7 timeline-message implementation note:
 - `android/app/src/test/java/io/androdex/android/ui/turn/ThreadTimelineFormattingTest.kt` now covers bubble grouping, streaming activity text, and message-body parsing so later timeline work is less likely to regress quietly.
 - Fresh Android capture anchors for this pass now include `android-device-captures/phase7/phase7-thread-streaming.png` and `android-device-captures/phase7/phase7-thread-mixed-content.png`, with matching XML snapshots alongside them for the archived streaming and mixed-content message states.
 
+Phase 8 composer implementation note:
+
+- `android/app/src/main/java/io/androdex/android/ui/turn/ComposerBar.kt` now replaces the old Material field/chip/filter-chip stack with a Remodex-style floating composer shell, plus/tune/close accessory control, compact stop and send actions, removable context chips, inline review/runtime/media controls, a base-branch input shell, and density-matched autocomplete panels.
+- `android/app/src/test/java/io/androdex/android/ui/turn/ComposerBarPresentationTest.kt` now covers the accessory button state machine and the icon-vs-text send control presentation so later composer work is less likely to drift.
+- Fresh Android capture anchors for composer idle, focused, armed, and autocomplete states are still pending; no attached device or local emulator was available in this workspace, so the composer row should be treated as implementation-complete but phase-gate-incomplete.
+
 The remaining Android capture gaps are the refreshed Phase 3 pairing states plus later-phase/runtime work: approval-dialog variants, notification-open success/fallback, and the missing-thread prompt family.
 
 Phase 1 is complete for the shared design-system surfaces. Live device verification now anchors the refreshed home and sidebar captures, while the remaining runtime alert and recovery captures stay tracked under later phases and backlog work.
 
 ## Highest-Risk Visual Mismatches To Fix First
 
-1. Composer shell. Remodex uses a floating glass composer with a large `28` corner radius and layered autocomplete/voice overlays.
+1. Composer verification follow-up. The Android composer now tracks the floating shell, chips, and autocomplete structure much more closely in code, but a later capture pass should still archive idle/focused/armed/autocomplete references and compare the inline overlay layering against Remodex.
 2. Thread shell artifact follow-up. The Android thread header and shell spacing now track the Remodex structure much more closely in code, but a later device pass should still archive refreshed running and fork-banner references alongside the new idle capture.
 3. Color semantics. Remodex leans on iOS semantic fills and glass/translucency; Androdex still reads like Material 3 with iOS-colored paint on top.
 4. Sidebar reconnect loading fidelity. The refreshed drawer now has real empty/loading Android anchors, but the saved-reconnect loading variant can still momentarily retain grouped drawer content while the home shell is rehydrating workspace context behind it.
