@@ -204,6 +204,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
         is AndrodexDestinationUiState.Thread -> ConnectedRoute.Thread(destination.state)
         is AndrodexDestinationUiState.Pairing -> null
     }
+    val connectedRouteTransitionKey = connectedShellTransitionKey(destination)
     val motion = RemodexTheme.motion
 
     AnimatedContent(
@@ -282,7 +283,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                             .background(RemodexTheme.colors.appBackground),
                     ) {
                         AnimatedContent(
-                            targetState = connectedRoute,
+                            targetState = connectedRouteTransitionKey,
                             transitionSpec = {
                                 when {
                                     initialState == targetState || targetState == null -> {
@@ -293,7 +294,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                             durationMillis = motion.shellMillis,
                                         )
                                     }
-                                    targetState is ConnectedRoute.Thread -> {
+                                    targetState is ConnectedShellTransitionKey.Thread -> {
                                         shellTransform(
                                             forward = true,
                                             enterDivisor = 10,
@@ -312,9 +313,10 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                 }
                             },
                             label = "connectedShellTransition",
-                        ) { connectedState ->
-                            when (connectedState) {
-                                is ConnectedRoute.Home -> {
+                        ) { transitionKey ->
+                            when (transitionKey) {
+                                ConnectedShellTransitionKey.Home -> {
+                                    val connectedState = connectedRoute as? ConnectedRoute.Home ?: return@AnimatedContent
                                     HomeScreen(
                                         state = connectedState.state,
                                         onOpenSidebar = { scope.launch { drawerState.open() } },
@@ -330,7 +332,8 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                     )
                                 }
 
-                                is ConnectedRoute.Thread -> {
+                                is ConnectedShellTransitionKey.Thread -> {
+                                    val connectedState = connectedRoute as? ConnectedRoute.Thread ?: return@AnimatedContent
                                     if (threadRuntimeOpen) {
                                         ThreadRuntimeSheet(
                                             state = connectedState.state.runtime,
@@ -452,6 +455,19 @@ private enum class RootShell {
 private sealed interface ConnectedRoute {
     data class Home(val state: HomeScreenUiState) : ConnectedRoute
     data class Thread(val state: ThreadTimelineUiState) : ConnectedRoute
+}
+
+internal sealed interface ConnectedShellTransitionKey {
+    data object Home : ConnectedShellTransitionKey
+    data class Thread(val threadId: String) : ConnectedShellTransitionKey
+}
+
+internal fun connectedShellTransitionKey(
+    destination: AndrodexDestinationUiState,
+): ConnectedShellTransitionKey? = when (destination) {
+    is AndrodexDestinationUiState.Home -> ConnectedShellTransitionKey.Home
+    is AndrodexDestinationUiState.Thread -> ConnectedShellTransitionKey.Thread(destination.state.threadId)
+    is AndrodexDestinationUiState.Pairing -> null
 }
 
 private fun shellTransform(
