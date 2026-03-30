@@ -183,6 +183,7 @@ internal enum class WorkspaceRowAction {
 internal data class ThreadTimelineUiState(
     val threadId: String,
     val title: String,
+    val subtitle: String?,
     val messages: List<ConversationMessage>,
     val runState: ThreadRunBadgeUiState?,
     val isForkedThread: Boolean,
@@ -611,6 +612,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
+        subtitle = selectedThread?.projectName
+            ?.takeIf { it.isNotBlank() && it != (selectedThreadTitle ?: "Conversation") },
         messages = messages,
         runState = threadRunBadge(threadId),
         isForkedThread = selectedThread?.forkedFromThreadId != null,

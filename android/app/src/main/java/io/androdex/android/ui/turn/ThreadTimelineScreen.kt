@@ -20,14 +20,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -56,8 +60,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -103,10 +105,13 @@ import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.shared.RemodexGroupedSurface
+import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
 import io.androdex.android.ui.state.ToolUserInputQuestionUiState
+import io.androdex.android.ui.theme.RemodexTheme
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -246,6 +251,8 @@ internal fun ThreadTimelineScreen(
     onHandleGitAlertAction: (GitAlertAction) -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
     val listState = remember { LazyListState() }
     val coroutineScope = rememberCoroutineScope()
     var overflowMenuExpanded by rememberSaveable { mutableStateOf(false) }
@@ -274,62 +281,52 @@ internal fun ThreadTimelineScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    val dotColor = runStateDotColor(state.runState)
-                    val infiniteTransition = rememberInfiniteTransition(label = "runDot")
-                    val dotAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
-                        label = "runDotAlpha",
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ThreadHeader(
+                title = state.title,
+                subtitle = state.subtitle,
+                runState = state.runState,
+                navigation = {
+                    RemodexIconButton(
+                        onClick = onBack,
+                        contentDescription = "Back",
                     ) {
-                        if (state.runState != null) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        dotColor.copy(
-                                            alpha = if (state.runState == ThreadRunBadgeUiState.RUNNING) dotAlpha else 1f
-                                        )
-                                    ),
-                            )
-                        }
-                        Text(
-                            text = state.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        gitAffordance?.let { affordance ->
-                            GitTopBarPill(
-                                state = affordance,
-                                onClick = onOpenGitSheet,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null,
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(geometry.iconSize),
                         )
                     }
                 },
                 actions = {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    gitAffordance?.let { affordance ->
+                        GitTopBarPill(
+                            state = affordance,
+                            onClick = onOpenGitSheet,
+                        )
+                    }
+                    RemodexIconButton(
+                        onClick = onRefresh,
+                        contentDescription = "Refresh",
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(geometry.iconSize),
+                        )
                     }
                     Box {
-                        IconButton(onClick = { overflowMenuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        RemodexIconButton(
+                            onClick = { overflowMenuExpanded = true },
+                            contentDescription = "More",
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = null,
+                                tint = colors.textPrimary,
+                                modifier = Modifier.size(geometry.iconSize),
+                            )
                         }
                         DropdownMenu(
                             expanded = overflowMenuExpanded,
@@ -387,12 +384,9 @@ internal fun ThreadTimelineScreen(
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
             )
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
     ) { paddingValues ->
         GitAlertDialog(
             state = state.git.alert,
@@ -454,98 +448,242 @@ internal fun ThreadTimelineScreen(
                 .imePadding(),
         ) {
             BusyIndicator(state = state.busy)
-            if (state.isForkedThread) {
-                ForkedThreadBanner(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                )
-            }
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 760.dp),
                 ) {
-                    items(bubbleContexts, key = { it.message.id }) { ctx ->
-                        MessageBubble(
-                            message = ctx.message,
-                            isFirstInGroup = ctx.isFirstInGroup,
-                            isLastInGroup = ctx.isLastInGroup,
-                        )
-                    }
-                }
-
-                if (showJumpToLatest) {
-                    SmallFloatingActionButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                if (state.messages.isNotEmpty()) {
-                                    listState.animateScrollToItem(state.messages.lastIndex)
-                                }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = geometry.pageHorizontalPadding,
+                            end = geometry.pageHorizontalPadding,
+                            top = geometry.spacing18,
+                            bottom = geometry.spacing24,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(geometry.spacing14),
+                    ) {
+                        if (state.isForkedThread) {
+                            item(key = "forked-banner") {
+                                ForkedThreadBanner()
                             }
-                        },
-                        shape = CircleShape,
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        }
+                        items(bubbleContexts, key = { it.message.id }) { ctx ->
+                            MessageBubble(
+                                message = ctx.message,
+                                isFirstInGroup = ctx.isFirstInGroup,
+                                isLastInGroup = ctx.isLastInGroup,
+                            )
+                        }
+                        item(key = "thread-shell-bottom-spacer") {
+                            Spacer(modifier = Modifier.height(geometry.spacing12))
+                        }
+                    }
+
+                    Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(16.dp),
+                            .padding(
+                                end = geometry.pageHorizontalPadding,
+                                bottom = geometry.spacing16,
+                            ),
                     ) {
-                        Icon(
-                            Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Jump to latest",
-                            modifier = Modifier.size(20.dp),
-                        )
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = showJumpToLatest,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                        ) {
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        if (state.messages.isNotEmpty()) {
+                                            listState.animateScrollToItem(state.messages.lastIndex)
+                                        }
+                                    }
+                                },
+                                shape = CircleShape,
+                                containerColor = colors.secondarySurface.copy(alpha = 0.94f),
+                                contentColor = colors.textPrimary,
+                                modifier = Modifier.size(40.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Jump to latest",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
 
-            AnimatedVisibility(visible = state.queuedDrafts.isNotEmpty()) {
-                QueuedDraftsCard(
-                    drafts = state.queuedDrafts,
-                    queuePauseMessage = state.queuePauseMessage,
-                    canRestoreDrafts = state.canRestoreQueuedDrafts,
-                    canPauseQueue = state.canPauseQueue,
-                    canResumeQueue = state.canResumeQueue,
-                    onPauseQueue = onPauseQueue,
-                    onResumeQueue = onResumeQueue,
-                    onRestoreDraft = onRestoreQueuedDraft,
-                    onRemoveDraft = onRemoveQueuedDraft,
-                )
-            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = geometry.spacing10),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            ) {
+                AnimatedVisibility(visible = state.queuedDrafts.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 760.dp)
+                            .padding(horizontal = geometry.pageHorizontalPadding),
+                    ) {
+                        QueuedDraftsCard(
+                            drafts = state.queuedDrafts,
+                            queuePauseMessage = state.queuePauseMessage,
+                            canRestoreDrafts = state.canRestoreQueuedDrafts,
+                            canPauseQueue = state.canPauseQueue,
+                            canResumeQueue = state.canResumeQueue,
+                            onPauseQueue = onPauseQueue,
+                            onResumeQueue = onResumeQueue,
+                            onRestoreDraft = onRestoreQueuedDraft,
+                            onRemoveDraft = onRemoveQueuedDraft,
+                        )
+                    }
+                }
 
-            AnimatedVisibility(visible = state.pendingToolInputs.isNotEmpty()) {
-                PendingToolInputsCard(
-                    requests = state.pendingToolInputs,
-                    onAnswerChanged = onToolInputAnswerChanged,
-                    onSubmit = onSubmitToolInput,
-                )
-            }
+                AnimatedVisibility(visible = state.pendingToolInputs.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 760.dp)
+                            .padding(horizontal = geometry.pageHorizontalPadding),
+                    ) {
+                        PendingToolInputsCard(
+                            requests = state.pendingToolInputs,
+                            onAnswerChanged = onToolInputAnswerChanged,
+                            onSubmit = onSubmitToolInput,
+                        )
+                    }
+                }
 
-            ComposerBar(
-                state = state.composer,
-                activityText = agentActivityText,
-                onTextChange = onComposerChanged,
-                onPlanModeChanged = onPlanModeChanged,
-                onSubagentsModeChanged = onSubagentsModeChanged,
-                onSelectReviewTarget = onSelectReviewTarget,
-                onReviewBaseBranchChanged = onReviewBaseBranchChanged,
-                onRemoveReviewSelection = onRemoveReviewSelection,
-                onSelectFileAutocomplete = onSelectFileAutocomplete,
-                onRemoveMentionedFile = onRemoveMentionedFile,
-                onSelectSkillAutocomplete = onSelectSkillAutocomplete,
-                onRemoveMentionedSkill = onRemoveMentionedSkill,
-                onSelectSlashCommand = onSelectSlashCommand,
-                onAddCamera = onAddCamera,
-                onAddGallery = onAddGallery,
-                onRemoveAttachment = onRemoveComposerAttachment,
-                onOpenRuntime = onOpenRuntime,
-                onSend = onSend,
-                onStop = onStop,
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 760.dp)
+                        .padding(horizontal = geometry.pageHorizontalPadding),
+                ) {
+                    ComposerBar(
+                        state = state.composer,
+                        activityText = agentActivityText,
+                        onTextChange = onComposerChanged,
+                        onPlanModeChanged = onPlanModeChanged,
+                        onSubagentsModeChanged = onSubagentsModeChanged,
+                        onSelectReviewTarget = onSelectReviewTarget,
+                        onReviewBaseBranchChanged = onReviewBaseBranchChanged,
+                        onRemoveReviewSelection = onRemoveReviewSelection,
+                        onSelectFileAutocomplete = onSelectFileAutocomplete,
+                        onRemoveMentionedFile = onRemoveMentionedFile,
+                        onSelectSkillAutocomplete = onSelectSkillAutocomplete,
+                        onRemoveMentionedSkill = onRemoveMentionedSkill,
+                        onSelectSlashCommand = onSelectSlashCommand,
+                        onAddCamera = onAddCamera,
+                        onAddGallery = onAddGallery,
+                        onRemoveAttachment = onRemoveComposerAttachment,
+                        onOpenRuntime = onOpenRuntime,
+                        onSend = onSend,
+                        onStop = onStop,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadHeader(
+    title: String,
+    subtitle: String?,
+    runState: ThreadRunBadgeUiState?,
+    navigation: @Composable () -> Unit,
+    actions: @Composable RowScope.() -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
+    val dotColor = runStateDotColor(runState)
+    val infiniteTransition = rememberInfiniteTransition(label = "runDot")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(RemodexTheme.motion.pulseMillis), RepeatMode.Reverse),
+        label = "runDotAlpha",
+    )
+
+    Surface(
+        color = colors.topBarBackground,
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = geometry.spacing14,
+                    end = geometry.spacing14,
+                    top = geometry.spacing4,
+                    bottom = geometry.spacing8,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
+        ) {
+            navigation()
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(if (subtitle == null) 0.dp else geometry.spacing2),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                ) {
+                    if (runState != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    dotColor.copy(
+                                        alpha = if (runState == ThreadRunBadgeUiState.RUNNING) dotAlpha else 1f,
+                                    )
+                                ),
+                        )
+                    }
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = if (subtitle == null) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = if (runState != null) 16.dp else 0.dp),
+                    )
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalAlignment = Alignment.CenterVertically,
+                content = actions,
             )
         }
     }
@@ -553,25 +691,35 @@ internal fun ThreadTimelineScreen(
 
 @Composable
 private fun ForkedThreadBanner(modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(16.dp),
+    val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
+
+    RemodexGroupedSurface(
         modifier = modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.84f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
         ) {
+            Surface(
+                color = colors.selectedRowFill,
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier.widthIn(max = 128.dp),
+            ) {
+                Text(
+                    text = "Forked thread",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = geometry.spacing10, vertical = geometry.spacing4),
+                )
+            }
             Text(
-                text = "Forked thread",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "This conversation branched from an earlier thread so you can explore a different direction without losing the original.",
+                text = "This conversation branched from an earlier thread so you can explore a different direction without losing the original path.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = colors.textSecondary,
             )
         }
     }
@@ -582,12 +730,15 @@ private fun GitTopBarPill(
     state: GitAffordanceUiState,
     onClick: () -> Unit,
 ) {
+    val colors = RemodexTheme.colors
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = colors.secondarySurface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(999.dp),
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .clickable(onClick = onClick),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -597,7 +748,7 @@ private fun GitTopBarPill(
             Text(
                 text = state.primaryLabel,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = colors.textPrimary,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
@@ -605,7 +756,7 @@ private fun GitTopBarPill(
                 Text(
                     text = secondary,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     maxLines = 1,
                 )
             }
@@ -650,16 +801,17 @@ private fun QueuedDraftsCard(
     onRestoreDraft: (String) -> Unit,
     onRemoveDraft: (String) -> Unit,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.9f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -670,12 +822,12 @@ private fun QueuedDraftsCard(
                     Text(
                         text = "Queued follow-ups",
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = colors.textPrimary,
                     )
                     Text(
                         text = "${drafts.size} waiting",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textSecondary,
                     )
                 }
 
@@ -696,14 +848,14 @@ private fun QueuedDraftsCard(
 
             queuePauseMessage?.let { message ->
                 Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(10.dp),
+                    color = colors.accentOrange.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(geometry.cornerMedium),
                 ) {
                     Text(
                         text = message,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(horizontal = geometry.spacing10, vertical = geometry.spacing8),
                     )
                 }
             }
@@ -715,7 +867,7 @@ private fun QueuedDraftsCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        color = colors.selectedRowFill,
                         shape = CircleShape,
                         modifier = Modifier.size(22.dp),
                     ) {
@@ -726,7 +878,7 @@ private fun QueuedDraftsCard(
                             Text(
                                 text = "${index + 1}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = colors.textSecondary,
                             )
                         }
                     }
@@ -738,13 +890,13 @@ private fun QueuedDraftsCard(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (draft.collaborationMode == CollaborationModeKind.PLAN) {
                                 Surface(
-                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    color = colors.accentGreen.copy(alpha = 0.14f),
                                     shape = RoundedCornerShape(999.dp),
                                 ) {
                                     Text(
                                         text = "PLAN",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        color = colors.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                     )
@@ -752,13 +904,13 @@ private fun QueuedDraftsCard(
                             }
                             if (draft.subagentsSelectionEnabled) {
                                 Surface(
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    color = colors.accentBlue.copy(alpha = 0.12f),
                                     shape = RoundedCornerShape(999.dp),
                                 ) {
                                     Text(
                                         text = "SUBAGENTS",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        color = colors.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                     )
@@ -766,13 +918,13 @@ private fun QueuedDraftsCard(
                             }
                             if (draft.attachments.isNotEmpty()) {
                                 Surface(
-                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    color = colors.selectedRowFill,
                                     shape = RoundedCornerShape(999.dp),
                                 ) {
                                     Text(
                                         text = if (draft.attachments.size == 1) "1 PHOTO" else "${draft.attachments.size} PHOTOS",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        color = colors.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                     )
@@ -782,7 +934,7 @@ private fun QueuedDraftsCard(
                         Text(
                             text = applyingSubagentsSelection(draft.text, draft.subagentsSelectionEnabled),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = colors.textPrimary,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -807,7 +959,7 @@ private fun QueuedDraftsCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            .background(colors.hairlineDivider.copy(alpha = 0.8f)),
                     )
                 }
             }
@@ -821,16 +973,17 @@ private fun PendingToolInputsCard(
     onAnswerChanged: (String, String, String) -> Unit,
     onSubmit: (String) -> Unit,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.9f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
             requests.forEachIndexed { index, request ->
                 ToolInputRequestCard(
@@ -843,7 +996,7 @@ private fun PendingToolInputsCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            .background(colors.hairlineDivider.copy(alpha = 0.8f)),
                     )
                 }
             }
@@ -857,19 +1010,21 @@ private fun ToolInputRequestCard(
     onAnswerChanged: (String, String, String) -> Unit,
     onSubmit: (String) -> Unit,
 ) {
+    val colors = RemodexTheme.colors
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = request.title,
                 style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = colors.textPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
             request.message?.takeIf { it.isNotBlank() }?.let { message ->
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                 )
             }
         }
@@ -908,19 +1063,21 @@ private fun ToolInputQuestionCard(
     enabled: Boolean,
     onAnswerChanged: (String, String, String) -> Unit,
 ) {
+    val colors = RemodexTheme.colors
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         question.header?.takeIf { it.isNotBlank() }?.let { header ->
             Text(
                 text = header,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accentBlue,
                 fontWeight = FontWeight.SemiBold,
             )
         }
         Text(
             text = question.question,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
         )
 
         question.options.forEach { option ->
@@ -937,9 +1094,9 @@ private fun ToolInputQuestionCard(
                         text = option.label,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (option.isSelected) {
-                            MaterialTheme.colorScheme.primary
+                            colors.accentBlue
                         } else {
-                            MaterialTheme.colorScheme.onSurface
+                            colors.textPrimary
                         },
                         fontWeight = if (option.isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     )
@@ -947,7 +1104,7 @@ private fun ToolInputQuestionCard(
                         Text(
                             text = description,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = colors.textSecondary,
                         )
                     }
                 }

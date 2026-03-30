@@ -147,6 +147,24 @@ The acceptable compromise is:
 - document that runtime-specific loading nuance explicitly instead of pretending Android exposes the exact same steady-state drawer overlay timing as Remodex
 - treat the runtime nuance as a verification note, not as permission to fall back to a looser Material drawer design
 
+## 14. Thread Shell Empty-Stage Height And Footer Anchoring
+
+Remodex gets a lot of its turn-screen feel from iPhone-safe-area math: a compact inline header, a large mostly-empty conversation stage while idle, and a composer/footer stack that sits in a distinct bottom zone above the home indicator.
+
+Android Compose cannot reproduce that geometry literally because:
+
+- status-bar and navigation-bar inset consumption differ by device and gesture mode
+- keyboard lift timing differs from SwiftUI
+- the same screen may need to share width constraints across phones, tablets, and foldables
+
+The acceptable Android compromise is:
+
+- keep a custom compact header instead of falling back to a stock Material top bar
+- center the conversation rail with an explicit max width so the empty stage still reads wide and calm on larger displays
+- anchor the jump-to-latest control and footer stack to that same rail rather than to the full screen width
+- accept small device-specific differences in the exact vertical emptiness above the composer, but keep the perceptual split between timeline stage and footer region
+- allow later capture passes to fill in additional running or banner-bearing device references without reopening the completed shell implementation work
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:
