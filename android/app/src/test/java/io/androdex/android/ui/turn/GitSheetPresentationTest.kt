@@ -4,6 +4,7 @@ import io.androdex.android.GitActionKind
 import io.androdex.android.model.GitChangedFile
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.ui.state.ThreadGitUiState
+import io.androdex.android.ui.shared.RemodexPillStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -86,6 +87,15 @@ class GitSheetPresentationTest {
 
         assertEquals(GIT_CHANGED_FILES_PREVIEW_LIMIT, preview.visibleFiles.size)
         assertEquals(2, preview.hiddenCount)
+    }
+
+    @Test
+    fun fileStatusPillStyle_mapsCommonGitStates() {
+        assertEquals(RemodexPillStyle.Success, gitFileStatusPillStyle("A"))
+        assertEquals(RemodexPillStyle.Warning, gitFileStatusPillStyle("M"))
+        assertEquals(RemodexPillStyle.Error, gitFileStatusPillStyle("D"))
+        assertEquals(RemodexPillStyle.Accent, gitFileStatusPillStyle("R"))
+        assertEquals(RemodexPillStyle.Neutral, gitFileStatusPillStyle("X"))
     }
 
     private fun gitStatus(

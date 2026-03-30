@@ -3,7 +3,6 @@ package io.androdex.android.ui.turn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,16 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +29,15 @@ import androidx.compose.ui.unit.sp
 import io.androdex.android.GitActionKind
 import io.androdex.android.model.GitChangedFile
 import io.androdex.android.model.GitRepoSyncResult
+import io.androdex.android.ui.shared.RemodexButton
+import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.RemodexDivider
+import io.androdex.android.ui.shared.RemodexModalSheet
+import io.androdex.android.ui.shared.RemodexPill
+import io.androdex.android.ui.shared.RemodexPillStyle
+import io.androdex.android.ui.shared.RemodexSheetCard
+import io.androdex.android.ui.shared.RemodexSheetHeaderBlock
+import io.androdex.android.ui.shared.RemodexSheetSectionLabel
 import io.androdex.android.ui.state.ThreadGitUiState
 import io.androdex.android.ui.theme.RemodexMonoFontFamily
 import io.androdex.android.ui.theme.RemodexTheme
@@ -106,131 +109,77 @@ internal fun GitSheet(
     onOpenGitBranchDialog: () -> Unit,
     onOpenGitWorktreeDialog: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scrollState = rememberScrollState()
     val status = state.status
     val changedFiles = buildGitChangedFilesPreview(status?.files.orEmpty())
+    val geometry = RemodexTheme.geometry
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth(),
+    RemodexModalSheet(onDismissRequest = onDismiss) {
+        GitSheetHeader(state = state, status = status)
+
+        state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
+            RemodexSheetCard(
+                tint = RemodexTheme.colors.selectedRowFill.copy(alpha = 0.84f),
             ) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(36.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(MaterialTheme.colorScheme.outlineVariant),
+                RemodexSheetSectionLabel("Availability")
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RemodexTheme.colors.textSecondary,
                 )
-                Spacer(modifier = Modifier.height(16.dp))
             }
-        },
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            GitSheetHeader(state = state, status = status)
+        }
 
-            state.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                    )
-                }
-            }
+        if (status != null) {
+            GitSummaryCard(status = status)
 
-            if (status != null) {
-                GitSheetSectionHeader("Summary")
-                GitSummaryCard(status = status)
-
-                if (status.files.isNotEmpty()) {
-                    GitSheetSectionHeader("Changed Files")
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = RoundedCornerShape(18.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            changedFiles.visibleFiles.forEach { file ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    GitFileStatusPill(file.status)
-                                    Text(
-                                        text = file.path,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                            }
-                            if (changedFiles.hiddenCount > 0) {
-                                Text(
-                                    text = if (changedFiles.hiddenCount == 1) {
-                                        "1 more changed file not shown."
-                                    } else {
-                                        "${changedFiles.hiddenCount} more changed files not shown."
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+            if (status.files.isNotEmpty()) {
+                RemodexSheetCard {
+                    RemodexSheetSectionLabel("Changed files")
+                    changedFiles.visibleFiles.forEachIndexed { index, file ->
+                        GitChangedFileRow(file = file)
+                        if (index != changedFiles.visibleFiles.lastIndex) {
+                            Spacer(modifier = Modifier.height(geometry.spacing2))
                         }
                     }
-                }
-            } else if (state.hasWorkingDirectory && state.availabilityMessage.isNullOrBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = "Git status has not been loaded yet. Refresh to inspect this checkout.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                    )
+                    if (changedFiles.hiddenCount > 0) {
+                        Text(
+                            text = if (changedFiles.hiddenCount == 1) {
+                                "1 more changed file not shown."
+                            } else {
+                                "${changedFiles.hiddenCount} more changed files not shown."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = RemodexTheme.colors.textSecondary,
+                        )
+                    }
                 }
             }
+        } else if (state.hasWorkingDirectory && state.availabilityMessage.isNullOrBlank()) {
+            RemodexSheetCard {
+                RemodexSheetSectionLabel("Summary")
+                Text(
+                    text = "Git status has not been loaded yet. Refresh to inspect this checkout.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RemodexTheme.colors.textSecondary,
+                )
+            }
+        }
 
-            GitSheetSectionHeader("Actions")
+        RemodexSheetCard {
+            RemodexSheetSectionLabel("Actions")
             GitActionGroup(
                 title = "Inspect",
                 actions = listOf(
-                    GitSheetAction("Refresh", onRefreshGit, state.canRunActions),
+                    GitSheetAction("Refresh", onRefreshGit, state.canRunActions, RemodexButtonStyle.Secondary),
                     GitSheetAction(
-                        if (state.diffPatch.isNullOrBlank()) "Load Diff" else "Refresh Diff",
+                        if (state.diffPatch.isNullOrBlank()) "Load diff" else "Refresh diff",
                         onLoadGitDiff,
                         state.canRunActions,
+                        RemodexButtonStyle.Secondary,
                     ),
                 ),
             )
+            RemodexDivider()
             GitActionGroup(
                 title = "Changes",
                 actions = listOf(
@@ -238,9 +187,11 @@ internal fun GitSheet(
                         "Commit",
                         onOpenGitCommit,
                         state.canRunActions && status?.isDirty == true,
+                        RemodexButtonStyle.Primary,
                     ),
                 ),
             )
+            RemodexDivider()
             GitActionGroup(
                 title = "Sync",
                 actions = listOf(
@@ -248,34 +199,33 @@ internal fun GitSheet(
                         "Push",
                         onPushGit,
                         state.canRunActions && (status?.canPush == true),
+                        RemodexButtonStyle.Primary,
                     ),
                     GitSheetAction(
                         "Pull",
                         onRequestGitPull,
                         state.canRunActions && status != null,
+                        RemodexButtonStyle.Secondary,
                     ),
                 ),
             )
+            RemodexDivider()
             GitActionGroup(
                 title = "Branching",
                 actions = listOf(
-                    GitSheetAction("Branches", onOpenGitBranchDialog, state.canRunActions),
-                    GitSheetAction("Worktrees", onOpenGitWorktreeDialog, state.canRunActions),
+                    GitSheetAction("Branches", onOpenGitBranchDialog, state.canRunActions, RemodexButtonStyle.Secondary),
+                    GitSheetAction("Worktrees", onOpenGitWorktreeDialog, state.canRunActions, RemodexButtonStyle.Secondary),
                 ),
             )
+        }
 
-            state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
-                GitSheetSectionHeader("Diff")
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    DiffView(
-                        diffText = patch,
-                        modifier = Modifier.clip(RoundedCornerShape(18.dp)),
-                    )
-                }
+        state.diffPatch?.takeIf { it.isNotBlank() }?.let { patch ->
+            RemodexSheetCard {
+                RemodexSheetSectionLabel("Diff")
+                DiffView(
+                    diffText = patch,
+                    modifier = Modifier.clip(RoundedCornerShape(RemodexTheme.geometry.cornerLarge)),
+                )
             }
         }
     }
@@ -286,69 +236,67 @@ private fun GitSheetHeader(
     state: ThreadGitUiState,
     status: GitRepoSyncResult?,
 ) {
+    RemodexSheetHeaderBlock(
+        title = gitRepositoryName(status),
+        subtitle = status?.currentBranch?.trim()?.takeIf { it.isNotEmpty() } ?: "Repository controls",
+        trailing = {
+            if (state.runningAction != null || state.isRefreshing) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .width(20.dp)
+                        .height(20.dp),
+                    strokeWidth = 2.dp,
+                    color = RemodexTheme.colors.accentBlue,
+                )
+            }
+        },
+    )
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.Top,
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = gitRepositoryName(status),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = status?.currentBranch?.trim()?.takeIf { it.isNotEmpty() } ?: "Repository controls",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                status?.state?.takeIf { it.isNotBlank() }?.let {
-                    GitBadge(label = it.replace('_', ' '), emphasized = true)
-                }
-                status?.let {
-                    GitBadge(label = if (it.isDirty) "Dirty" else "Clean")
-                    if (it.aheadCount > 0) {
-                        GitBadge(label = "Ahead ${it.aheadCount}")
-                    }
-                    if (it.behindCount > 0) {
-                        GitBadge(label = "Behind ${it.behindCount}")
-                    }
-                }
-                if (state.runningAction != null || state.isRefreshing) {
-                    GitBadge(label = gitActionLabel(state.runningAction ?: GitActionKind.REFRESH))
-                }
+        status?.state?.takeIf { it.isNotBlank() }?.let {
+            GitBadge(label = it.replace('_', ' '), emphasized = true)
+        }
+        status?.let {
+            GitBadge(label = if (it.isDirty) "Dirty" else "Clean")
+            if (it.aheadCount > 0) {
+                GitBadge(label = "Ahead ${it.aheadCount}")
+            }
+            if (it.behindCount > 0) {
+                GitBadge(label = "Behind ${it.behindCount}")
             }
         }
-
         if (state.runningAction != null || state.isRefreshing) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(top = 4.dp)
-                    .width(20.dp)
-                    .height(20.dp),
-                strokeWidth = 2.dp,
-            )
+            GitBadge(label = gitActionLabel(state.runningAction ?: GitActionKind.REFRESH))
         }
     }
 }
 
 @Composable
 private fun GitSummaryCard(status: GitRepoSyncResult) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    RemodexSheetCard {
+        RemodexSheetSectionLabel("Summary")
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            RemodexPill(
+                label = if (status.isDirty) "Working tree dirty" else "Working tree clean",
+                style = if (status.isDirty) RemodexPillStyle.Warning else RemodexPillStyle.Success,
+            )
+            status.trackingBranch?.takeIf { it.isNotBlank() }?.let {
+                RemodexPill(label = it, style = RemodexPillStyle.Neutral)
+            }
+            if (status.localOnlyCommitCount > 0) {
+                RemodexPill(
+                    label = "${status.localOnlyCommitCount} local",
+                    style = RemodexPillStyle.Accent,
+                )
+            }
+        }
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
@@ -376,7 +324,7 @@ private fun GitSummaryCard(status: GitRepoSyncResult) {
                 )
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            RemodexDivider()
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -416,13 +364,13 @@ private fun GitSummaryValue(
         Text(
             text = label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = RemodexTheme.colors.accentBlue,
             fontWeight = FontWeight.Bold,
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = RemodexTheme.colors.textPrimary,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -433,6 +381,7 @@ private data class GitSheetAction(
     val label: String,
     val onClick: () -> Unit,
     val enabled: Boolean,
+    val style: RemodexButtonStyle,
 )
 
 @Composable
@@ -444,7 +393,7 @@ private fun GitActionGroup(
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = RemodexTheme.colors.textPrimary,
             fontWeight = FontWeight.SemiBold,
         )
         Row(
@@ -452,9 +401,10 @@ private fun GitActionGroup(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             actions.forEach { action ->
-                OutlinedButton(
+                RemodexButton(
                     onClick = action.onClick,
                     enabled = action.enabled,
+                    style = action.style,
                 ) {
                     Text(action.label)
                 }
@@ -464,60 +414,54 @@ private fun GitActionGroup(
 }
 
 @Composable
-private fun GitSheetSectionHeader(title: String) {
-    Text(
-        text = title.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = MaterialTheme.typography.labelMedium.letterSpacing * 1.5f,
-    )
-}
-
-@Composable
 private fun GitBadge(
     label: String,
     emphasized: Boolean = false,
 ) {
-    Surface(
-        color = if (emphasized) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            text = label.replaceFirstChar { char ->
-                if (char.isLowerCase()) {
-                    char.titlecase()
-                } else {
-                    char.toString()
-                }
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.onSecondaryContainer
+    RemodexPill(
+        label = label.replaceFirstChar { char ->
+            if (char.isLowerCase()) {
+                char.titlecase()
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
+                char.toString()
+            }
+        },
+        style = if (emphasized) RemodexPillStyle.Accent else RemodexPillStyle.Neutral,
+    )
 }
 
 @Composable
 private fun GitFileStatusPill(status: String) {
+    RemodexPill(
+        label = status.ifBlank { "?" },
+        style = gitFileStatusPillStyle(status),
+    )
+}
+
+@Composable
+private fun GitChangedFileRow(file: GitChangedFile) {
     Surface(
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-        shape = RoundedCornerShape(8.dp),
+        color = RemodexTheme.colors.groupedBackground.copy(alpha = 0.54f),
+        shape = RoundedCornerShape(RemodexTheme.geometry.cornerLarge),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RemodexTheme.colors.hairlineDivider),
     ) {
-        Text(
-            text = status.ifBlank { "?" },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = RemodexTheme.geometry.spacing12, vertical = RemodexTheme.geometry.spacing10),
+            horizontalArrangement = Arrangement.spacedBy(RemodexTheme.geometry.spacing10),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            GitFileStatusPill(file.status)
+            Text(
+                text = file.path,
+                style = MaterialTheme.typography.bodySmall,
+                color = RemodexTheme.colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -586,4 +530,14 @@ private fun gitActionLabel(action: GitActionKind): String = when (action) {
     GitActionKind.CREATE_BRANCH -> "Creating branch"
     GitActionKind.CREATE_WORKTREE -> "Creating worktree"
     GitActionKind.REMOVE_WORKTREE -> "Removing worktree"
+}
+
+internal fun gitFileStatusPillStyle(status: String): RemodexPillStyle {
+    return when (status.trim().uppercase()) {
+        "A", "??" -> RemodexPillStyle.Success
+        "M", "MM" -> RemodexPillStyle.Warning
+        "D" -> RemodexPillStyle.Error
+        "R", "C", "U" -> RemodexPillStyle.Accent
+        else -> RemodexPillStyle.Neutral
+    }
 }
