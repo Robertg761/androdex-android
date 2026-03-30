@@ -90,6 +90,7 @@ data class RemodexGeometry(
 
 @Immutable
 data class RemodexMotion(
+    val shellMillis: Int,
     val searchMillis: Int,
     val composerMillis: Int,
     val microStateMillis: Int,
@@ -197,6 +198,7 @@ private val DefaultRemodexGeometry = RemodexGeometry(
 )
 
 private val DefaultRemodexMotion = RemodexMotion(
+    shellMillis = 220,
     searchMillis = 200,
     composerMillis = 180,
     microStateMillis = 200,

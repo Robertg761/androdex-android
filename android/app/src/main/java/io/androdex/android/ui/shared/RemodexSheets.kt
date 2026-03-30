@@ -2,6 +2,7 @@ package io.androdex.android.ui.shared
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -181,6 +183,7 @@ internal fun RemodexSelectableOptionRow(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -192,9 +195,15 @@ internal fun RemodexSelectableOptionRow(
         ),
         enabled = enabled,
         onClick = onClick,
+        interactionSource = interactionSource,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
+            modifier = Modifier
+                .remodexPressedState(
+                    interactionSource = interactionSource,
+                    enabled = enabled,
+                )
+                .padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
             horizontalArrangement = Arrangement.spacedBy(geometry.spacing12),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -251,11 +260,21 @@ internal fun RemodexInlineLinkRow(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(geometry.cornerLarge))
-            .clickable(enabled = enabled, onClick = onClick)
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = enabled,
+            )
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
             .padding(horizontal = geometry.spacing6, vertical = geometry.spacing4),
         horizontalArrangement = Arrangement.spacedBy(geometry.spacing10),
         verticalAlignment = Alignment.CenterVertically,

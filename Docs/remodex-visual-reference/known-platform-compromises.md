@@ -184,6 +184,17 @@ The acceptable Android compromise is:
 - accept that Android may read as a tighter inline stack than the iOS overlay choreography in some states
 - revisit the exact layering only when the later voice/accessory work lands; do not use this as permission to fall back to stock Android text fields, chips, or dropdown menus
 
+## 16. System-Managed Drawer And Sheet Motion
+
+The Phase 12 pass now gives app-owned transitions a shared Remodex-style ease-in-out curve and pressed/focus treatment, but Android still owns part of the drawer and bottom-sheet choreography.
+
+The acceptable Android compromise is:
+
+- use the shared `0.18s` to `0.22s` Remodex-style timing for shell, search, composer, banner, and inline reveal states that we control directly in Compose
+- keep `DismissibleNavigationDrawer` and `ModalBottomSheet` for gesture handling instead of replacing them with a custom physics stack just to chase iOS-native motion more literally
+- prefer calmer fade/slide/expand transitions over spring-heavy Material motion so the app still reads like Remodex even when the platform owns the container animation
+- capture and document any OEM-specific drawer or sheet timing drift on device instead of hiding it or letting that drift justify unrelated visual divergence elsewhere
+
 ## Non-Compromises
 
 These are not valid reasons to diverge from Remodex:

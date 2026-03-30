@@ -1,12 +1,11 @@
 package io.androdex.android.ui.turn
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +61,12 @@ import io.androdex.android.model.SkillMetadata
 import io.androdex.android.ui.shared.RemodexDivider
 import io.androdex.android.ui.shared.RemodexFloatingComposerShell
 import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.remodexExpandVertically
+import io.androdex.android.ui.shared.remodexFadeIn
+import io.androdex.android.ui.shared.remodexFadeOut
+import io.androdex.android.ui.shared.remodexPressedState
+import io.androdex.android.ui.shared.remodexShrinkVertically
+import io.androdex.android.ui.shared.remodexTween
 import io.androdex.android.ui.state.ComposerUiState
 import io.androdex.android.ui.theme.RemodexTheme
 
@@ -132,6 +137,7 @@ internal fun ComposerBar(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val motion = RemodexTheme.motion
 
     var showModePanel by rememberSaveable { mutableStateOf(false) }
     var inputFocused by remember { mutableStateOf(false) }
@@ -161,13 +167,17 @@ internal fun ComposerBar(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = remodexTween(motion.composerMillis)),
+    ) {
         RemodexDivider()
 
         AnimatedVisibility(
             visible = !activityText.isNullOrBlank(),
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter = remodexFadeIn(motion.microStateMillis) + remodexExpandVertically(motion.microStateMillis),
+            exit = remodexFadeOut(motion.microStateMillis) + remodexShrinkVertically(motion.microStateMillis),
         ) {
             Row(
                 modifier = Modifier
@@ -239,8 +249,8 @@ internal fun ComposerBar(
 
                     AnimatedVisibility(
                         visible = hasActiveContext,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically(),
+                        enter = remodexFadeIn(motion.composerMillis) + remodexExpandVertically(motion.composerMillis),
+                        exit = remodexFadeOut(motion.composerMillis) + remodexShrinkVertically(motion.composerMillis),
                     ) {
                         Row(
                             modifier = Modifier
@@ -289,8 +299,8 @@ internal fun ComposerBar(
 
                     AnimatedVisibility(
                         visible = showModePanel,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically(),
+                        enter = remodexFadeIn(motion.composerMillis) + remodexExpandVertically(motion.composerMillis),
+                        exit = remodexFadeOut(motion.composerMillis) + remodexShrinkVertically(motion.composerMillis),
                     ) {
                         ComposerModePanel(
                             state = state,
@@ -370,6 +380,7 @@ internal fun ComposerBar(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .animateContentSize(animationSpec = remodexTween(motion.composerMillis))
                             .padding(
                                 start = 12.dp,
                                 end = 12.dp,
@@ -422,8 +433,8 @@ internal fun ComposerBar(
 
                         AnimatedVisibility(
                             visible = state.showStop,
-                            enter = fadeIn(),
-                            exit = fadeOut(),
+                            enter = remodexFadeIn(motion.microStateMillis),
+                            exit = remodexFadeOut(motion.microStateMillis),
                         ) {
                             ComposerActionButton(
                                 label = "Stop",
@@ -454,13 +465,20 @@ private fun ComposerShell(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = RemodexTheme.colors
-    val borderColor = if (focused) {
-        colors.accentBlue.copy(alpha = 0.22f)
-    } else {
-        colors.hairlineDivider
-    }
+    val motion = RemodexTheme.motion
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) {
+            colors.accentBlue.copy(alpha = 0.22f)
+        } else {
+            colors.hairlineDivider
+        },
+        animationSpec = remodexTween(motion.composerMillis),
+        label = "composerShellBorder",
+    )
 
-    RemodexFloatingComposerShell {
+    RemodexFloatingComposerShell(
+        modifier = Modifier.animateContentSize(animationSpec = remodexTween(motion.composerMillis)),
+    ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = Color.Transparent,
@@ -548,6 +566,7 @@ private fun ComposerActionButton(
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
     val shape = if (icon == null) RoundedCornerShape(18.dp) else CircleShape
+    val interactionSource = remember { MutableInteractionSource() }
     val containerColor = when {
         !enabled -> colors.disabledFill
         primary -> colors.accentBlue
@@ -568,7 +587,16 @@ private fun ComposerActionButton(
         modifier = Modifier
             .height(36.dp)
             .clip(shape)
-            .clickable(enabled = enabled, onClick = onClick),
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = enabled,
+            )
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
         shape = shape,
         color = containerColor,
         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
@@ -724,11 +752,21 @@ private fun ComposerModeChip(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = enabled,
+            )
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
         shape = RoundedCornerShape(16.dp),
         color = when {
             !enabled -> colors.disabledFill
@@ -782,12 +820,22 @@ private fun ComposerIconModeChip(
     onClick: () -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         modifier = Modifier
             .size(36.dp)
             .clip(RoundedCornerShape(16.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = enabled,
+            )
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
         shape = RoundedCornerShape(16.dp),
         color = if (enabled) colors.secondarySurface.copy(alpha = 0.94f) else colors.disabledFill,
         border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
@@ -812,12 +860,18 @@ private fun ReviewTargetChip(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         modifier = Modifier
             .widthIn(min = 146.dp)
             .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick),
+            .remodexPressedState(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
         shape = RoundedCornerShape(18.dp),
         color = if (selected) colors.accentBlue.copy(alpha = 0.1f) else colors.secondarySurface.copy(alpha = 0.94f),
         border = androidx.compose.foundation.BorderStroke(
@@ -909,6 +963,7 @@ private fun ComposerContextChip(
     onRemove: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         color = tone.fill,
@@ -937,7 +992,12 @@ private fun ComposerContextChip(
                     .size(14.dp)
                     .clip(CircleShape)
                     .background(tone.text.copy(alpha = 0.14f))
-                    .clickable(onClick = onRemove),
+                    .remodexPressedState(interactionSource = interactionSource, pressedScale = 0.96f)
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onRemove,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -969,9 +1029,12 @@ private fun ComposerAutocompletePanel(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val motion = RemodexTheme.motion
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = remodexTween(motion.composerMillis)),
         color = colors.secondarySurface.copy(alpha = 0.98f),
         shape = RoundedCornerShape(20.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
@@ -995,13 +1058,19 @@ private fun AutocompleteRow(
     onClick: () -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = rowHeight)
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .remodexPressedState(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {

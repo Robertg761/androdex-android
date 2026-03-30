@@ -1,10 +1,6 @@
 package io.androdex.android.ui.shared
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -161,10 +157,13 @@ internal fun StatusCapsule(
 
 @Composable
 internal fun BusyIndicator(state: BusyUiState) {
+    val motion = RemodexTheme.motion
     AnimatedVisibility(
         visible = state.isVisible,
-        enter = slideInVertically { -it } + fadeIn(),
-        exit = slideOutVertically { -it } + fadeOut(),
+        enter = remodexSlideInVertically(motion.microStateMillis) { -it / 2 } +
+            remodexFadeIn(motion.microStateMillis),
+        exit = remodexSlideOutVertically(motion.microStateMillis) { -it / 2 } +
+            remodexFadeOut(motion.microStateMillis),
     ) {
         SharedActivityCapsule(
             label = state.label ?: "Syncing with host",
@@ -348,10 +347,14 @@ internal fun AgentActivityBanner(messages: List<ConversationMessage>) {
         else -> null
     }
 
+    val motion = RemodexTheme.motion
+
     AnimatedVisibility(
         visible = isStreaming,
-        enter = slideInVertically { -it } + fadeIn(),
-        exit = slideOutVertically { -it } + fadeOut(),
+        enter = remodexSlideInVertically(motion.microStateMillis) { -it / 2 } +
+            remodexFadeIn(motion.microStateMillis),
+        exit = remodexSlideOutVertically(motion.microStateMillis) { -it / 2 } +
+            remodexFadeOut(motion.microStateMillis),
     ) {
         SharedActivityCapsule(
             label = activityText ?: "Working on host",

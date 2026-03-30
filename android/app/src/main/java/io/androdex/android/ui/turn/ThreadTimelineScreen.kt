@@ -6,11 +6,9 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -110,6 +108,12 @@ import io.androdex.android.ui.shared.RemodexInputField
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.ThreadMaintenanceConfirmationDialog
+import io.androdex.android.ui.shared.remodexExpandVertically
+import io.androdex.android.ui.shared.remodexFadeIn
+import io.androdex.android.ui.shared.remodexFadeOut
+import io.androdex.android.ui.shared.remodexPressedState
+import io.androdex.android.ui.shared.remodexShrinkVertically
+import io.androdex.android.ui.shared.remodexTween
 import io.androdex.android.ui.state.ThreadRunBadgeUiState
 import io.androdex.android.ui.state.ThreadTimelineUiState
 import io.androdex.android.ui.state.ToolUserInputCardUiState
@@ -598,8 +602,8 @@ internal fun ThreadTimelineScreen(
                     ) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = showJumpToLatest,
-                            enter = fadeIn(),
-                            exit = fadeOut(),
+                            enter = remodexFadeIn(RemodexTheme.motion.microStateMillis),
+                            exit = remodexFadeOut(RemodexTheme.motion.microStateMillis),
                         ) {
                             SmallFloatingActionButton(
                                 onClick = {
@@ -633,7 +637,13 @@ internal fun ThreadTimelineScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
             ) {
-                AnimatedVisibility(visible = state.queuedDrafts.isNotEmpty()) {
+                AnimatedVisibility(
+                    visible = state.queuedDrafts.isNotEmpty(),
+                    enter = remodexFadeIn(RemodexTheme.motion.microStateMillis) +
+                        remodexExpandVertically(RemodexTheme.motion.microStateMillis),
+                    exit = remodexFadeOut(RemodexTheme.motion.microStateMillis) +
+                        remodexShrinkVertically(RemodexTheme.motion.microStateMillis),
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -654,7 +664,13 @@ internal fun ThreadTimelineScreen(
                     }
                 }
 
-                AnimatedVisibility(visible = state.pendingToolInputs.isNotEmpty()) {
+                AnimatedVisibility(
+                    visible = state.pendingToolInputs.isNotEmpty(),
+                    enter = remodexFadeIn(RemodexTheme.motion.microStateMillis) +
+                        remodexExpandVertically(RemodexTheme.motion.microStateMillis),
+                    exit = remodexFadeOut(RemodexTheme.motion.microStateMillis) +
+                        remodexShrinkVertically(RemodexTheme.motion.microStateMillis),
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -717,7 +733,10 @@ private fun ThreadHeader(
     val dotAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(RemodexTheme.motion.pulseMillis), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(
+            animation = remodexTween(RemodexTheme.motion.pulseMillis),
+            repeatMode = RepeatMode.Reverse,
+        ),
         label = "runDotAlpha",
     )
 
@@ -831,13 +850,19 @@ private fun GitTopBarPill(
     onClick: () -> Unit,
 ) {
     val colors = RemodexTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         color = colors.secondarySurface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(999.dp),
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick),
+            .remodexPressedState(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
         border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
     ) {
         Row(
@@ -1876,11 +1901,15 @@ private fun SystemCapsule(message: ConversationMessage) {
 private fun ThinkingBubble(message: ConversationMessage) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val pulseMillis = RemodexTheme.motion.pulseMillis
     val infiniteTransition = rememberInfiniteTransition(label = "thinking")
     val alpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(
+            animation = remodexTween(pulseMillis),
+            repeatMode = RepeatMode.Reverse,
+        ),
         label = "thinkingPulse",
     )
 
@@ -1896,8 +1925,8 @@ private fun ThinkingBubble(message: ConversationMessage) {
                         initialValue = 0.3f,
                         targetValue = 1f,
                         animationSpec = infiniteRepeatable(
-                            tween(600, delayMillis = index * 150),
-                            RepeatMode.Reverse,
+                            animation = remodexTween(pulseMillis, delayMillis = index * 120),
+                            repeatMode = RepeatMode.Reverse,
                         ),
                         label = "dot$index",
                     )
@@ -1976,7 +2005,13 @@ private fun FileChangeBubble(message: ConversationMessage) {
             )
         }
 
-        AnimatedVisibility(visible = expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = remodexFadeIn(RemodexTheme.motion.microStateMillis) +
+                remodexExpandVertically(RemodexTheme.motion.microStateMillis),
+            exit = remodexFadeOut(RemodexTheme.motion.microStateMillis) +
+                remodexShrinkVertically(RemodexTheme.motion.microStateMillis),
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                 if (!message.diffText.isNullOrBlank()) {
                     DiffView(diffText = message.diffText)
@@ -2092,7 +2127,13 @@ private fun ExecutionBubble(message: ConversationMessage) {
                 )
             }
 
-            AnimatedVisibility(visible = expanded && hasDetails) {
+            AnimatedVisibility(
+                visible = expanded && hasDetails,
+                enter = remodexFadeIn(RemodexTheme.motion.microStateMillis) +
+                    remodexExpandVertically(RemodexTheme.motion.microStateMillis),
+                exit = remodexFadeOut(RemodexTheme.motion.microStateMillis) +
+                    remodexShrinkVertically(RemodexTheme.motion.microStateMillis),
+            ) {
                 Column(verticalArrangement = Arrangement.spacedBy(geometry.spacing8)) {
                     execution.details.forEach { detail ->
                         ExecutionDetailRow(
@@ -2690,6 +2731,7 @@ internal fun String.normalizedExecutionStatusLabel(): String {
 @Composable
 private fun StreamingIndicator(tint: Color = RemodexTheme.colors.accentBlue) {
     val colors = RemodexTheme.colors
+    val pulseMillis = RemodexTheme.motion.pulseMillis
     val infiniteTransition = rememberInfiniteTransition(label = "streaming")
 
     Row(
@@ -2700,20 +2742,29 @@ private fun StreamingIndicator(tint: Color = RemodexTheme.colors.accentBlue) {
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             repeat(3) { index ->
                 val dotScale by infiniteTransition.animateFloat(
-                    initialValue = 0.5f,
-                    targetValue = 1.15f,
+                    initialValue = 0.72f,
+                    targetValue = 1.08f,
                     animationSpec = infiniteRepeatable(
-                        tween(520, delayMillis = index * 130),
-                        RepeatMode.Reverse,
+                        animation = remodexTween(pulseMillis, delayMillis = index * 140),
+                        repeatMode = RepeatMode.Reverse,
                     ),
                     label = "streamDot$index",
+                )
+                val dotAlpha by infiniteTransition.animateFloat(
+                    initialValue = 0.42f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = remodexTween(pulseMillis, delayMillis = index * 140),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "streamDotAlpha$index",
                 )
                 Box(
                     modifier = Modifier
                         .size(5.dp)
                         .scale(dotScale)
                         .clip(CircleShape)
-                        .background(tint),
+                        .background(tint.copy(alpha = dotAlpha)),
                 )
             }
         }

@@ -1,10 +1,8 @@
 package io.androdex.android.ui.sidebar
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -58,9 +56,15 @@ import io.androdex.android.R
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.shared.RemodexButton
 import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.remodexExpandHorizontally
+import io.androdex.android.ui.shared.remodexFadeIn
+import io.androdex.android.ui.shared.remodexFadeOut
 import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.shared.RemodexSearchField
 import io.androdex.android.ui.shared.RemodexSelectionRow
+import io.androdex.android.ui.shared.remodexPressedState
+import io.androdex.android.ui.shared.remodexShrinkHorizontally
+import io.androdex.android.ui.shared.remodexTween
 import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.ThreadListItemUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
@@ -174,10 +178,12 @@ private fun SidebarSearchField(
     onCancel: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val motion = RemodexTheme.motion
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = remodexTween(motion.searchMillis))
             .padding(
                 start = geometry.sidebarOuterHorizontalPadding,
                 end = geometry.sidebarOuterHorizontalPadding,
@@ -197,8 +203,8 @@ private fun SidebarSearchField(
         // Cancel button (visible when focused)
         AnimatedVisibility(
             visible = focused,
-            enter = fadeIn() + expandHorizontally(),
-            exit = fadeOut() + shrinkHorizontally(),
+            enter = remodexFadeIn(motion.searchMillis) + remodexExpandHorizontally(motion.searchMillis),
+            exit = remodexFadeOut(motion.searchMillis) + remodexShrinkHorizontally(motion.searchMillis),
         ) {
             RemodexButton(
                 onClick = onCancel,
@@ -258,6 +264,7 @@ private fun SidebarProjectHeader(
     onToggle: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     // Display only the last path component (like remodex)
     val displayName = projectName.trimEnd('/').substringAfterLast('/')
@@ -268,9 +275,11 @@ private fun SidebarProjectHeader(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = geometry.spacing4)
-            .heightIn(min = geometry.rowHeight + geometry.spacing12),
+            .heightIn(min = geometry.rowHeight + geometry.spacing12)
+            .remodexPressedState(interactionSource = interactionSource),
         color = Color.Transparent,
         shape = RoundedCornerShape(geometry.cornerTiny),
+        interactionSource = interactionSource,
     ) {
         Row(
             modifier = Modifier

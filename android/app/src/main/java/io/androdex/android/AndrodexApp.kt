@@ -2,18 +2,14 @@ package io.androdex.android
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -44,6 +40,10 @@ import io.androdex.android.ui.settings.RuntimeSettingsSheet
 import io.androdex.android.ui.shared.ApprovalDialog
 import io.androdex.android.ui.shared.ErrorMessageDialog
 import io.androdex.android.ui.shared.MissingNotificationThreadDialog
+import io.androdex.android.ui.shared.remodexFadeIn
+import io.androdex.android.ui.shared.remodexFadeOut
+import io.androdex.android.ui.shared.remodexSlideInHorizontally
+import io.androdex.android.ui.shared.remodexSlideOutHorizontally
 import io.androdex.android.ui.sidebar.SidebarContent
 import io.androdex.android.ui.state.AndrodexDestinationUiState
 import io.androdex.android.ui.state.HomeScreenUiState
@@ -204,6 +204,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
         is AndrodexDestinationUiState.Thread -> ConnectedRoute.Thread(destination.state)
         is AndrodexDestinationUiState.Pairing -> null
     }
+    val motion = RemodexTheme.motion
 
     AnimatedContent(
         targetState = rootShell,
@@ -212,6 +213,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 forward = targetState == RootShell.Connected,
                 enterDivisor = 8,
                 exitDivisor = 12,
+                durationMillis = motion.shellMillis,
             )
         },
         label = "rootShellTransition",
@@ -284,13 +286,28 @@ fun AndrodexApp(viewModel: MainViewModel) {
                             transitionSpec = {
                                 when {
                                     initialState == targetState || targetState == null -> {
-                                        shellTransform(forward = true, enterDivisor = 18, exitDivisor = 18)
+                                        shellTransform(
+                                            forward = true,
+                                            enterDivisor = 18,
+                                            exitDivisor = 18,
+                                            durationMillis = motion.shellMillis,
+                                        )
                                     }
                                     targetState is ConnectedRoute.Thread -> {
-                                        shellTransform(forward = true, enterDivisor = 10, exitDivisor = 14)
+                                        shellTransform(
+                                            forward = true,
+                                            enterDivisor = 10,
+                                            exitDivisor = 14,
+                                            durationMillis = motion.shellMillis,
+                                        )
                                     }
                                     else -> {
-                                        shellTransform(forward = false, enterDivisor = 10, exitDivisor = 14)
+                                        shellTransform(
+                                            forward = false,
+                                            enterDivisor = 10,
+                                            exitDivisor = 14,
+                                            durationMillis = motion.shellMillis,
+                                        )
                                     }
                                 }
                             },
@@ -441,12 +458,13 @@ private fun shellTransform(
     forward: Boolean,
     enterDivisor: Int,
     exitDivisor: Int,
+    durationMillis: Int,
 ): ContentTransform {
-    return (fadeIn() + slideInHorizontally { fullWidth ->
+    return (remodexFadeIn(durationMillis) + remodexSlideInHorizontally(durationMillis) { fullWidth ->
         val distance = fullWidth / enterDivisor
         if (forward) distance else -distance
     }) togetherWith
-        (fadeOut() + slideOutHorizontally { fullWidth ->
+        (remodexFadeOut(durationMillis) + remodexSlideOutHorizontally(durationMillis) { fullWidth ->
             val distance = fullWidth / exitDivisor
             if (forward) -distance else distance
         })

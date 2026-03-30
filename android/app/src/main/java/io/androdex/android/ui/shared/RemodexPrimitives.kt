@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
@@ -36,7 +37,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -234,11 +238,18 @@ internal fun RemodexIconButton(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val interactionSource = remember { MutableInteractionSource() }
 
     Surface(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(geometry.iconButtonSize),
+        interactionSource = interactionSource,
+        modifier = modifier
+            .size(geometry.iconButtonSize)
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = enabled,
+            ),
         shape = shape,
         color = when {
             !enabled -> colors.disabledFill
@@ -274,10 +285,17 @@ internal fun RemodexButton(
     val geometry = RemodexTheme.geometry
     when (style) {
         RemodexButtonStyle.Ghost -> {
+            val interactionSource = remember { MutableInteractionSource() }
             TextButton(
                 onClick = onClick,
                 enabled = enabled,
-                modifier = modifier.defaultMinSize(minHeight = geometry.buttonHeight),
+                modifier = modifier
+                    .defaultMinSize(minHeight = geometry.buttonHeight)
+                    .remodexPressedState(
+                        interactionSource = interactionSource,
+                        enabled = enabled,
+                    ),
+                interactionSource = interactionSource,
                 contentPadding = contentPadding,
                 colors = ButtonDefaults.textButtonColors(
                     contentColor = colors.accentBlue,
@@ -298,12 +316,19 @@ internal fun RemodexButton(
                 style == RemodexButtonStyle.Primary -> colors.primaryButtonForeground
                 else -> colors.textPrimary
             }
+            val interactionSource = remember { MutableInteractionSource() }
 
             Button(
                 onClick = onClick,
                 enabled = enabled,
-                modifier = modifier.defaultMinSize(minHeight = geometry.buttonHeight),
+                modifier = modifier
+                    .defaultMinSize(minHeight = geometry.buttonHeight)
+                    .remodexPressedState(
+                        interactionSource = interactionSource,
+                        enabled = enabled,
+                    ),
                 shape = RoundedCornerShape(geometry.cornerLarge),
+                interactionSource = interactionSource,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = containerColor,
                     contentColor = contentColor,
@@ -382,6 +407,10 @@ internal fun RemodexSelectionRow(
     val interactionSource = remember { MutableInteractionSource() }
     Row(
         modifier = modifier
+            .remodexPressedState(
+                interactionSource = interactionSource,
+                enabled = onClick != null,
+            )
             .clip(RoundedCornerShape(geometry.cornerSmall))
             .background(if (selected) colors.selectedRowFill else Color.Transparent)
             .then(
@@ -412,12 +441,23 @@ internal fun RemodexSearchField(
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val motion = RemodexTheme.motion
+    var isFocused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused) {
+            colors.accentBlue.copy(alpha = 0.18f)
+        } else {
+            colors.hairlineDivider
+        },
+        animationSpec = remodexTween(motion.searchMillis),
+        label = "searchFieldBorder",
+    )
 
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(geometry.cornerSmall),
         color = colors.searchBackground,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
     ) {
         Row(
             modifier = Modifier.padding(
@@ -451,7 +491,10 @@ internal fun RemodexSearchField(
                     cursorBrush = SolidColor(colors.accentBlue),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged { onFocusChange(it.isFocused) },
+                        .onFocusChanged {
+                            isFocused = it.isFocused
+                            onFocusChange(it.isFocused)
+                        },
                 )
             }
             if (text.isNotEmpty()) {

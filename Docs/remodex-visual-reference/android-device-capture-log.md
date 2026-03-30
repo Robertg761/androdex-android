@@ -81,6 +81,28 @@ This file records the verified Android-side screenshots gathered during the live
 | `android-device-captures/phase11/phase11-thread-activity-banner.xml` | UI dump for the in-thread activity overlay state | Confirms the compaction label, thinking state, and stop affordance from the same live run-state frame. |
 | `android-device-captures/phase11/phase11-thread-rollback-confirmation.xml` | UI dump for the maintenance confirmation dialog | Confirms the confirmation copy and action labels from the live Android dialog variant. |
 
+## Phase 12 Motion / Interaction Captures
+
+| Android artifact | What it shows | Notes |
+| --- | --- | --- |
+| `android-device-captures/phase12/phase12-drawer-open-close.mp4` | Home shell drawer reveal and collapse | Recorded on the attached Samsung device with `adb screenrecord` after the shared motion pass so the drawer reveal timing can be compared against Remodex instead of inferred from stills. |
+| `android-device-captures/phase12/phase12-sidebar-search-focus.mp4` | Drawer search focus transition | Shows the focused search affordance, keyboard lift, and cancel reveal on live hardware after the new shared search easing landed. |
+| `android-device-captures/phase12/phase12-home-to-thread.mp4` | Connected-shell home -> thread transition | Captures the shared shell slide/fade motion when leaving the landing screen and opening a conversation from the drawer. |
+| `android-device-captures/phase12/phase12-composer-mode-panel.mp4` | Composer accessory panel expand / collapse | Confirms the new composer panel reveal cadence and collapse behavior above the footer input shell on device. |
+| `android-device-captures/phase12/phase12-jump-to-latest.mp4` | Jump-to-latest affordance dismissal | Captures the floating jump button while away from the latest message and its disappearance after returning to the bottom of the thread. |
+| `android-device-captures/phase12/phase12-settings-sheet.mp4` | Settings sheet presentation and dismissal | Recorded from the home header settings action to anchor bottom-sheet motion after the shared motion pass. |
+| `android-device-captures/phase12/phase12-sidebar-open.png` | Default drawer-open state after the motion pass | Still reference used alongside the recordings to verify the drawer reveal end state. |
+| `android-device-captures/phase12/phase12-sidebar-search-focused2.png` | Focused drawer search with visible cancel affordance | The clearest still anchor for the tuned focus border, cancel button, and keyboard-aware width change after the Phase 12 pass. |
+| `android-device-captures/phase12/phase12-sidebar-expanded.png` | Expanded grouped thread section in the drawer | Confirms the grouped-thread end state used during the motion recordings. |
+| `android-device-captures/phase12/phase12-thread-from-sidebar.png` | Thread shell during live loading / thinking activity | Useful as the still anchor for the busy/loading transition family captured during the Phase 12 thread-open recordings. |
+| `android-device-captures/phase12/phase12-composer-mode-panel-2.png` | Composer accessory panel open on-device | Still frame that matches the `phase12-composer-mode-panel.mp4` clip and shows the expanded control cluster. |
+| `android-device-captures/phase12/phase12-jump-state.png` | Thread state with the jump-to-latest affordance visible | Paired with the jump recording so the floating control can be checked in a static reference. |
+| `android-device-captures/phase12/phase12-thread-post-record.xml` | UI dump for the baseline post-motion thread state | Confirms the footer geometry and header affordances from the same device session used for the motion clips. |
+| `android-device-captures/phase12/phase12-sidebar-open.xml` | UI dump for the drawer-open state | Verifies the motion end state for the default drawer reveal. |
+| `android-device-captures/phase12/phase12-sidebar-search-focused2.xml` | UI dump for the focused search drawer state | Confirms the focused `EditText`, cancel label, and keyboard-aware layout in the live hierarchy. |
+| `android-device-captures/phase12/phase12-composer-mode-panel-2.xml` | UI dump for the open composer mode panel | Useful for checking the pill ordering and expanded footer height after the new motion treatment. |
+| `android-device-captures/phase12/phase12-jump-state.xml` | UI dump for the visible jump-to-latest state | Confirms the floating jump button is present in the live hierarchy before dismissal. |
+
 ## Supporting Dumps
 
 - Route-based `*--androdex.xml` files are the canonical UI dumps for the new Android screenshots.
@@ -89,6 +111,7 @@ This file records the verified Android-side screenshots gathered during the live
 - Verified Phase 4 home dumps now include `android-device-captures/phase4/phase4-home-shell.xml`, `android-device-captures/phase4/phase4-home-empty-no-project.xml`, `android-device-captures/phase4/phase4-home-no-project.xml`, and `android-device-captures/phase4/phase4-home-loading.xml`.
 - Verified Phase 5 sidebar dumps now include `android-device-captures/phase5/phase5-sidebar-closed.xml`, `android-device-captures/phase5/phase5-sidebar-open-default.xml`, `android-device-captures/phase5/phase5-sidebar-search-focused.xml`, `android-device-captures/phase5/phase5-sidebar-groups-expanded.xml`, and `android-device-captures/phase5/phase5-sidebar-empty.xml`.
 - Verified Phase 11 alert / overlay / status dumps now include `android-device-captures/phase11/phase11-home-connected-status.xml`, `android-device-captures/phase11/phase11-settings-status-cards.xml`, `android-device-captures/phase11/phase11-thread-activity-banner.xml`, and `android-device-captures/phase11/phase11-thread-rollback-confirmation.xml`.
+- Verified Phase 12 motion dumps now include `android-device-captures/phase12/phase12-sidebar-open.xml`, `android-device-captures/phase12/phase12-sidebar-search-focused2.xml`, `android-device-captures/phase12/phase12-sidebar-expanded.xml`, `android-device-captures/phase12/phase12-thread-from-sidebar.xml`, `android-device-captures/phase12/phase12-composer-mode-panel-2.xml`, `android-device-captures/phase12/phase12-jump-state.xml`, and `android-device-captures/phase12/phase12-thread-post-record.xml`.
 - `android-device-captures/phase1/phase1-pairing-refresh.xml` is still a useful scratch artifact, but a fresh saved-reconnect recapture would align it better with `phase1-pairing-refresh.png`.
 - Older `uidump-*.xml` files are retained as scratch/session dumps for pairing and thread exploration.
 - `latest-pair-output.txt` contains the host-side pairing output captured during the fresh repair/pair flow.
