@@ -92,6 +92,47 @@ class ThreadTimelineFormattingTest {
     }
 
     @Test
+    fun normalizeTimelineParagraph_preservesSingleLineBreaks() {
+        assertEquals(
+            "First line\nSecond line\n\nThird line",
+            normalizeTimelineParagraph("First line  \nSecond line\n\nThird line\n"),
+        )
+    }
+
+    @Test
+    fun standaloneFileReferenceParagraph_onlyMatchesSingleReferenceLine() {
+        assertTrue(isStandaloneFileReferenceParagraph("[Main.kt](/tmp/Main.kt:12)"))
+        assertFalse(
+            isStandaloneFileReferenceParagraph(
+                """
+                [Main.kt](/tmp/Main.kt:12)
+                See comment above.
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun listParagraph_requiresEveryLineToBeAListItem() {
+        assertTrue(
+            isListParagraph(
+                """
+                1. Inspect the stream
+                2. Verify spacing
+                """.trimIndent()
+            )
+        )
+        assertFalse(
+            isListParagraph(
+                """
+                1. Inspect the stream
+                Extra note
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
     fun queuedDraftMetadataLabels_includesModeAttachmentsAndContext() {
         val labels = queuedDraftMetadataLabels(
             QueuedTurnDraft(

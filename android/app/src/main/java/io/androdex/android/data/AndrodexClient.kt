@@ -48,6 +48,7 @@ import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.SavedRelaySession
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.ThreadLoadResult
@@ -105,6 +106,35 @@ private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
 private const val logTag = "AndrodexClient"
+private const val trustedReconnectFailureThreshold = 3
+
+private enum class TrustedResolveFallbackPolicy {
+    ALLOW_SAVED_SESSION,
+    REQUIRE_FRESH_LIVE_SESSION,
+}
+
+private sealed interface TrustedSessionResolveResult {
+    data class Resolved(
+        val pairing: PairingPayload,
+        val displayName: String?,
+    ) : TrustedSessionResolveResult
+
+    data class FallbackToSavedSession(
+        val detail: String,
+    ) : TrustedSessionResolveResult
+
+    data class LiveSessionUnresolved(
+        val detail: String,
+    ) : TrustedSessionResolveResult
+
+    data class RepairRequired(
+        val detail: String,
+    ) : TrustedSessionResolveResult
+
+    data class UpdateRequired(
+        val detail: String,
+    ) : TrustedSessionResolveResult
+}
 
 internal fun resetMaintenanceActionCapabilityFlags(
     supportsThreadCompaction: Boolean,
@@ -142,8 +172,10 @@ class AndrodexClient(
         persistence.savePhoneIdentity(it)
     }
     private var trustedMacRegistry: TrustedMacRegistry = persistence.loadTrustedMacRegistry()
+    private var lastTrustedMacDeviceId: String? = persistence.loadLastTrustedMacDeviceId()
+    private var savedRelaySession: SavedRelaySession? = persistence.loadSavedRelaySession()
     private var lastAppliedBridgeOutboundSeq: Int = persistence.loadLastAppliedBridgeOutboundSeq()
-    private var savedPairingPayload: PairingPayload? = persistence.loadPairing()
+    private var trustedReconnectFailureCount = 0
     private var availableModels: List<ModelOption> = emptyList()
     private var selectedModelId: String? = persistence.loadSelectedModelId()
     private var selectedReasoningEffort: String? = persistence.loadSelectedReasoningEffort()
@@ -165,38 +197,182 @@ class AndrodexClient(
         emitRuntimeConfig()
     }
 
-    fun hasSavedPairing(): Boolean = savedPairingPayload != null
+    fun hasSavedPairing(): Boolean = savedRelaySession != null
 
     fun currentFingerprint(): String? {
-        val pairing = savedPairingPayload ?: return null
-        val trusted = trustedMacRegistry.records[pairing.macDeviceId]
-        return fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey)
+        val trusted = currentTrustedMacRecord()
+        val session = savedRelaySession
+        val publicKey = trusted?.macIdentityPublicKey ?: session?.macIdentityPublicKey ?: return null
+        return fingerprint(publicKey)
     }
 
     fun currentTrustedPairSnapshot(): TrustedPairSnapshot? {
-        val pairing = savedPairingPayload ?: return null
-        val trusted = trustedMacRegistry.records[pairing.macDeviceId]
+        val trusted = currentTrustedMacRecord()
+        val session = savedRelaySession
+        val deviceId = trusted?.macDeviceId ?: session?.macDeviceId ?: return null
         return TrustedPairSnapshot(
-            deviceId = pairing.macDeviceId,
-            relayUrl = pairing.relay,
-            fingerprint = fingerprint(trusted?.macIdentityPublicKey ?: pairing.macIdentityPublicKey),
+            deviceId = deviceId,
+            relayUrl = trusted?.relayUrl ?: session?.relayUrl,
+            fingerprint = fingerprint(trusted?.macIdentityPublicKey ?: session?.macIdentityPublicKey ?: return null),
             lastPairedAtEpochMs = trusted?.lastPairedAtEpochMs,
+            displayName = trusted?.displayName,
+            hasSavedRelaySession = session?.macDeviceId == deviceId,
         )
+    }
+
+    private fun currentTrustedMacRecord(): TrustedMacRecord? {
+        val preferredDeviceId = lastTrustedMacDeviceId?.trim()?.takeIf { it.isNotEmpty() }
+        if (preferredDeviceId != null) {
+            trustedMacRegistry.records[preferredDeviceId]?.let { return it }
+        }
+        val session = savedRelaySession
+        if (session != null) {
+            trustedMacRegistry.records[session.macDeviceId]?.let { return it }
+        }
+        return trustedMacRegistry.records.values.maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
+    }
+
+    private fun reconnectCandidate(): PairingPayload? {
+        savedRelaySession?.let { return it.toPairingPayload() }
+        val trusted = currentTrustedMacRecord() ?: return null
+        val relayUrl = trusted.relayUrl ?: return null
+        val hostId = trusted.lastResolvedHostId ?: trusted.macDeviceId
+        return PairingPayload(
+            version = pairingQrVersion,
+            relay = relayUrl,
+            hostId = hostId,
+            sessionId = hostId,
+            macDeviceId = trusted.macDeviceId,
+            macIdentityPublicKey = trusted.macIdentityPublicKey,
+            bootstrapToken = null,
+            expiresAt = 0L,
+        )
+    }
+
+    private fun rememberLastTrustedMacDeviceId(macDeviceId: String?) {
+        val normalized = macDeviceId?.trim()?.takeIf { it.isNotEmpty() }
+        lastTrustedMacDeviceId = normalized
+        persistence.saveLastTrustedMacDeviceId(normalized)
+    }
+
+    private fun updateTrustedMacRecord(
+        macDeviceId: String,
+        transform: (TrustedMacRecord) -> TrustedMacRecord,
+    ) {
+        val record = trustedMacRegistry.records[macDeviceId] ?: return
+        val updated = transform(record)
+        trustedMacRegistry = trustedMacRegistry.copy(
+            records = trustedMacRegistry.records + (macDeviceId to updated),
+        )
+        persistence.saveTrustedMacRegistry(trustedMacRegistry)
+        rememberLastTrustedMacDeviceId(macDeviceId)
+    }
+
+    private suspend fun handleTrustedReconnectFailure(
+        detail: String,
+        clearSavedSession: Boolean,
+    ) {
+        trustedReconnectFailureCount += 1
+        if (clearSavedSession && trustedReconnectFailureCount >= trustedReconnectFailureThreshold) {
+            clearSavedRelaySession()
+        }
+        disconnectInternal(clearSavedPairing = false)
+        updatesFlow.emit(
+            ClientUpdate.Connection(
+                ConnectionStatus.DISCONNECTED,
+                if (savedRelaySession == null) {
+                    detail
+                } else {
+                    "Trusted host is still known, but the last live session could not be refreshed yet."
+                },
+                fingerprint = currentFingerprint(),
+            )
+        )
+    }
+
+    private fun clearSavedRelaySession() {
+        persistence.clearSavedRelaySession()
+        savedRelaySession = null
+        lastAppliedBridgeOutboundSeq = 0
+        emitPairingAvailability()
     }
 
     suspend fun connectWithPairingPayload(rawPayload: String) {
         val pairing = parsePairingPayload(rawPayload)
         connect(pairing)
-        val savedPairing = pairing.toSavedPairing()
-        persistence.savePairing(savedPairing)
-        savedPairingPayload = savedPairing
-        lastAppliedBridgeOutboundSeq = persistence.loadLastAppliedBridgeOutboundSeq()
+        val savedSession = pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)
+            ?: throw IllegalStateException("Failed to save the paired relay session.")
+        persistence.saveSavedRelaySession(savedSession)
+        savedRelaySession = savedSession
+        rememberLastTrustedMacDeviceId(pairing.macDeviceId)
         emitPairingAvailability()
     }
 
     suspend fun reconnectSaved() {
-        val pairing = savedPairingPayload ?: throw IllegalStateException("No saved pairing is available.")
-        connect(resolveTrustedPairing(pairing))
+        val reconnectCandidate = reconnectCandidate()
+            ?: throw IllegalStateException("No saved or trusted pairing is available.")
+        when (val resolved = resolveTrustedPairing(reconnectCandidate)) {
+            is TrustedSessionResolveResult.Resolved -> {
+                connect(resolved.pairing)
+                trustedReconnectFailureCount = 0
+                resolved.displayName?.let { displayName ->
+                    updateTrustedMacRecord(resolved.pairing.macDeviceId) { record ->
+                        record.copy(displayName = displayName)
+                    }
+                }
+            }
+            is TrustedSessionResolveResult.FallbackToSavedSession -> {
+                connect(reconnectCandidate)
+                trustedReconnectFailureCount = 0
+            }
+            is TrustedSessionResolveResult.LiveSessionUnresolved -> {
+                handleTrustedReconnectFailure(
+                    detail = resolved.detail,
+                    clearSavedSession = savedRelaySession != null,
+                )
+            }
+            is TrustedSessionResolveResult.RepairRequired -> {
+                trustedReconnectFailureCount = 0
+                emitTerminalConnectionUpdate(
+                    ClientUpdate.Connection(
+                        ConnectionStatus.RECONNECT_REQUIRED,
+                        resolved.detail,
+                    )
+                )
+                disconnectInternal(clearSavedPairing = false)
+                updatesFlow.emit(consumePendingTerminalConnectionUpdate() ?: ClientUpdate.Connection(ConnectionStatus.RECONNECT_REQUIRED, resolved.detail))
+            }
+            is TrustedSessionResolveResult.UpdateRequired -> {
+                trustedReconnectFailureCount = 0
+                emitTerminalConnectionUpdate(
+                    ClientUpdate.Connection(
+                        ConnectionStatus.UPDATE_REQUIRED,
+                        resolved.detail,
+                    )
+                )
+                disconnectInternal(clearSavedPairing = false)
+                updatesFlow.emit(consumePendingTerminalConnectionUpdate() ?: ClientUpdate.Connection(ConnectionStatus.UPDATE_REQUIRED, resolved.detail))
+            }
+        }
+    }
+
+    suspend fun forgetTrustedHost() {
+        val trusted = currentTrustedMacRecord() ?: return
+        if (savedRelaySession?.macDeviceId == trusted.macDeviceId) {
+            clearSavedRelaySession()
+        }
+        trustedMacRegistry = trustedMacRegistry.copy(
+            records = trustedMacRegistry.records - trusted.macDeviceId,
+        )
+        persistence.saveTrustedMacRegistry(trustedMacRegistry)
+        if (lastTrustedMacDeviceId == trusted.macDeviceId) {
+            rememberLastTrustedMacDeviceId(null)
+        }
+        if (secureSession?.macDeviceId == trusted.macDeviceId) {
+            disconnectInternal(clearSavedPairing = false)
+            updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.DISCONNECTED, "Trusted host forgotten."))
+        }
+        emitPairingAvailability()
     }
 
     suspend fun disconnect(clearSavedPairing: Boolean = false) {
@@ -939,6 +1115,18 @@ class AndrodexClient(
             performSecureHandshake(pairing)
             initializeSession()
             runCatching { loadRuntimeConfig() }
+            pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)?.let { persistedSession ->
+                persistence.saveSavedRelaySession(persistedSession)
+                savedRelaySession = persistedSession
+            }
+            trustedReconnectFailureCount = 0
+            updateTrustedMacRecord(pairing.macDeviceId) { record ->
+                record.copy(
+                    relayUrl = pairing.relay,
+                    lastResolvedHostId = pairing.routingId,
+                    lastUsedAtEpochMs = System.currentTimeMillis(),
+                )
+            }
             pendingTerminalConnectionUpdate = null
             updatesFlow.emit(
                 ClientUpdate.Connection(
@@ -950,9 +1138,17 @@ class AndrodexClient(
         }
     }
 
-    private suspend fun resolveTrustedPairing(pairing: PairingPayload): PairingPayload {
-        val trustedMac = trustedMacRegistry.records[pairing.macDeviceId] ?: return pairing
-        val resolveUrl = trustedSessionResolveUrl(pairing.relay) ?: return pairing
+    private suspend fun resolveTrustedPairing(pairing: PairingPayload): TrustedSessionResolveResult {
+        val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
+            ?: return TrustedSessionResolveResult.FallbackToSavedSession("No trusted host metadata is available yet.")
+        val resolveUrl = trustedSessionResolveUrl(pairing.relay)
+            ?: return TrustedSessionResolveResult.FallbackToSavedSession("This relay does not support trusted-session resolve.")
+        val fallbackPolicy = if (savedRelaySession?.macDeviceId == pairing.macDeviceId) {
+            TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION
+        } else {
+            TrustedResolveFallbackPolicy.REQUIRE_FRESH_LIVE_SESSION
+        }
+
         return runCatching {
             withTimeout(trustedSessionResolveTimeoutMs) {
                 val timestamp = System.currentTimeMillis()
@@ -985,43 +1181,56 @@ class AndrodexClient(
                             .toRequestBody("application/json; charset=utf-8".toMediaType())
                     )
                     .build()
-                val responseBody = withContext(Dispatchers.IO) {
+                val responseJson = withContext(Dispatchers.IO) {
                     okHttpClient.newCall(request).execute().use { response ->
-                        val bodyText = response.body?.string().orEmpty()
+                        val bodyText = response.body.string()
+                        val parsedBody = runCatching { JSONObject(bodyText) }.getOrNull()
                         if (!response.isSuccessful) {
-                            throw IOException(
-                                buildString {
-                                    append("Trusted-session resolve failed")
-                                    append(" (")
-                                    append(response.code)
-                                    append(")")
-                                    val detail = runCatching {
-                                        JSONObject(bodyText).optString("error").trim()
-                                    }.getOrNull()
-                                    if (!detail.isNullOrEmpty()) {
-                                        append(": ")
-                                        append(detail)
-                                    }
-                                }
+                            return@use mapTrustedSessionResolveFailure(
+                                responseCode = response.code,
+                                responseBody = parsedBody,
+                                fallbackPolicy = fallbackPolicy,
                             )
                         }
-                        bodyText
+                        parsedBody ?: JSONObject()
                     }
                 }
-                val responseJson = JSONObject(responseBody)
+                if (responseJson is TrustedSessionResolveResult) {
+                    return@withTimeout responseJson
+                }
+                responseJson as JSONObject
                 val resolvedSessionId = responseJson.optString("sessionId").trim()
                 if (resolvedSessionId.isEmpty()) {
-                    throw IOException("Trusted-session resolve response omitted the live session ID.")
+                    return@withTimeout mapTrustedSessionResolveFailure(
+                        responseCode = 502,
+                        responseBody = null,
+                        fallbackPolicy = fallbackPolicy,
+                        fallbackDetail = "Trusted host is known, but the relay did not return a fresh live session.",
+                    )
                 }
-                pairing.copy(
-                    hostId = resolvedSessionId,
-                    sessionId = resolvedSessionId,
-                    macIdentityPublicKey = responseJson
-                        .optString("macIdentityPublicKey")
-                        .trim()
-                        .ifEmpty { trustedMac.macIdentityPublicKey },
-                    bootstrapToken = null,
-                    expiresAt = 0L,
+                val displayName = responseJson.optString("displayName").trim().ifEmpty { null }
+                rememberLastTrustedMacDeviceId(pairing.macDeviceId)
+                updateTrustedMacRecord(pairing.macDeviceId) { record ->
+                    record.copy(
+                        relayUrl = pairing.relay,
+                        displayName = displayName ?: record.displayName,
+                        lastResolvedHostId = resolvedSessionId,
+                        lastResolvedAtEpochMs = timestamp,
+                        lastUsedAtEpochMs = timestamp,
+                    )
+                }
+                TrustedSessionResolveResult.Resolved(
+                    pairing = pairing.copy(
+                        hostId = resolvedSessionId,
+                        sessionId = resolvedSessionId,
+                        macIdentityPublicKey = responseJson
+                            .optString("macIdentityPublicKey")
+                            .trim()
+                            .ifEmpty { trustedMac.macIdentityPublicKey },
+                        bootstrapToken = null,
+                        expiresAt = 0L,
+                    ),
+                    displayName = displayName,
                 )
             }
         }.onFailure { error ->
@@ -1029,7 +1238,43 @@ class AndrodexClient(
                 logTag,
                 "trusted-session resolve fallback host=${pairing.macDeviceId.take(8)} relay=$resolveUrl error=${error.message}",
             )
-        }.getOrDefault(pairing)
+        }.getOrElse {
+            mapTrustedSessionResolveFailure(
+                responseCode = 0,
+                responseBody = null,
+                fallbackPolicy = fallbackPolicy,
+            )
+        }
+    }
+
+    private fun mapTrustedSessionResolveFailure(
+        responseCode: Int,
+        responseBody: JSONObject?,
+        fallbackPolicy: TrustedResolveFallbackPolicy,
+        fallbackDetail: String? = null,
+    ): TrustedSessionResolveResult {
+        val errorCode = responseBody?.optString("code")?.trim()?.ifEmpty { null }
+            ?: responseBody?.optString("error")?.trim()?.ifEmpty { null }
+        val detail = responseBody?.optString("message")?.trim()?.ifEmpty { null }
+            ?: responseBody?.optString("error_description")?.trim()?.ifEmpty { null }
+            ?: fallbackDetail
+            ?: when (responseCode) {
+                0 -> "Trusted host is known, but the relay could not resolve a fresh live session."
+                else -> "Trusted host is known, but the relay did not provide a fresh live session."
+            }
+        return when (errorCode) {
+            "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> {
+                TrustedSessionResolveResult.RepairRequired(detail)
+            }
+            "update_required" -> TrustedSessionResolveResult.UpdateRequired(detail)
+            else -> {
+                if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION) {
+                    TrustedSessionResolveResult.FallbackToSavedSession(detail)
+                } else {
+                    TrustedSessionResolveResult.LiveSessionUnresolved(detail)
+                }
+            }
+        }
     }
 
     private suspend fun disconnectInternal(clearSavedPairing: Boolean) {
@@ -1045,10 +1290,7 @@ class AndrodexClient(
             clearPendingRequests()
             clearSecureWaiters(IllegalStateException("Disconnected"))
             if (clearSavedPairing) {
-                persistence.clearPairing()
-                savedPairingPayload = null
-                lastAppliedBridgeOutboundSeq = 0
-                emitPairingAvailability()
+                clearSavedRelaySession()
             }
         }
     }
@@ -1213,17 +1455,32 @@ class AndrodexClient(
         pendingHandshake = null
 
         if (handshakeMode == handshakeModeQrBootstrap) {
+            val pairedAt = System.currentTimeMillis()
             val nextRegistry = TrustedMacRegistry(
                 records = trustedMacRegistry.records + (
                     pairing.macDeviceId to TrustedMacRecord(
                         macDeviceId = pairing.macDeviceId,
                         macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
-                        lastPairedAtEpochMs = System.currentTimeMillis(),
+                        lastPairedAtEpochMs = pairedAt,
+                        relayUrl = pairing.relay,
+                        lastResolvedHostId = pairing.routingId,
+                        lastResolvedAtEpochMs = pairedAt,
+                        lastUsedAtEpochMs = pairedAt,
                     )
                 )
             )
             trustedMacRegistry = nextRegistry
             persistence.saveTrustedMacRegistry(nextRegistry)
+            rememberLastTrustedMacDeviceId(pairing.macDeviceId)
+        } else {
+            updateTrustedMacRecord(pairing.macDeviceId) { record ->
+                record.copy(
+                    relayUrl = pairing.relay,
+                    lastResolvedHostId = pairing.routingId,
+                    lastResolvedAtEpochMs = System.currentTimeMillis(),
+                    lastUsedAtEpochMs = System.currentTimeMillis(),
+                )
+            }
         }
 
         sendRawText(
@@ -1907,7 +2164,15 @@ class AndrodexClient(
         clearPendingRequests()
         clearSecureWaiters(IllegalStateException("Socket closed"))
 
-        val update = connectionUpdateForSocketClose(code, consumePendingTerminalConnectionUpdate())
+        if (shouldClearSavedRelaySessionForSocketClose(code)) {
+            clearSavedRelaySession()
+        }
+
+        val update = connectionUpdateForSocketClose(
+            code = code,
+            hasTrustedHost = currentTrustedMacRecord() != null,
+            pendingTerminalUpdate = consumePendingTerminalConnectionUpdate(),
+        )
         if (update != null) {
             updatesFlow.emit(update)
         }
@@ -1933,7 +2198,7 @@ class AndrodexClient(
         clearSecureWaiters(IllegalStateException("Socket failure"))
 
         val update = connectionUpdateForSocketFailure(
-            savedPairingAvailable = savedPairingPayload != null,
+            savedPairingAvailable = hasSavedPairing(),
             errorMessage = error.message,
             pendingTerminalUpdate = consumePendingTerminalConnectionUpdate(),
         )
@@ -1979,12 +2244,7 @@ class AndrodexClient(
     }
 
     private fun emitPairingAvailability() {
-        val pairing = savedPairingPayload
-        val currentFingerprint = pairing?.let {
-            val trusted = trustedMacRegistry.records[it.macDeviceId]
-            fingerprint(trusted?.macIdentityPublicKey ?: it.macIdentityPublicKey)
-        }
-        updatesFlow.tryEmit(ClientUpdate.PairingAvailability(pairing != null, currentFingerprint))
+        updatesFlow.tryEmit(ClientUpdate.PairingAvailability(hasSavedPairing(), currentFingerprint()))
     }
 
     private fun emitRuntimeConfig() {
@@ -2657,6 +2917,7 @@ internal fun secureErrorConnectionUpdate(code: String, message: String): ClientU
 
 internal fun connectionUpdateForSocketClose(
     code: Int,
+    hasTrustedHost: Boolean,
     pendingTerminalUpdate: ClientUpdate.Connection?,
 ): ClientUpdate.Connection? {
     if (pendingTerminalUpdate != null) {
@@ -2666,13 +2927,25 @@ internal fun connectionUpdateForSocketClose(
         ClientUpdate.Connection(
             status = when (code) {
                 4002, 4004 -> ConnectionStatus.RETRYING_SAVED_PAIRING
-                else -> ConnectionStatus.RECONNECT_REQUIRED
+                else -> ConnectionStatus.DISCONNECTED
             },
             detail = when (code) {
                 4002 -> "Host offline, retrying saved pairing until the daemon reconnects."
                 4004 -> "Host temporarily unavailable, retrying saved pairing."
-                4003 -> "This device was replaced by a newer connection. You can reconnect from saved pairing."
-                else -> "The relay connection closed (code $code). Reconnect from saved pairing."
+                4003 -> {
+                    if (hasTrustedHost) {
+                        "The previous live session was replaced. Trusted host details were kept, so you can reconnect without rescanning."
+                    } else {
+                        "This device was replaced by a newer connection. You can reconnect from saved pairing."
+                    }
+                }
+                else -> {
+                    if (hasTrustedHost) {
+                        "The previous live session closed (code $code), but the trusted host record was preserved."
+                    } else {
+                        "The relay connection closed (code $code). Reconnect from saved pairing."
+                    }
+                }
             }
         )
     } else {
@@ -2681,6 +2954,10 @@ internal fun connectionUpdateForSocketClose(
             "Relay disconnected (code $code)."
         )
     }
+}
+
+internal fun shouldClearSavedRelaySessionForSocketClose(code: Int): Boolean {
+    return code in setOf(4000, 4001, 4003)
 }
 
 internal fun trustedSessionResolveUrl(relayUrl: String): String? {

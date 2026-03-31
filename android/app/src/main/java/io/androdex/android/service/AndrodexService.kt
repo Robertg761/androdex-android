@@ -210,6 +210,12 @@ class AndrodexService(
         loadWorkspaceState()
     }
 
+    suspend fun forgetTrustedHost() {
+        suppressSavedReconnect = true
+        cancelSavedReconnectRetry()
+        repository.forgetTrustedHost()
+    }
+
     fun reconnectSavedIfAvailable() {
         if (!appInForeground) {
             return

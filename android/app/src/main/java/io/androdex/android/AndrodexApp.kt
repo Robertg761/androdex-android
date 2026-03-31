@@ -236,6 +236,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                         },
                         onConnect = viewModel::connectWithCurrentPairingInput,
                         onReconnectSaved = viewModel::reconnectSaved,
+                        onForgetTrustedHost = viewModel::forgetTrustedHost,
                     )
                 }
             }

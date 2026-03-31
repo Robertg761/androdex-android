@@ -18,13 +18,14 @@ let hasLoggedMismatch = false;
 
 function loadOrCreateBridgeDeviceState() {
   const fileRecord = readCanonicalFileStateRecord();
+  const keychainRecord = readKeychainStateRecord();
 
   if (fileRecord.state) {
+    reconcileLegacyKeychainMirror(fileRecord.state, keychainRecord);
     return fileRecord.state;
   }
 
   if (fileRecord.error) {
-    const keychainRecord = readKeychainStateRecord();
     if (keychainRecord.state) {
       warnOnce("[androdex] Recovering the canonical device-state.json from the legacy Keychain pairing mirror.");
       writeBridgeDeviceState(keychainRecord.state);
@@ -33,7 +34,6 @@ function loadOrCreateBridgeDeviceState() {
     throw corruptedStateError("device-state.json", fileRecord.error);
   }
 
-  const keychainRecord = readKeychainStateRecord();
   if (keychainRecord.error) {
     throw corruptedStateError("legacy Keychain bridge state", keychainRecord.error);
   }
@@ -91,6 +91,10 @@ function getTrustedPhonePublicKey(state, phoneDeviceId) {
     return null;
   }
   return state.trustedPhones?.[normalizedDeviceId] || null;
+}
+
+function hasTrustedPhones(state) {
+  return Object.keys(state?.trustedPhones || {}).length > 0;
 }
 
 function createBridgeDeviceState() {
@@ -233,6 +237,25 @@ function deleteCanonicalFileState() {
   }
 }
 
+function reconcileLegacyKeychainMirror(canonicalState, keychainRecord) {
+  if (keychainRecord.error) {
+    warnOnce("[androdex] Ignoring unreadable legacy Keychain pairing mirror; using canonical device-state.json.");
+    return;
+  }
+
+  if (!keychainRecord.state) {
+    writeKeychainStateString(JSON.stringify(canonicalState, null, 2));
+    return;
+  }
+
+  if (JSON.stringify(canonicalState) === JSON.stringify(keychainRecord.state)) {
+    return;
+  }
+
+  warnOnce("[androdex] Canonical bridge pairing state differs from the legacy Keychain mirror; using device-state.json.");
+  writeKeychainStateString(JSON.stringify(canonicalState, null, 2));
+}
+
 function deleteKeychainStateString() {
   if (process.platform !== "darwin") {
     return false;
@@ -312,6 +335,7 @@ function base64UrlToBase64(value) {
 }
 
 module.exports = {
+  hasTrustedPhones,
   getTrustedPhonePublicKey,
   loadOrCreateBridgeDeviceState,
   rememberTrustedPhone,

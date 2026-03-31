@@ -38,6 +38,7 @@ class AndrodexClientConnectionPolicyTest {
     fun socketClose_keepsRetryOnlyForHostOfflineClose() {
         val update = connectionUpdateForSocketClose(
             code = 4002,
+            hasTrustedHost = true,
             pendingTerminalUpdate = null,
         )
 
@@ -52,6 +53,7 @@ class AndrodexClientConnectionPolicyTest {
     fun socketClose_retriesSavedPairingWhenHostIsTemporarilyUnavailable() {
         val update = connectionUpdateForSocketClose(
             code = 4004,
+            hasTrustedHost = true,
             pendingTerminalUpdate = null,
         )
 
@@ -71,5 +73,21 @@ class AndrodexClientConnectionPolicyTest {
         val resolveUrl = trustedSessionResolveUrl("ws://localhost:8787/custom/relay")
 
         assertEquals("http://localhost:8787/custom/v1/trusted/session/resolve", resolveUrl)
+    }
+
+    @Test
+    fun socketClose_clearsOnlyLiveSessionForPermanentCloseWhenTrustRemains() {
+        val update = connectionUpdateForSocketClose(
+            code = 4003,
+            hasTrustedHost = true,
+            pendingTerminalUpdate = null,
+        )
+
+        assertEquals(ConnectionStatus.DISCONNECTED, update?.status)
+        assertEquals(
+            "The previous live session was replaced. Trusted host details were kept, so you can reconnect without rescanning.",
+            update?.detail,
+        )
+        assertEquals(true, shouldClearSavedRelaySessionForSocketClose(4003))
     }
 }

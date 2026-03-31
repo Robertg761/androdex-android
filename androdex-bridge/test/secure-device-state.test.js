@@ -175,7 +175,7 @@ test("resolveBridgeRelaySession issues a fresh relay session id without changing
   });
 });
 
-test("loadOrCreateBridgeDeviceState does not require a legacy keychain read when the canonical file exists", () => {
+test("loadOrCreateBridgeDeviceState repairs the legacy keychain mirror when the canonical file exists", () => {
   let keychainReadAttempts = 0;
 
   withTempHome({
@@ -198,7 +198,39 @@ test("loadOrCreateBridgeDeviceState does not require a legacy keychain read when
     const reloadedState = secureDeviceState.loadOrCreateBridgeDeviceState();
 
     assert.equal(reloadedState.macDeviceId, initialState.macDeviceId);
-    assert.equal(keychainReadAttempts, 0);
+    assert.equal(keychainReadAttempts, 1);
+  });
+});
+
+test("canonical file state repairs a stale keychain mirror on darwin", () => {
+  let mirroredState = "";
+  let keychainWrites = 0;
+
+  withTempHome({
+    platform: "darwin",
+    execFileSyncHandler(execFileSync, command, args, options) {
+      if (command === "security" && Array.isArray(args) && args[0] === "find-generic-password") {
+        return mirroredState;
+      }
+      if (command === "security" && Array.isArray(args) && args[0] === "add-generic-password") {
+        keychainWrites += 1;
+        mirroredState = args.at(-1);
+        return "";
+      }
+      return execFileSync(command, args, options);
+    },
+  }, ({ secureDeviceState }) => {
+    const canonicalState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    mirroredState = JSON.stringify({
+      ...canonicalState,
+      macDeviceId: "stale-device",
+    }, null, 2);
+
+    const reloadedState = secureDeviceState.loadOrCreateBridgeDeviceState();
+
+    assert.equal(reloadedState.macDeviceId, canonicalState.macDeviceId);
+    assert.equal(JSON.parse(mirroredState).macDeviceId, canonicalState.macDeviceId);
+    assert.equal(keychainWrites >= 1, true);
   });
 });
 

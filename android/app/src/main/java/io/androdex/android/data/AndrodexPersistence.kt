@@ -5,16 +5,25 @@ import io.androdex.android.crypto.SecureStore
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.SavedRelaySession
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedMacRegistry
 import org.json.JSONObject
 
-class AndrodexPersistence(context: Context) {
-    private val secureStore = SecureStore(context)
-    private var startupNotice: String? = sanitizeUnreadableSecureState()
+open class AndrodexPersistence internal constructor(
+    private val secureStore: SecureStore,
+) {
+    constructor(context: Context) : this(SecureStore(context))
 
-    fun hasSavedPairing(): Boolean = loadPairing() != null
+    private var startupNotice: String?
+
+    init {
+        startupNotice = sanitizeUnreadableSecureState()
+        migrateLegacySavedPairingIfNeeded()
+    }
+
+    fun hasSavedPairing(): Boolean = loadSavedRelaySession() != null
 
     fun takeStartupNotice(): String? {
         val notice = startupNotice
@@ -22,16 +31,31 @@ class AndrodexPersistence(context: Context) {
         return notice
     }
 
-    fun loadPairing(): PairingPayload? {
-        val raw = secureStore.readString(KEY_PAIRING) ?: return null
-        return runCatching { PairingPayload.fromJson(JSONObject(raw)) }.getOrNull()
+    fun loadSavedRelaySession(): SavedRelaySession? {
+        val current = secureStore.readString(KEY_SAVED_RELAY_SESSION)
+            ?.let { runCatching { SavedRelaySession.fromJson(JSONObject(it)) }.getOrNull() }
+        if (current != null) {
+            return current
+        }
+
+        val legacyPairing = secureStore.readString(KEY_PAIRING)
+            ?.let { runCatching { PairingPayload.fromJson(JSONObject(it)) }.getOrNull() }
+            ?: return null
+        val migrated = legacyPairing.toSavedRelaySession(
+            lastAppliedBridgeOutboundSeq = secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull() ?: 0,
+        ) ?: return null
+        saveSavedRelaySession(migrated)
+        secureStore.remove(KEY_PAIRING)
+        return migrated
     }
 
-    fun savePairing(pairingPayload: PairingPayload) {
-        secureStore.writeString(KEY_PAIRING, pairingPayload.toJson().toString())
+    fun saveSavedRelaySession(savedRelaySession: SavedRelaySession) {
+        secureStore.writeString(KEY_SAVED_RELAY_SESSION, savedRelaySession.toJson().toString())
+        secureStore.writeString(KEY_LAST_APPLIED_SEQ, savedRelaySession.lastAppliedBridgeOutboundSeq.toString())
     }
 
-    fun clearPairing() {
+    fun clearSavedRelaySession() {
+        secureStore.remove(KEY_SAVED_RELAY_SESSION)
         secureStore.remove(KEY_PAIRING)
         secureStore.remove(KEY_LAST_APPLIED_SEQ)
     }
@@ -54,12 +78,29 @@ class AndrodexPersistence(context: Context) {
         secureStore.writeString(KEY_TRUSTED_MACS, registry.toJson().toString())
     }
 
+    fun loadLastTrustedMacDeviceId(): String? {
+        return secureStore.readString(KEY_LAST_TRUSTED_MAC_DEVICE_ID)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun saveLastTrustedMacDeviceId(value: String?) {
+        val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
+        if (normalized == null) {
+            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
+        } else {
+            secureStore.writeString(KEY_LAST_TRUSTED_MAC_DEVICE_ID, normalized)
+        }
+    }
+
     fun loadLastAppliedBridgeOutboundSeq(): Int {
-        return secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull() ?: 0
+        return loadSavedRelaySession()?.lastAppliedBridgeOutboundSeq
+            ?: secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull()
+            ?: 0
     }
 
     fun saveLastAppliedBridgeOutboundSeq(value: Int) {
         secureStore.writeString(KEY_LAST_APPLIED_SEQ, value.toString())
+        val currentSession = loadSavedRelaySession() ?: return
+        saveSavedRelaySession(currentSession.copy(lastAppliedBridgeOutboundSeq = value.coerceAtLeast(0)))
     }
 
     fun loadSelectedModelId(): String? {
@@ -124,9 +165,11 @@ class AndrodexPersistence(context: Context) {
     }
 
     private fun sanitizeUnreadableSecureState(): String? {
+        val savedRelaySessionState = secureStore.readStringState(KEY_SAVED_RELAY_SESSION)
         val pairingState = secureStore.readStringState(KEY_PAIRING)
         val phoneIdentityState = secureStore.readStringState(KEY_PHONE_IDENTITY)
         val trustedMacState = secureStore.readStringState(KEY_TRUSTED_MACS)
+        val lastTrustedMacDeviceIdState = secureStore.readStringState(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         val lastAppliedSeqState = secureStore.readStringState(KEY_LAST_APPLIED_SEQ)
         val selectedModelState = secureStore.readStringState(KEY_SELECTED_MODEL_ID)
         val selectedReasoningState = secureStore.readStringState(KEY_SELECTED_REASONING_EFFORT)
@@ -134,15 +177,27 @@ class AndrodexPersistence(context: Context) {
         val selectedServiceTierState = secureStore.readStringState(KEY_SELECTED_SERVICE_TIER)
         val threadRuntimeOverridesState = secureStore.readStringState(KEY_THREAD_RUNTIME_OVERRIDES)
 
-        val lostSecurePairingState = pairingState.isUnreadable
-            || phoneIdentityState.isUnreadable
-            || trustedMacState.isUnreadable
-            || lastAppliedSeqState.isUnreadable
+        val savedRelaySessionUnreadable = savedRelaySessionState.isUnreadable
+            || (pairingState.isUnreadable && !savedRelaySessionState.wasPresent)
+            || (lastAppliedSeqState.isUnreadable && (savedRelaySessionState.wasPresent || pairingState.wasPresent))
+        val phoneIdentityUnreadable = phoneIdentityState.isUnreadable
+        val trustedMacUnreadable = trustedMacState.isUnreadable
+        val lastTrustedMacUnreadable = lastTrustedMacDeviceIdState.isUnreadable
 
-        if (lostSecurePairingState) {
-            clearPairing()
+        if (savedRelaySessionUnreadable) {
+            clearSavedRelaySession()
+        }
+        if (trustedMacUnreadable) {
+            secureStore.remove(KEY_TRUSTED_MACS)
+        }
+        if (lastTrustedMacUnreadable || trustedMacUnreadable) {
+            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
+        }
+        if (phoneIdentityUnreadable) {
+            clearSavedRelaySession()
             secureStore.remove(KEY_PHONE_IDENTITY)
             secureStore.remove(KEY_TRUSTED_MACS)
+            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         }
 
         if (selectedModelState.isUnreadable) {
@@ -161,23 +216,76 @@ class AndrodexPersistence(context: Context) {
             secureStore.remove(KEY_THREAD_RUNTIME_OVERRIDES)
         }
 
-        return if (lostSecurePairingState) {
-            "Saved pairing from a previous Android install or device restore is no longer readable on this device. Scan a fresh QR code to pair again."
-        } else {
-            null
+        return buildSecureStateRecoveryNotice(
+            savedRelaySessionUnreadable = savedRelaySessionUnreadable,
+            phoneIdentityUnreadable = phoneIdentityUnreadable,
+            trustedMacUnreadable = trustedMacUnreadable || lastTrustedMacUnreadable,
+        )
+    }
+
+    private fun migrateLegacySavedPairingIfNeeded() {
+        val currentSession = secureStore.readString(KEY_SAVED_RELAY_SESSION)
+        if (!currentSession.isNullOrBlank()) {
+            return
         }
+        val legacyPairing = secureStore.readString(KEY_PAIRING)
+            ?.let { runCatching { PairingPayload.fromJson(JSONObject(it)) }.getOrNull() }
+            ?: return
+        val migrated = legacyPairing.toSavedRelaySession(
+            lastAppliedBridgeOutboundSeq = secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull() ?: 0,
+        ) ?: return
+        saveSavedRelaySession(migrated)
+        secureStore.remove(KEY_PAIRING)
     }
 
     private companion object {
         const val KEY_PAIRING = "pairing_payload"
+        const val KEY_SAVED_RELAY_SESSION = "saved_relay_session"
         const val KEY_PHONE_IDENTITY = "phone_identity"
         const val KEY_TRUSTED_MACS = "trusted_macs"
+        const val KEY_LAST_TRUSTED_MAC_DEVICE_ID = "last_trusted_mac_device_id"
         const val KEY_LAST_APPLIED_SEQ = "last_applied_bridge_outbound_seq"
         const val KEY_SELECTED_MODEL_ID = "selected_model_id"
         const val KEY_SELECTED_REASONING_EFFORT = "selected_reasoning_effort"
         const val KEY_SELECTED_ACCESS_MODE = "selected_access_mode"
         const val KEY_SELECTED_SERVICE_TIER = "selected_service_tier"
         const val KEY_THREAD_RUNTIME_OVERRIDES = "thread_runtime_overrides"
+    }
+}
+
+internal fun PairingPayload.toSavedRelaySession(
+    lastAppliedBridgeOutboundSeq: Int = 0,
+): SavedRelaySession? {
+    val routingId = routingId.trim()
+    if (relay.isBlank() || routingId.isEmpty() || macDeviceId.isBlank() || macIdentityPublicKey.isBlank()) {
+        return null
+    }
+    return SavedRelaySession(
+        relayUrl = relay,
+        hostId = routingId,
+        macDeviceId = macDeviceId,
+        macIdentityPublicKey = macIdentityPublicKey,
+        protocolVersion = version.coerceAtLeast(3),
+        lastAppliedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq.coerceAtLeast(0),
+    )
+}
+
+internal fun buildSecureStateRecoveryNotice(
+    savedRelaySessionUnreadable: Boolean,
+    phoneIdentityUnreadable: Boolean,
+    trustedMacUnreadable: Boolean,
+): String? {
+    return when {
+        phoneIdentityUnreadable -> {
+            "This Android device can no longer read its secure identity after an install or restore change. Trusted reconnect was reset, so scan a fresh QR code to pair again."
+        }
+        savedRelaySessionUnreadable -> {
+            "The saved live relay session was unreadable, so Androdex cleared only that reconnect target. Your trusted host record was kept when possible."
+        }
+        trustedMacUnreadable -> {
+            "The trusted host registry was unreadable, so only the remembered trust records were cleared. A still-valid live relay session can keep working until it expires."
+        }
+        else -> null
     }
 }
 

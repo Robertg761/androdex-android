@@ -11,7 +11,11 @@ const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { printQR } = require("./qr");
-const { resetBridgeDeviceState } = require("./secure-device-state");
+const {
+  hasTrustedPhones,
+  loadOrCreateBridgeDeviceState,
+  resetBridgeDeviceState,
+} = require("./secure-device-state");
 const {
   clearBridgeStatus,
   clearPairingSession,
@@ -31,9 +35,13 @@ const {
 const SERVICE_LABEL = "io.androdex.bridge";
 const DEFAULT_PAIRING_WAIT_TIMEOUT_MS = 10_000;
 const DEFAULT_PAIRING_WAIT_INTERVAL_MS = 200;
+const PAIRING_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
 
-function runMacOSBridgeService({ env = process.env } = {}) {
-  assertDarwinPlatform();
+function runMacOSBridgeService({
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  assertDarwinPlatform(platform);
   const config = readDaemonConfig({ env });
   if (!config?.relayUrl) {
     const message = "No relay URL configured for the macOS bridge service.";
@@ -156,9 +164,14 @@ function getMacOSBridgeServiceStatus({
   platform = process.platform,
   execFileSyncImpl = execFileSync,
   fsImpl = fs,
+  loadBridgeDeviceStateImpl = loadOrCreateBridgeDeviceState,
 } = {}) {
   assertDarwinPlatform(platform);
   const launchd = readLaunchAgentState({ env, execFileSyncImpl });
+  const pairingSession = readPairingSession({ env, fsImpl });
+  const pairingFreshness = classifyPairingPayloadFreshness(pairingSession);
+  const duplicateBridgeProcesses = listDuplicateBridgeProcesses({ execFileSyncImpl, launchdPid: launchd.pid });
+  const deviceState = runCatchingLoadBridgeDeviceState(loadBridgeDeviceStateImpl);
   return {
     label: SERVICE_LABEL,
     platform: "darwin",
@@ -166,7 +179,10 @@ function getMacOSBridgeServiceStatus({
     launchdLoaded: launchd.loaded,
     launchdPid: launchd.pid,
     bridgeStatus: readBridgeStatus({ env, fsImpl }),
-    pairingSession: readPairingSession({ env, fsImpl }),
+    pairingSession,
+    pairingFreshness,
+    hasTrustedPhone: hasTrustedPhones(deviceState),
+    duplicateBridgeProcesses,
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
   };
@@ -183,7 +199,14 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[androdex] PID: ${status.launchdPid || status.bridgeStatus?.pid || "unknown"}`);
   console.log(`[androdex] Bridge state: ${bridgeState}`);
   console.log(`[androdex] Connection: ${connectionStatus}`);
-  console.log(`[androdex] Pairing payload: ${pairingCreatedAt}`);
+  console.log(`[androdex] Trusted phone: ${status.hasTrustedPhone ? "yes" : "no"}`);
+  console.log(`[androdex] Pairing payload: ${pairingCreatedAt} (${status.pairingFreshness})`);
+  if (status.duplicateBridgeProcesses.length > 0) {
+    console.log(`[androdex] Duplicate bridge processes: ${status.duplicateBridgeProcesses.length}`);
+  }
+  if (status.bridgeStatus?.lastError) {
+    console.log(`[androdex] Relay note: ${status.bridgeStatus.lastError}`);
+  }
   console.log(`[androdex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[androdex] Stderr log: ${status.stderrLogPath}`);
 }
@@ -429,6 +452,59 @@ function resolveUid(env) {
 function parseLaunchdPid(output) {
   const match = typeof output === "string" ? output.match(/\bpid = (\d+)/) : null;
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function classifyPairingPayloadFreshness(pairingSession, now = Date.now()) {
+  const expiresAt = Number(pairingSession?.pairingPayload?.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+    const createdAt = Date.parse(pairingSession?.createdAt || "");
+    if (!Number.isFinite(createdAt)) {
+      return "missing";
+    }
+    return (now - createdAt) < PAIRING_FRESHNESS_WINDOW_MS ? "fresh" : "expired";
+  }
+  return expiresAt > now ? "fresh" : "expired";
+}
+
+function listDuplicateBridgeProcesses({
+  execFileSyncImpl = execFileSync,
+  launchdPid = null,
+} = {}) {
+  try {
+    const output = execFileSyncImpl("pgrep", [
+      "-af",
+      "androdex-bridge/bin/(androdex\\.js run-service|cli\\.js __daemon-run)",
+    ], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return String(output)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(.*)$/);
+        if (!match) {
+          return null;
+        }
+        return {
+          pid: Number.parseInt(match[1], 10),
+          command: match[2],
+        };
+      })
+      .filter(Boolean)
+      .filter((entry) => Number.isFinite(entry.pid) && entry.pid !== launchdPid);
+  } catch {
+    return [];
+  }
+}
+
+function runCatchingLoadBridgeDeviceState(loadBridgeDeviceStateImpl) {
+  try {
+    return loadBridgeDeviceStateImpl();
+  } catch {
+    return null;
+  }
 }
 
 function isMissingLaunchAgentError(error) {
