@@ -31,7 +31,7 @@ jobs:
 
       - name: Install bridge dependencies
         working-directory: androdex-bridge
-        run: npm ci
+        run: npm ci --os=darwin
 
       - name: Run bridge tests
         working-directory: androdex-bridge
