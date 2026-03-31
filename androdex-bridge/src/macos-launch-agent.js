@@ -37,8 +37,11 @@ const DEFAULT_PAIRING_WAIT_TIMEOUT_MS = 10_000;
 const DEFAULT_PAIRING_WAIT_INTERVAL_MS = 200;
 const PAIRING_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
 
-function runMacOSBridgeService({ env = process.env } = {}) {
-  assertDarwinPlatform();
+function runMacOSBridgeService({
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  assertDarwinPlatform(platform);
   const config = readDaemonConfig({ env });
   if (!config?.relayUrl) {
     const message = "No relay URL configured for the macOS bridge service.";
