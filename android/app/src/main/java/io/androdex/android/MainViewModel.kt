@@ -1106,6 +1106,12 @@ class MainViewModel(
         }
     }
 
+    fun forgetTrustedHost() {
+        runBusyAction {
+            service.forgetTrustedHost()
+        }
+    }
+
     fun reconnectSavedIfAvailable() {
         if (uiStateFlow.value.isBusy || uiStateFlow.value.pairingInput.isNotBlank()) {
             return

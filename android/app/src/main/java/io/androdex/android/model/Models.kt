@@ -66,6 +66,54 @@ data class PairingPayload(
     }
 }
 
+data class SavedRelaySession(
+    val relayUrl: String,
+    val hostId: String,
+    val macDeviceId: String,
+    val macIdentityPublicKey: String,
+    val protocolVersion: Int,
+    val lastAppliedBridgeOutboundSeq: Int = 0,
+) {
+    fun toPairingPayload(): PairingPayload = PairingPayload(
+        version = protocolVersion,
+        relay = relayUrl,
+        hostId = hostId,
+        sessionId = hostId,
+        macDeviceId = macDeviceId,
+        macIdentityPublicKey = macIdentityPublicKey,
+        bootstrapToken = null,
+        expiresAt = 0L,
+    )
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("relayUrl", relayUrl)
+        .put("hostId", hostId)
+        .put("macDeviceId", macDeviceId)
+        .put("macIdentityPublicKey", macIdentityPublicKey)
+        .put("protocolVersion", protocolVersion)
+        .put("lastAppliedBridgeOutboundSeq", lastAppliedBridgeOutboundSeq)
+
+    companion object {
+        fun fromJson(json: JSONObject): SavedRelaySession? {
+            val relayUrl = json.optString("relayUrl").trim()
+            val hostId = json.optString("hostId").trim()
+            val macDeviceId = json.optString("macDeviceId").trim()
+            val macIdentityPublicKey = json.optString("macIdentityPublicKey").trim()
+            if (relayUrl.isEmpty() || hostId.isEmpty() || macDeviceId.isEmpty() || macIdentityPublicKey.isEmpty()) {
+                return null
+            }
+            return SavedRelaySession(
+                relayUrl = relayUrl,
+                hostId = hostId,
+                macDeviceId = macDeviceId,
+                macIdentityPublicKey = macIdentityPublicKey,
+                protocolVersion = json.optInt("protocolVersion", json.optInt("v", 3).coerceAtLeast(3)),
+                lastAppliedBridgeOutboundSeq = json.optInt("lastAppliedBridgeOutboundSeq", 0).coerceAtLeast(0),
+            )
+        }
+    }
+}
+
 data class PhoneIdentityState(
     val phoneDeviceId: String,
     val phoneIdentityPrivateKey: String,
@@ -93,11 +141,21 @@ data class TrustedMacRecord(
     val macDeviceId: String,
     val macIdentityPublicKey: String,
     val lastPairedAtEpochMs: Long,
+    val relayUrl: String? = null,
+    val displayName: String? = null,
+    val lastResolvedHostId: String? = null,
+    val lastResolvedAtEpochMs: Long? = null,
+    val lastUsedAtEpochMs: Long? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("macDeviceId", macDeviceId)
         .put("macIdentityPublicKey", macIdentityPublicKey)
         .put("lastPairedAtEpochMs", lastPairedAtEpochMs)
+        .put("relayUrl", relayUrl)
+        .put("displayName", displayName)
+        .put("lastResolvedHostId", lastResolvedHostId)
+        .put("lastResolvedAtEpochMs", lastResolvedAtEpochMs)
+        .put("lastUsedAtEpochMs", lastUsedAtEpochMs)
 
     companion object {
         fun fromJson(json: JSONObject): TrustedMacRecord? {
@@ -110,6 +168,11 @@ data class TrustedMacRecord(
                 macDeviceId = deviceId,
                 macIdentityPublicKey = publicKey,
                 lastPairedAtEpochMs = json.optLong("lastPairedAtEpochMs", 0L),
+                relayUrl = json.optString("relayUrl").trim().ifEmpty { null },
+                displayName = json.optString("displayName").trim().ifEmpty { null },
+                lastResolvedHostId = json.optString("lastResolvedHostId").trim().ifEmpty { null },
+                lastResolvedAtEpochMs = json.optLong("lastResolvedAtEpochMs").takeIf { it > 0L },
+                lastUsedAtEpochMs = json.optLong("lastUsedAtEpochMs").takeIf { it > 0L },
             )
         }
     }
@@ -149,6 +212,8 @@ data class TrustedPairSnapshot(
     val relayUrl: String?,
     val fingerprint: String?,
     val lastPairedAtEpochMs: Long?,
+    val displayName: String? = null,
+    val hasSavedRelaySession: Boolean = false,
 )
 
 enum class HostAccountStatus {

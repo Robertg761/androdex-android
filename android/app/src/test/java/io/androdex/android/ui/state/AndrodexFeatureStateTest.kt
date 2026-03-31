@@ -197,6 +197,26 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun homeRoute_distinguishesTrustedHostReadyFromGenericOffline() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.DISCONNECTED,
+            trustedPairSnapshot = TrustedPairSnapshot(
+                deviceId = "host-1234",
+                relayUrl = "wss://relay.example.com/socket",
+                fingerprint = "ABCD1234EFGH5678",
+                lastPairedAtEpochMs = 1_000L,
+                displayName = "Robert's Mac",
+                hasSavedRelaySession = false,
+            ),
+        ).toHomeScreenUiState()
+
+        assertEquals("Trusted Host Ready", state.bridgeStatus.title)
+        assertEquals("Trusted host", state.bridgeStatus.statusLabel)
+        assertEquals("Robert's Mac", state.trustedPair?.name)
+        assertEquals("Trusted host", state.trustedPair?.statusLabel)
+    }
+
+    @Test
     fun homeRoute_keepsThreadListInLoadingStateUntilFirstSuccessfulThreadSync() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,

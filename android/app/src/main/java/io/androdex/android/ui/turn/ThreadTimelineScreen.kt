@@ -2512,12 +2512,12 @@ private fun TimelineBodyContent(
                 )
 
                 is TimelineBodyBlock.Paragraph -> {
-                    block.text.lineSequence()
-                        .map { it.trimEnd() }
-                        .filter { it.isNotBlank() }
-                        .forEach { line ->
-                            val trimmedLine = line.trim()
-                            val lineStyle = if (looksLikeFileReference(trimmedLine)) {
+                    val paragraphText = normalizeTimelineParagraph(block.text)
+                    if (paragraphText.isNotBlank()) {
+                        val isStandaloneReference = isStandaloneFileReferenceParagraph(paragraphText)
+                        Text(
+                            text = paragraphText,
+                            style = if (isStandaloneReference) {
                                 MaterialTheme.typography.bodySmall.copy(
                                     fontFamily = RemodexMonoFontFamily,
                                     fontSize = 11.sp,
@@ -2525,21 +2525,14 @@ private fun TimelineBodyContent(
                                 )
                             } else {
                                 MaterialTheme.typography.bodyLarge
-                            }
-                            Text(
-                                text = trimmedLine,
-                                style = lineStyle,
-                                color = if (looksLikeFileReference(trimmedLine)) {
-                                    referenceColor
-                                } else {
-                                    if (trimmedLine.startsWith("- ") || Regex("""^\d+\.""").containsMatchIn(trimmedLine)) {
-                                        secondaryTextColor
-                                    } else {
-                                        textColor
-                                    }
-                                },
-                            )
-                        }
+                            },
+                            color = when {
+                                isStandaloneReference -> referenceColor
+                                isListParagraph(paragraphText) -> secondaryTextColor
+                                else -> textColor
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -2686,6 +2679,34 @@ internal fun looksLikeFileReference(text: String): Boolean {
     return trimmed.startsWith("[") && trimmed.contains("](/")
         || trimmed.startsWith("/")
         || trimmed.startsWith("./")
+}
+
+internal fun normalizeTimelineParagraph(text: String): String {
+    return text
+        .lineSequence()
+        .map { it.trimEnd() }
+        .joinToString("\n")
+        .trim('\n')
+}
+
+internal fun isStandaloneFileReferenceParagraph(text: String): Boolean {
+    val significantLines = normalizeTimelineParagraph(text)
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toList()
+    return significantLines.size == 1 && looksLikeFileReference(significantLines.single())
+}
+
+internal fun isListParagraph(text: String): Boolean {
+    val significantLines = normalizeTimelineParagraph(text)
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toList()
+    if (significantLines.isEmpty()) return false
+    val listPattern = Regex("""^(\- |\* |\d+\.\s).+""")
+    return significantLines.all { listPattern.matches(it) }
 }
 
 private fun PlanStep.isCompleted(): Boolean {

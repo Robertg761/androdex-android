@@ -107,7 +107,10 @@ test("runMacOSBridgeService records a clean error state instead of throwing when
 
 test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together", () => {
   withTempDaemonEnv(({ rootDir }) => {
-    writePairingSession({ sessionId: "session-2" });
+    writePairingSession({
+      sessionId: "session-2",
+      expiresAt: Date.now() + 60_000,
+    });
     writeBridgeStatus({ state: "running", connectionStatus: "connected", pid: 55 });
 
     const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
@@ -117,8 +120,17 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     const status = getMacOSBridgeServiceStatus({
       platform: "darwin",
       env: { HOME: rootDir, ANDRODEX_DEVICE_STATE_DIR: rootDir },
-      execFileSyncImpl() {
-        return "pid = 55";
+      loadBridgeDeviceStateImpl() {
+        return { trustedPhones: { "phone-1": "public-key-1" } };
+      },
+      execFileSyncImpl(command) {
+        if (command === "launchctl") {
+          return "pid = 55";
+        }
+        if (command === "pgrep") {
+          return "";
+        }
+        throw new Error(`unexpected command: ${command}`);
       },
     });
 
@@ -126,6 +138,47 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     assert.equal(status.launchdPid, 55);
     assert.equal(status.bridgeStatus?.connectionStatus, "connected");
     assert.equal(status.pairingSession?.pairingPayload?.sessionId, "session-2");
+    assert.equal(status.pairingFreshness, "fresh");
+  });
+});
+
+test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicate processes", () => {
+  withTempDaemonEnv(({ rootDir }) => {
+    writePairingSession({
+      sessionId: "session-expired",
+      expiresAt: Date.now() - 5_000,
+    });
+    writeBridgeStatus({
+      state: "running",
+      connectionStatus: "disconnected",
+      pid: 55,
+      lastError: "Relay heartbeat stalled; reconnect pending.",
+    });
+
+    const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "plist");
+
+    const status = getMacOSBridgeServiceStatus({
+      platform: "darwin",
+      env: { HOME: rootDir, ANDRODEX_DEVICE_STATE_DIR: rootDir },
+      loadBridgeDeviceStateImpl() {
+        return { trustedPhones: { "phone-1": "public-key-1" } };
+      },
+      execFileSyncImpl(command) {
+        if (command === "launchctl") {
+          return "pid = 55";
+        }
+        if (command === "pgrep") {
+          return "77 node androdex-bridge/bin/cli.js __daemon-run\n55 node androdex-bridge/bin/androdex.js run-service\n";
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    });
+
+    assert.equal(status.pairingFreshness, "expired");
+    assert.equal(status.duplicateBridgeProcesses.length, 1);
+    assert.equal(status.duplicateBridgeProcesses[0].pid, 77);
   });
 });
 

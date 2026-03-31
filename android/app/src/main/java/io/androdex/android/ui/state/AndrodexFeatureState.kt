@@ -117,6 +117,7 @@ internal data class TrustedPairUiState(
     val detail: String?,
     val relayLabel: String?,
     val fingerprint: String?,
+    val hasSavedRelaySession: Boolean,
 )
 
 internal data class BridgeStatusUiState(
@@ -957,6 +958,11 @@ private fun AndrodexUiState.reconnectButtonLabel(): String {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying Saved Pairing..."
         ConnectionStatus.RECONNECT_REQUIRED -> "Reconnect Saved Pairing"
         ConnectionStatus.UPDATE_REQUIRED -> "Reconnect After Updating"
+        ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot?.hasSavedRelaySession == false) {
+            "Resolve Live Session"
+        } else {
+            "Reconnect Saved Pairing"
+        }
         else -> "Reconnect Saved Pairing"
     }
 }
@@ -974,14 +980,19 @@ private fun AndrodexUiState.pairingRecoveryMessage(): String {
             "This phone still trusts the host. Keep Androdex running on the PC and we'll retry automatically in the foreground."
         }
         ConnectionStatus.RECONNECT_REQUIRED -> {
-            "The previous trusted pair needs attention. Try reconnecting from the saved pair first, then scan a fresh QR code if the host trust changed."
+            "The previous trusted pair needs attention. Trusted-host details were preserved, but this phone needs repair before a secure reconnect."
         }
         ConnectionStatus.UPDATE_REQUIRED -> {
-            "The Android app and host bridge are out of sync. Update the host package or app, then retry the saved pair or scan a fresh QR code."
+            "The Android app and host bridge are out of sync. Update the older side, then resolve a fresh live session without throwing away the trusted host."
         }
-        else -> {
-            "Run `${AppEnvironment.bridgeStartCommand}` on the host to show a fresh QR, or reconnect later from the saved trusted pair."
+        ConnectionStatus.DISCONNECTED -> {
+            if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
+                "This phone still knows the trusted host, but the last live relay session was cleared. Reconnect to resolve a fresh live session without rescanning."
+            } else {
+                "Run `${AppEnvironment.bridgeStartCommand}` on the host to show a fresh QR, or reconnect later from the saved trusted pair."
+            }
         }
+        else -> "Run `${AppEnvironment.bridgeStartCommand}` on the host to show a fresh QR, or reconnect later from the saved trusted pair."
     }
 }
 
@@ -1004,7 +1015,11 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting For Host"
         ConnectionStatus.RECONNECT_REQUIRED -> "Pair Needs Repair"
         ConnectionStatus.UPDATE_REQUIRED -> "Update Needed"
-        ConnectionStatus.DISCONNECTED -> "Host Not Connected"
+        ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
+            "Trusted Host Ready"
+        } else {
+            "Host Not Connected"
+        }
     }
     val statusLabel = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Connected"
@@ -1012,13 +1027,22 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying"
         ConnectionStatus.RECONNECT_REQUIRED -> "Repair needed"
         ConnectionStatus.UPDATE_REQUIRED -> "Update required"
-        ConnectionStatus.DISCONNECTED -> "Offline"
+        ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
+            "Trusted host"
+        } else {
+            "Offline"
+        }
     }
     val summary = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Codex stays on the host machine. Android is acting as the paired remote control for threads, projects, approvals, and runtime changes."
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still present. Automatic reconnect stays available while the host or relay comes back."
-        ConnectionStatus.RECONNECT_REQUIRED -> "The previous trusted pair is no longer enough on its own. Use saved reconnect or scan a fresh QR from the host."
+        ConnectionStatus.RECONNECT_REQUIRED -> "The trusted host record is still present, but this phone identity needs repair before secure reconnect can resume."
         ConnectionStatus.UPDATE_REQUIRED -> "The host bridge and Android build are speaking different compatibility levels. Update the older side, then reconnect."
+        ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
+            "The trusted host is still remembered. Resolve a fresh live relay session and reconnect without rescanning unless trust actually changed."
+        } else {
+            "Pair this phone with a host bridge, then manage local Codex workspaces and runs from Android."
+        }
         else -> "Pair this phone with a host bridge, then manage local Codex workspaces and runs from Android."
     }
     return BridgeStatusUiState(
@@ -1055,9 +1079,9 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
                 ConnectionStatus.CONNECTING -> "Connecting"
                 ConnectionStatus.HANDSHAKING -> "Pairing"
                 ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
-                ConnectionStatus.RECONNECT_REQUIRED -> "Needs re-pair"
+                ConnectionStatus.RECONNECT_REQUIRED -> "Needs repair"
                 ConnectionStatus.UPDATE_REQUIRED -> "Update required"
-                ConnectionStatus.DISCONNECTED -> "Saved pair available"
+                ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved pair available" else "Trusted host known"
             }
         )
         snapshot.lastPairedAtEpochMs
@@ -1068,7 +1092,8 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
         title = when (connectionStatus) {
             ConnectionStatus.CONNECTED -> "Connected Pair"
             ConnectionStatus.HANDSHAKING -> "Pairing Host"
-            ConnectionStatus.RECONNECT_REQUIRED -> "Previous Pair"
+            ConnectionStatus.RECONNECT_REQUIRED -> "Trusted Host Needs Repair"
+            ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved Pair" else "Trusted Host"
             else -> "Saved Pair"
         },
         statusLabel = when (connectionStatus) {
@@ -1076,16 +1101,17 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
             ConnectionStatus.CONNECTING -> "Connecting"
             ConnectionStatus.HANDSHAKING -> "Pairing in progress"
             ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
-            ConnectionStatus.RECONNECT_REQUIRED -> "Needs re-pair"
+            ConnectionStatus.RECONNECT_REQUIRED -> "Needs repair"
             ConnectionStatus.UPDATE_REQUIRED -> "Update required"
-            ConnectionStatus.DISCONNECTED -> "Saved pair"
+            ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved pair" else "Trusted host"
         },
         tone = connectionStatus.toSharedStatusTone(),
-        name = name,
+        name = snapshot.displayName?.takeIf { it.isNotBlank() } ?: name,
         systemName = snapshot.deviceId.takeIf { it.isNotBlank() },
         detail = detailParts.joinToString(" • ").takeIf { it.isNotBlank() },
         relayLabel = snapshot.relayUrl?.let(::compactRelayLabel),
         fingerprint = snapshot.fingerprint,
+        hasSavedRelaySession = snapshot.hasSavedRelaySession,
     )
 }
 

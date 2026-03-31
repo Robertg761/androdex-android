@@ -66,6 +66,7 @@ internal fun PairingScreen(
     onScanQr: () -> Unit,
     onConnect: () -> Unit,
     onReconnectSaved: () -> Unit,
+    onForgetTrustedHost: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
     val cardModifier = Modifier
@@ -107,6 +108,7 @@ internal fun PairingScreen(
                     SavedReconnectCard(
                         state = state,
                         onReconnectSaved = onReconnectSaved,
+                        onForgetTrustedHost = onForgetTrustedHost,
                         modifier = cardModifier,
                     )
                 }
@@ -400,6 +402,7 @@ private fun PairingFeatureRow(
 private fun SavedReconnectCard(
     state: PairingScreenUiState,
     onReconnectSaved: () -> Unit,
+    onForgetTrustedHost: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = RemodexTheme.colors
@@ -432,6 +435,7 @@ private fun SavedReconnectCard(
 
             Text(
                 text = when {
+                    state.trustedPair != null && !state.trustedPair.hasSavedRelaySession -> "Resolve a fresh live session"
                     state.trustedPair != null -> "Reconnect without rescanning"
                     else -> "Saved pairing is ready"
                 },
@@ -444,9 +448,15 @@ private fun SavedReconnectCard(
                     ConnectionStatus.RETRYING_SAVED_PAIRING ->
                         "Android still trusts this host. Keep the bridge running and Androdex will keep retrying in the foreground."
                     ConnectionStatus.RECONNECT_REQUIRED ->
-                        "Your previous trust still exists, but the host wants repair before a clean reconnect."
+                        "Your previous trust still exists, but the phone identity or host trust needs repair before a clean reconnect."
                     ConnectionStatus.UPDATE_REQUIRED ->
                         "Reconnect from the saved pair after updating the older side of the bridge."
+                    ConnectionStatus.DISCONNECTED ->
+                        if (state.trustedPair?.hasSavedRelaySession == false) {
+                            "The stale live session was cleared, but the trusted host is still known. Resolve a new live session without rescanning."
+                        } else {
+                            "Jump back into the remembered host first, then fall back to scanning or a payload only if trust changed."
+                        }
                     else ->
                         "Jump back into the remembered host first, then fall back to scanning or a payload only if trust changed."
                 },
@@ -490,6 +500,26 @@ private fun SavedReconnectCard(
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                 )
+            }
+
+            if (state.trustedPair != null) {
+                RemodexButton(
+                    onClick = onForgetTrustedHost,
+                    enabled = !state.isBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = RemodexButtonStyle.Secondary,
+                    contentPadding = PaddingValues(
+                        horizontal = geometry.spacing20,
+                        vertical = geometry.spacing14,
+                    ),
+                ) {
+                    Text(
+                        text = "Forget Trusted Host",
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    )
+                }
             }
         }
     }
