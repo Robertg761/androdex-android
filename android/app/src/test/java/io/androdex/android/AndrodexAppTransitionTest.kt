@@ -8,6 +8,22 @@ import org.junit.Test
 
 class AndrodexAppTransitionTest {
     @Test
+    fun threadBackAction_opensSidebarWhenDrawerIsClosed() {
+        assertEquals(
+            ThreadBackAction.OPEN_SIDEBAR,
+            threadBackAction(isDrawerOpen = false),
+        )
+    }
+
+    @Test
+    fun threadBackAction_closesSidebarWhenDrawerIsOpen() {
+        assertEquals(
+            ThreadBackAction.CLOSE_SIDEBAR,
+            threadBackAction(isDrawerOpen = true),
+        )
+    }
+
+    @Test
     fun connectedShellTransitionKey_staysStableForComposerEditsInSameThread() {
         val initialDestination = buildThreadDestination(
             threadId = "thread-1",

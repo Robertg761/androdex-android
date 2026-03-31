@@ -63,6 +63,16 @@ import kotlinx.coroutines.launch
 
 private const val DrawerWidthDp = 320
 
+internal enum class ThreadBackAction {
+    OPEN_SIDEBAR,
+    CLOSE_SIDEBAR,
+}
+
+internal fun threadBackAction(isDrawerOpen: Boolean): ThreadBackAction = when {
+    isDrawerOpen -> ThreadBackAction.CLOSE_SIDEBAR
+    else -> ThreadBackAction.OPEN_SIDEBAR
+}
+
 @Composable
 fun AndrodexApp(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -421,7 +431,13 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                     }
                                     ThreadTimelineScreen(
                                         state = connectedState.state,
-                                        onBack = viewModel::closeThread,
+                                        backHandlerEnabled = !drawerState.isOpen,
+                                        onBack = {
+                                            when (threadBackAction(drawerState.isOpen)) {
+                                                ThreadBackAction.OPEN_SIDEBAR -> scope.launch { drawerState.open() }
+                                                ThreadBackAction.CLOSE_SIDEBAR -> scope.launch { drawerState.close() }
+                                            }
+                                        },
                                         onOpenSidebar = { scope.launch { drawerState.open() } },
                                         onRefresh = { viewModel.openThread(connectedState.state.threadId) },
                                         onComposerChanged = viewModel::updateComposerText,

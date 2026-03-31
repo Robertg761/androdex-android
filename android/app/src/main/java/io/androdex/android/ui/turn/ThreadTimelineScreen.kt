@@ -307,6 +307,7 @@ internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): 
 @Composable
 internal fun ThreadTimelineScreen(
     state: ThreadTimelineUiState,
+    backHandlerEnabled: Boolean = true,
     onBack: () -> Unit,
     onOpenSidebar: () -> Unit,
     onRefresh: () -> Unit,
@@ -354,7 +355,7 @@ internal fun ThreadTimelineScreen(
     onDismissGitAlert: () -> Unit,
     onHandleGitAlertAction: (GitAlertAction) -> Unit,
 ) {
-    BackHandler(onBack = onBack)
+    BackHandler(enabled = backHandlerEnabled, onBack = onBack)
     val geometry = RemodexTheme.geometry
     val colors = RemodexTheme.colors
     val listState = remember { LazyListState() }
