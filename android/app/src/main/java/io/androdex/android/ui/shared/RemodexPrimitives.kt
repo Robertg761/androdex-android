@@ -72,6 +72,42 @@ internal enum class RemodexPillStyle {
     Error,
 }
 
+internal enum class RemodexInputFieldVariant {
+    Default,
+    Thread,
+}
+
+internal data class RemodexInputChromeSpec(
+    val minHeightDp: Int,
+    val horizontalPaddingDp: Int,
+    val verticalPaddingDp: Int,
+    val cornerRadiusDp: Int,
+    val useAnimatedFocusChrome: Boolean,
+    val useBodyMediumText: Boolean,
+)
+
+internal fun remodexInputChromeSpec(
+    variant: RemodexInputFieldVariant,
+): RemodexInputChromeSpec = when (variant) {
+    RemodexInputFieldVariant.Default -> RemodexInputChromeSpec(
+        minHeightDp = 0,
+        horizontalPaddingDp = 14,
+        verticalPaddingDp = 12,
+        cornerRadiusDp = 16,
+        useAnimatedFocusChrome = false,
+        useBodyMediumText = false,
+    )
+
+    RemodexInputFieldVariant.Thread -> RemodexInputChromeSpec(
+        minHeightDp = 44,
+        horizontalPaddingDp = 14,
+        verticalPaddingDp = 12,
+        cornerRadiusDp = 18,
+        useAnimatedFocusChrome = true,
+        useBodyMediumText = true,
+    )
+}
+
 @Composable
 internal fun RemodexGroupedSurface(
     modifier: Modifier = Modifier,
@@ -524,12 +560,28 @@ internal fun RemodexInputField(
     label: String? = null,
     placeholder: String? = null,
     minLines: Int = 1,
+    singleLine: Boolean = false,
+    enabled: Boolean = true,
     mono: Boolean = false,
+    variant: RemodexInputFieldVariant = RemodexInputFieldVariant.Default,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
+    val spec = remodexInputChromeSpec(variant)
+    var isFocused by remember { mutableStateOf(false) }
+    val textStyle = if (spec.useBodyMediumText) {
+        MaterialTheme.typography.bodyMedium
+    } else {
+        MaterialTheme.typography.bodySmall
+    }
+    val resolvedFontFamily = if (mono) {
+        RemodexMonoFontFamily
+    } else {
+        textStyle.fontFamily
+    }
+
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
@@ -541,40 +593,92 @@ internal fun RemodexInputField(
                 color = colors.textSecondary,
             )
         }
-        Surface(
-            shape = RoundedCornerShape(geometry.cornerMedium),
-            color = colors.inputBackground,
-            border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+        RemodexInputChrome(
+            variant = variant,
+            enabled = enabled,
+            focused = isFocused,
         ) {
-            Box(
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                enabled = enabled,
+                minLines = if (singleLine) 1 else minLines,
+                maxLines = if (singleLine) 1 else Int.MAX_VALUE,
+                singleLine = singleLine,
+                keyboardOptions = keyboardOptions,
+                visualTransformation = visualTransformation,
+                textStyle = textStyle.copy(
+                    color = if (enabled) colors.textPrimary else colors.disabledForeground,
+                    fontFamily = resolvedFontFamily,
+                ),
+                cursorBrush = SolidColor(colors.accentBlue),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
-            ) {
-                if (value.isEmpty() && !placeholder.isNullOrBlank()) {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = if (mono) RemodexMonoFontFamily else MaterialTheme.typography.bodySmall.fontFamily,
-                        ),
-                        color = colors.inputPlaceholder,
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    minLines = minLines,
-                    keyboardOptions = keyboardOptions,
-                    visualTransformation = visualTransformation,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(
-                        color = colors.textPrimary,
-                        fontFamily = if (mono) RemodexMonoFontFamily else MaterialTheme.typography.bodySmall.fontFamily,
-                    ),
-                    cursorBrush = SolidColor(colors.accentBlue),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+                    .onFocusChanged { isFocused = it.isFocused },
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = spec.minHeightDp.dp)
+                            .padding(
+                                horizontal = spec.horizontalPaddingDp.dp,
+                                vertical = spec.verticalPaddingDp.dp,
+                            ),
+                    ) {
+                        if (value.isEmpty() && !placeholder.isNullOrBlank()) {
+                            Text(
+                                text = placeholder,
+                                style = textStyle.copy(fontFamily = resolvedFontFamily),
+                                color = colors.inputPlaceholder,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
         }
+    }
+}
+
+@Composable
+internal fun RemodexInputChrome(
+    variant: RemodexInputFieldVariant,
+    enabled: Boolean,
+    focused: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val colors = RemodexTheme.colors
+    val motion = RemodexTheme.motion
+    val spec = remodexInputChromeSpec(variant)
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            !enabled && variant == RemodexInputFieldVariant.Thread -> colors.inputBackground.copy(alpha = 0.68f)
+            focused && spec.useAnimatedFocusChrome -> colors.searchBackground.copy(alpha = 0.96f)
+            else -> colors.inputBackground
+        },
+        animationSpec = remodexTween(motion.composerMillis),
+        label = "inputChromeBackground",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            focused && spec.useAnimatedFocusChrome -> colors.accentBlue.copy(alpha = 0.22f)
+            else -> colors.hairlineDivider
+        },
+        animationSpec = remodexTween(motion.composerMillis),
+        label = "inputChromeBorder",
+    )
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(spec.cornerRadiusDp.dp),
+        color = backgroundColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            content = content,
+        )
     }
 }
 

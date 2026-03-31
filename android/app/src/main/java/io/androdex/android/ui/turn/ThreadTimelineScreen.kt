@@ -105,6 +105,7 @@ import io.androdex.android.ui.shared.RemodexDivider
 import io.androdex.android.ui.shared.RemodexGroupedSurface
 import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.shared.RemodexInputField
+import io.androdex.android.ui.shared.RemodexInputFieldVariant
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.ThreadMaintenanceConfirmationDialog
@@ -1409,9 +1410,11 @@ private fun ToolInputAnswerField(
                 onValueChange(it)
             }
         },
+        enabled = enabled,
         label = label,
         modifier = Modifier.fillMaxWidth(),
         placeholder = if (isSecret) "Enter secure response" else "Type a response",
+        variant = RemodexInputFieldVariant.Thread,
         visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
     )
 }

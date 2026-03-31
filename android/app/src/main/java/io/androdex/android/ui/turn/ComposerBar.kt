@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -61,9 +62,13 @@ import io.androdex.android.model.SkillMetadata
 import io.androdex.android.ui.shared.RemodexDivider
 import io.androdex.android.ui.shared.RemodexFloatingComposerShell
 import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.RemodexInputChrome
+import io.androdex.android.ui.shared.RemodexInputField
+import io.androdex.android.ui.shared.RemodexInputFieldVariant
 import io.androdex.android.ui.shared.remodexExpandVertically
 import io.androdex.android.ui.shared.remodexFadeIn
 import io.androdex.android.ui.shared.remodexFadeOut
+import io.androdex.android.ui.shared.remodexInputChromeSpec
 import io.androdex.android.ui.shared.remodexPressedState
 import io.androdex.android.ui.shared.remodexShrinkVertically
 import io.androdex.android.ui.shared.remodexTween
@@ -152,6 +157,7 @@ internal fun ComposerBar(
         state.isFileAutocompleteVisible ||
             state.isSkillAutocompleteVisible ||
             state.isSlashCommandAutocompleteVisible
+    val threadInputSpec = remodexInputChromeSpec(RemodexInputFieldVariant.Thread)
     val accessoryButtonState = composerAccessoryButtonState(
         hasActiveModes = hasActiveModes,
         isModePanelVisible = showModePanel,
@@ -397,21 +403,12 @@ internal fun ComposerBar(
                             onClick = { showModePanel = !showModePanel },
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 32.dp),
-                            contentAlignment = Alignment.CenterStart,
+                        RemodexInputChrome(
+                            modifier = Modifier.weight(1f),
+                            variant = RemodexInputFieldVariant.Thread,
+                            enabled = state.inputEnabled,
+                            focused = inputFocused || hasAutocomplete,
                         ) {
-                            if (state.text.isBlank()) {
-                                Text(
-                                    text = state.placeholderText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = colors.inputPlaceholder,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
                             BasicTextField(
                                 value = state.text,
                                 onValueChange = onTextChange,
@@ -428,6 +425,29 @@ internal fun ComposerBar(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .onFocusChanged { inputFocused = it.isFocused },
+                                decorationBox = { innerTextField ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minHeight = threadInputSpec.minHeightDp.dp)
+                                            .padding(
+                                                horizontal = threadInputSpec.horizontalPaddingDp.dp,
+                                                vertical = threadInputSpec.verticalPaddingDp.dp,
+                                            ),
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        if (state.text.isBlank()) {
+                                            Text(
+                                                text = state.placeholderText,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = colors.inputPlaceholder,
+                                                maxLines = 3,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                },
                             )
                         }
 
@@ -912,48 +932,16 @@ private fun ReviewBaseBranchField(
     enabled: Boolean,
     onValueChange: (String) -> Unit,
 ) {
-    val colors = RemodexTheme.colors
-    val geometry = RemodexTheme.geometry
-
-    Surface(
+    RemodexInputField(
+        value = value,
+        onValueChange = onValueChange,
+        enabled = enabled,
+        label = "Base branch",
+        placeholder = placeholder,
+        singleLine = true,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = colors.inputBackground,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = geometry.spacing14, vertical = geometry.spacing12),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = "Base branch",
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.textSecondary,
-            )
-            Box(modifier = Modifier.fillMaxWidth()) {
-                if (value.isBlank()) {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.inputPlaceholder,
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    enabled = enabled,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(
-                        color = if (enabled) colors.textPrimary else colors.disabledForeground,
-                    ),
-                    cursorBrush = SolidColor(colors.accentBlue),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
+        variant = RemodexInputFieldVariant.Thread,
+    )
 }
 
 @Composable

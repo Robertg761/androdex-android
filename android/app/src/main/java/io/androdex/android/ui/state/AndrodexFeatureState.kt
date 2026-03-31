@@ -821,12 +821,12 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
                     "Ask Codex to plan and delegate the work"
                 isSubagentsEnabled && submitMode == ComposerSubmitMode.QUEUE ->
                     "Queue a delegated follow-up for when this run finishes"
-                isSubagentsEnabled -> "Ask anything... @files, \$skills, /commands"
+                isSubagentsEnabled -> "Ask anything..."
                 isPlanModeEnabled && submitMode == ComposerSubmitMode.QUEUE ->
                     "Queue a plan request for when this run finishes"
                 isPlanModeEnabled -> "Ask Codex to make a plan before executing"
                 submitMode == ComposerSubmitMode.QUEUE -> "Queue a follow-up for when this run finishes"
-                else -> "Ask anything... @files, \$skills, /commands"
+                else -> "Ask anything..."
             },
             submitButtonLabel = when {
                 reviewSelection != null -> "Review"
