@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -25,6 +26,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -69,6 +72,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -83,6 +88,8 @@ import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
 import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
+import io.androdex.android.ThreadBackAction
+import io.androdex.android.threadBackAction
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
@@ -304,11 +311,11 @@ internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): 
     return if (question.options.isEmpty()) "Answer" else "Other answer"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun ThreadTimelineScreen(
     state: ThreadTimelineUiState,
-    backHandlerEnabled: Boolean = true,
+    isSidebarOpen: Boolean = false,
     onBack: () -> Unit,
     onOpenSidebar: () -> Unit,
     onRefresh: () -> Unit,
@@ -356,7 +363,33 @@ internal fun ThreadTimelineScreen(
     onDismissGitAlert: () -> Unit,
     onHandleGitAlertAction: (GitAlertAction) -> Unit,
 ) {
-    BackHandler(enabled = backHandlerEnabled, onBack = onBack)
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isImeVisible = WindowInsets.isImeVisible
+    val handleBack = {
+        when (
+            threadBackAction(
+                isDrawerOpen = isSidebarOpen,
+                isImeVisible = isImeVisible,
+            )
+        ) {
+            ThreadBackAction.DISMISS_KEYBOARD -> {
+                keyboardController?.hide()
+                focusManager.clearFocus(force = true)
+            }
+            ThreadBackAction.OPEN_SIDEBAR,
+            ThreadBackAction.CLOSE_SIDEBAR -> onBack()
+        }
+    }
+    val handleToolbarBack = {
+        if (isImeVisible) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+        onBack()
+    }
+
+    BackHandler(onBack = handleBack)
     val geometry = RemodexTheme.geometry
     val colors = RemodexTheme.colors
     val listState = remember { LazyListState() }
@@ -393,7 +426,7 @@ internal fun ThreadTimelineScreen(
                 runState = state.runState,
                 navigation = {
                     RemodexIconButton(
-                        onClick = onBack,
+                        onClick = handleToolbarBack,
                         contentDescription = "Back",
                     ) {
                         Icon(

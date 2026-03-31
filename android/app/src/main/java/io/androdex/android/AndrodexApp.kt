@@ -64,11 +64,16 @@ import kotlinx.coroutines.launch
 private const val DrawerWidthDp = 320
 
 internal enum class ThreadBackAction {
+    DISMISS_KEYBOARD,
     OPEN_SIDEBAR,
     CLOSE_SIDEBAR,
 }
 
-internal fun threadBackAction(isDrawerOpen: Boolean): ThreadBackAction = when {
+internal fun threadBackAction(
+    isDrawerOpen: Boolean,
+    isImeVisible: Boolean,
+): ThreadBackAction = when {
+    isImeVisible -> ThreadBackAction.DISMISS_KEYBOARD
     isDrawerOpen -> ThreadBackAction.CLOSE_SIDEBAR
     else -> ThreadBackAction.OPEN_SIDEBAR
 }
@@ -301,7 +306,9 @@ fun AndrodexApp(viewModel: MainViewModel) {
 
             RootShell.Connected -> {
                 val sidebarState = cachedSidebar ?: return@AnimatedContent
-                BackHandler(enabled = drawerState.isOpen) {
+                BackHandler(
+                    enabled = drawerState.isOpen && connectedRoute !is ConnectedRoute.Thread,
+                ) {
                     scope.launch { drawerState.close() }
                 }
 
@@ -431,9 +438,15 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                     }
                                     ThreadTimelineScreen(
                                         state = connectedState.state,
-                                        backHandlerEnabled = !drawerState.isOpen,
+                                        isSidebarOpen = drawerState.isOpen,
                                         onBack = {
-                                            when (threadBackAction(drawerState.isOpen)) {
+                                            when (
+                                                threadBackAction(
+                                                    isDrawerOpen = drawerState.isOpen,
+                                                    isImeVisible = false,
+                                                )
+                                            ) {
+                                                ThreadBackAction.DISMISS_KEYBOARD -> Unit
                                                 ThreadBackAction.OPEN_SIDEBAR -> scope.launch { drawerState.open() }
                                                 ThreadBackAction.CLOSE_SIDEBAR -> scope.launch { drawerState.close() }
                                             }

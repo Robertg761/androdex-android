@@ -11,7 +11,10 @@ class AndrodexAppTransitionTest {
     fun threadBackAction_opensSidebarWhenDrawerIsClosed() {
         assertEquals(
             ThreadBackAction.OPEN_SIDEBAR,
-            threadBackAction(isDrawerOpen = false),
+            threadBackAction(
+                isDrawerOpen = false,
+                isImeVisible = false,
+            ),
         )
     }
 
@@ -19,7 +22,21 @@ class AndrodexAppTransitionTest {
     fun threadBackAction_closesSidebarWhenDrawerIsOpen() {
         assertEquals(
             ThreadBackAction.CLOSE_SIDEBAR,
-            threadBackAction(isDrawerOpen = true),
+            threadBackAction(
+                isDrawerOpen = true,
+                isImeVisible = false,
+            ),
+        )
+    }
+
+    @Test
+    fun threadBackAction_dismissesKeyboardBeforeSidebarNavigation() {
+        assertEquals(
+            ThreadBackAction.DISMISS_KEYBOARD,
+            threadBackAction(
+                isDrawerOpen = false,
+                isImeVisible = true,
+            ),
         )
     }
 
