@@ -96,6 +96,7 @@ import java.net.URI
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 private const val handshakeModeQrBootstrap = "qr_bootstrap"
@@ -108,6 +109,10 @@ private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
 private const val logTag = "AndrodexClient"
 private const val trustedReconnectFailureThreshold = 3
+
+private class HostTransportInterruptedException(
+    message: String,
+) : CancellationException(message)
 
 private enum class TrustedResolveFallbackPolicy {
     ALLOW_SAVED_SESSION,
@@ -1290,7 +1295,7 @@ class AndrodexClient(
             lastSocketFailureDetail = null
             pendingTerminalConnectionUpdate = null
             clearPendingRequests()
-            clearSecureWaiters(IllegalStateException("Disconnected"))
+            clearSecureWaiters(HostTransportInterruptedException("Disconnected"))
             if (clearSavedPairing) {
                 clearSavedRelaySession()
             }
@@ -2020,7 +2025,9 @@ class AndrodexClient(
             withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
         } catch (error: TimeoutCancellationException) {
             pendingResponses.remove(requestId)
-            throw IllegalStateException("Timed out waiting for $method response from the host.")
+            throw HostTransportInterruptedException(
+                "Timed out waiting for $method response from the host."
+            )
         } catch (error: Throwable) {
             pendingResponses.remove(requestId)
             throw error
@@ -2172,7 +2179,7 @@ class AndrodexClient(
         secureSession = null
         pendingHandshake = null
         clearPendingRequests()
-        clearSecureWaiters(IllegalStateException("Socket closed"))
+        clearSecureWaiters(HostTransportInterruptedException("Socket closed"))
 
         if (shouldClearSavedRelaySessionForSocketClose(code)) {
             clearSavedRelaySession()
@@ -2205,7 +2212,7 @@ class AndrodexClient(
         secureSession = null
         pendingHandshake = null
         clearPendingRequests()
-        clearSecureWaiters(IllegalStateException("Socket failure"))
+        clearSecureWaiters(HostTransportInterruptedException("Socket failure"))
 
         val update = connectionUpdateForSocketFailure(
             savedPairingAvailable = hasSavedPairing(),
@@ -2655,7 +2662,11 @@ class AndrodexClient(
     private fun clearPendingRequests() {
         val outstanding = pendingResponses.values.toList()
         pendingResponses.clear()
-        outstanding.forEach { it.completeExceptionally(IllegalStateException("Disconnected")) }
+        // Treat transport drops as cancellation so background refresh coroutines
+        // unwind cleanly instead of surfacing as fatal app exceptions.
+        outstanding.forEach {
+            it.completeExceptionally(HostTransportInterruptedException("Disconnected"))
+        }
     }
 
     private suspend fun emitTerminalConnectionUpdate(update: ClientUpdate.Connection) {
