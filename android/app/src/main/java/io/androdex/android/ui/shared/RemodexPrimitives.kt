@@ -674,8 +674,8 @@ internal fun RemodexAlertDialog(
                                 horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                dismissButton()
                                 confirmButton()
+                                dismissButton()
                             }
                         } else {
                             Row(content = confirmButton)
