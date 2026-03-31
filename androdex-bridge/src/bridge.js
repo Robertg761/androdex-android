@@ -629,8 +629,7 @@ function startBridge({
       }
 
       if (codexHandshakeState !== "warm") {
-        forwardedInitializeRequestIds.add(String(parsed.id));
-        return false;
+        primeCodexHandshake();
       }
 
       sendApplicationResponse(JSON.stringify({
@@ -645,7 +644,10 @@ function startBridge({
 
     if (method === "initialized") {
       cachedInitializedNotification = true;
-      return codexHandshakeState === "warm" || !workspaceRuntime.hasActiveWorkspace();
+      if (workspaceRuntime.hasActiveWorkspace() && codexHandshakeState !== "warm") {
+        primeCodexHandshake();
+      }
+      return true;
     }
 
     return false;
@@ -704,7 +706,12 @@ function startBridge({
   }
 
   function primeCodexHandshake() {
-    if (!workspaceRuntime.hasActiveWorkspace() || codexHandshakeState === "warm" || !cachedInitializeParams) {
+    if (
+      !workspaceRuntime.hasActiveWorkspace()
+      || codexHandshakeState === "warm"
+      || !cachedInitializeParams
+      || syntheticInitializeRequest
+    ) {
       return;
     }
     sendSyntheticInitialize(cachedInitializeParams, false);

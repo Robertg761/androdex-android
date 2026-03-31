@@ -78,6 +78,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -299,6 +300,7 @@ class AndrodexClient(
 
     suspend fun connectWithPairingPayload(rawPayload: String) {
         val pairing = parsePairingPayload(rawPayload)
+        resetBridgeOutboundReplayCursor()
         connect(pairing)
         val savedSession = pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)
             ?: throw IllegalStateException("Failed to save the paired relay session.")
@@ -2014,7 +2016,15 @@ class AndrodexClient(
         val responseDeferred = CompletableDeferred<JSONObject>()
         pendingResponses[requestId] = responseDeferred
         sendMessage(request)
-        val response = withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
+        val response = try {
+            withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
+        } catch (error: TimeoutCancellationException) {
+            pendingResponses.remove(requestId)
+            throw IllegalStateException("Timed out waiting for $method response from the host.")
+        } catch (error: Throwable) {
+            pendingResponses.remove(requestId)
+            throw error
+        }
         val error = response.optJSONObject("error")
         if (error != null) {
             throw RpcException(
@@ -2651,6 +2661,11 @@ class AndrodexClient(
     private suspend fun emitTerminalConnectionUpdate(update: ClientUpdate.Connection) {
         pendingTerminalConnectionUpdate = update
         updatesFlow.emit(update)
+    }
+
+    private fun resetBridgeOutboundReplayCursor() {
+        lastAppliedBridgeOutboundSeq = 0
+        persistence.saveLastAppliedBridgeOutboundSeq(0)
     }
 
     private fun consumePendingTerminalConnectionUpdate(): ClientUpdate.Connection? {
