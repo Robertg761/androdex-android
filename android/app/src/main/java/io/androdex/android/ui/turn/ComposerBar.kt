@@ -106,6 +106,14 @@ internal fun composerSubmitPresentation(
     }
 }
 
+internal fun composerHasVisibleContextChips(
+    hasMentionedFiles: Boolean,
+    hasMentionedSkills: Boolean,
+    hasActiveModes: Boolean,
+): Boolean {
+    return hasMentionedFiles || hasMentionedSkills
+}
+
 private enum class ComposerAutocompleteKind(val rowHeight: androidx.compose.ui.unit.Dp) {
     FILE(38.dp),
     SKILL(50.dp),
@@ -149,10 +157,11 @@ internal fun ComposerBar(
 
     val hasActiveModes =
         state.isPlanModeEnabled || state.isSubagentsEnabled || state.isReviewModeEnabled
-    val hasActiveContext =
-        state.mentionedFiles.isNotEmpty() ||
-            state.mentionedSkills.isNotEmpty() ||
-            hasActiveModes
+    val hasActiveContext = composerHasVisibleContextChips(
+        hasMentionedFiles = state.mentionedFiles.isNotEmpty(),
+        hasMentionedSkills = state.mentionedSkills.isNotEmpty(),
+        hasActiveModes = hasActiveModes,
+    )
     val hasAutocomplete =
         state.isFileAutocompleteVisible ||
             state.isSkillAutocompleteVisible ||
@@ -277,27 +286,6 @@ internal fun ComposerBar(
                                     label = "$${skill.name}",
                                     tone = rememberComposerChipTone(colors.accentGreen),
                                     onRemove = { onRemoveMentionedSkill(skill.id) },
-                                )
-                            }
-                            if (state.isPlanModeEnabled) {
-                                ComposerContextChip(
-                                    label = "Plan",
-                                    tone = rememberComposerChipTone(colors.accentBlue),
-                                    onRemove = { onPlanModeChanged(false) },
-                                )
-                            }
-                            if (state.isSubagentsEnabled) {
-                                ComposerContextChip(
-                                    label = "Subagents",
-                                    tone = rememberComposerChipTone(colors.accentGreen),
-                                    onRemove = { onSubagentsModeChanged(false) },
-                                )
-                            }
-                            if (state.isReviewModeEnabled) {
-                                ComposerContextChip(
-                                    label = "Review",
-                                    tone = rememberComposerChipTone(colors.accentOrange),
-                                    onRemove = onRemoveReviewSelection,
                                 )
                             }
                         }
