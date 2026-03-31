@@ -43,6 +43,10 @@ jobs:
         working-directory: androdex-bridge
         run: npm test
 
+      - name: Verify npm package contents
+        working-directory: androdex-bridge
+        run: npm pack --dry-run
+
       - name: Verify bridge entrypoints load
         working-directory: androdex-bridge
         run: |

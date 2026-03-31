@@ -37,6 +37,7 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.ui.state.BridgeStatusUiState
 import io.androdex.android.ui.state.BusyUiState
 import io.androdex.android.ui.state.ConnectionBannerUiState
+import io.androdex.android.ui.state.ConnectionBannerOverrideUiState
 import io.androdex.android.ui.state.HostAccountUiState
 import io.androdex.android.ui.state.SharedStatusTone
 import io.androdex.android.ui.state.TrustedPairUiState
@@ -64,7 +65,16 @@ internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (s
 internal fun connectionBannerPresentation(
     status: ConnectionStatus,
     detail: String?,
+    overridePresentation: ConnectionBannerOverrideUiState? = null,
 ): ConnectionBannerPresentation {
+    overridePresentation?.let {
+        return ConnectionBannerPresentation(
+            title = it.title,
+            badgeLabel = it.badgeLabel,
+            tone = it.tone,
+            guidance = it.guidance,
+        )
+    }
     val guidance = when (status) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> {
             "Saved pairing is still trusted. We'll keep retrying automatically when the host or relay comes back."
@@ -127,7 +137,11 @@ internal fun StatusCapsule(
     modifier: Modifier = Modifier,
     bottomPadding: Dp = 8.dp,
 ) {
-    val presentation = connectionBannerPresentation(state.status, state.detail)
+    val presentation = connectionBannerPresentation(
+        status = state.status,
+        detail = state.detail,
+        overridePresentation = state.presentationOverride,
+    )
 
     SharedStatusCard(
         modifier = modifier

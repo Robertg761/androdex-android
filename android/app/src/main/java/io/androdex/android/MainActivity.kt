@@ -15,6 +15,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import io.androdex.android.data.AndrodexRepository
 import io.androdex.android.notifications.AndroidNotificationCoordinator
+import io.androdex.android.onboarding.SharedPreferencesFirstPairingOnboardingStore
 import io.androdex.android.ui.theme.AndrodexTheme
 
 class MainActivity : ComponentActivity() {
@@ -23,6 +24,7 @@ class MainActivity : ComponentActivity() {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val repository = AndrodexRepository(applicationContext)
+                val onboardingStore = SharedPreferencesFirstPairingOnboardingStore(applicationContext)
                 return MainViewModel(
                     repository = repository,
                     notificationCoordinator = AndroidNotificationCoordinator(
@@ -30,6 +32,7 @@ class MainActivity : ComponentActivity() {
                         repository = repository,
                         scope = (this@MainActivity as ComponentActivity).lifecycleScope,
                     ),
+                    firstPairingOnboardingStore = onboardingStore,
                 ) as T
             }
         }

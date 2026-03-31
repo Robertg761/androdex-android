@@ -3,6 +3,8 @@ package io.androdex.android.ui.state
 import io.androdex.android.GitActionKind
 import io.androdex.android.ThreadGitState
 import io.androdex.android.AndrodexUiState
+import io.androdex.android.FreshPairingAttemptState
+import io.androdex.android.FreshPairingStage
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ComposerImageAttachment
@@ -38,8 +40,33 @@ import org.junit.Test
 
 class AndrodexFeatureStateTest {
     @Test
+    fun onboardingRoute_showsForUnpairedInstallsThatHaveNotSeenIt() {
+        val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = false,
+            isFirstPairingOnboardingActive = true,
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+
+        assertTrue(appState.destination is AndrodexDestinationUiState.Onboarding)
+    }
+
+    @Test
+    fun onboardingRoute_isSkippedAfterItHasBeenSeen() {
+        val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = true,
+            isFirstPairingOnboardingActive = false,
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+
+        assertTrue(appState.destination is AndrodexDestinationUiState.Pairing)
+    }
+
+    @Test
     fun pairingRoute_usesReconnectPresentationForSavedPairingRecovery() {
         val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = true,
             hasSavedPairing = true,
             trustedPairSnapshot = TrustedPairSnapshot(
                 deviceId = "host-1234",
@@ -75,8 +102,37 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun pairingRoute_overridesReconnectPresentationDuringFreshPairing() {
+        val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = true,
+            hasSavedPairing = true,
+            trustedPairSnapshot = TrustedPairSnapshot(
+                deviceId = "host-1234",
+                relayUrl = "wss://relay.example.com/socket",
+                fingerprint = "ABCD1234EFGH5678",
+                lastPairedAtEpochMs = 1_000L,
+                hasSavedRelaySession = true,
+            ),
+            connectionStatus = ConnectionStatus.RETRYING_SAVED_PAIRING,
+            connectionDetail = "Waiting for host",
+            freshPairingAttempt = FreshPairingAttemptState(FreshPairingStage.SCANNER_OPEN),
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Pairing
+
+        assertEquals(ConnectionStatus.CONNECTING, route.state.connection.status)
+        assertEquals("Fresh pairing ready", route.state.connection.presentationOverride?.title)
+        assertFalse(route.state.reconnectEnabled)
+        assertEquals("Fresh Pairing", route.state.recoveryTitle)
+        assertTrue(route.state.recoveryMessage.contains("Saved reconnect is paused"))
+        assertEquals("Connecting", route.state.trustedPair?.statusLabel)
+    }
+
+    @Test
     fun pairingRoute_surfacesAccountSourceAndRateLimits() {
         val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = true,
             hostAccountSnapshot = HostAccountSnapshot(
                 status = HostAccountStatus.AUTHENTICATED,
                 authMethod = "chatgpt",

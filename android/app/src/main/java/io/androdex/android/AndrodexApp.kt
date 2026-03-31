@@ -35,6 +35,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.home.HomeScreen
+import io.androdex.android.ui.pairing.FirstPairingOnboardingScreen
 import io.androdex.android.ui.pairing.PairingScreen
 import io.androdex.android.ui.settings.RuntimeSettingsSheet
 import io.androdex.android.ui.shared.ApprovalDialog
@@ -46,6 +47,7 @@ import io.androdex.android.ui.shared.remodexSlideInHorizontally
 import io.androdex.android.ui.shared.remodexSlideOutHorizontally
 import io.androdex.android.ui.sidebar.SidebarContent
 import io.androdex.android.ui.state.AndrodexDestinationUiState
+import io.androdex.android.ui.state.FirstPairingOnboardingUiState
 import io.androdex.android.ui.state.HomeScreenUiState
 import io.androdex.android.ui.state.PairingScreenUiState
 import io.androdex.android.ui.state.toHomeScreenUiState
@@ -85,6 +87,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
     // while viewing a thread (Thread state carries no thread-list data)
     var cachedSidebar by remember { mutableStateOf<HomeScreenUiState?>(null) }
     var cachedPairing by remember { mutableStateOf<PairingScreenUiState?>(null) }
+    var cachedOnboarding by remember { mutableStateOf<FirstPairingOnboardingUiState?>(null) }
     val destination = appState.destination
     if (destination is AndrodexDestinationUiState.Home) {
         cachedSidebar = liveHomeState
@@ -99,6 +102,9 @@ fun AndrodexApp(viewModel: MainViewModel) {
     if (destination is AndrodexDestinationUiState.Pairing) {
         cachedPairing = destination.state
     }
+    if (destination is AndrodexDestinationUiState.Onboarding) {
+        cachedOnboarding = destination.state
+    }
 
     // Selected thread ID — used to highlight the active row in the sidebar
     val selectedThreadId = (destination as? AndrodexDestinationUiState.Thread)?.state?.threadId
@@ -109,14 +115,27 @@ fun AndrodexApp(viewModel: MainViewModel) {
             forkThreadOpen = false
             gitSheetOpen = false
         }
-        if (destination is AndrodexDestinationUiState.Pairing && drawerState.isOpen) {
+        if ((destination is AndrodexDestinationUiState.Pairing
+                || destination is AndrodexDestinationUiState.Onboarding)
+            && drawerState.isOpen
+        ) {
             drawerState.close()
         }
     }
 
     // ── Media / QR launchers ────────────────────────────────────────────
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let(viewModel::updatePairingInput)
+        viewModel.completeFreshPairingScan(result.contents)
+    }
+    val launchPairingScan: () -> Unit = {
+        viewModel.beginFreshPairingScan()
+        scanLauncher.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Scan the Androdex pairing QR")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false)
+        )
     }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap == null) return@rememberLauncherForActivityResult
@@ -192,6 +211,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
     }
 
     val rootShell = when (destination) {
+        is AndrodexDestinationUiState.Onboarding,
         is AndrodexDestinationUiState.Pairing -> RootShell.Pairing
         is AndrodexDestinationUiState.Home,
         is AndrodexDestinationUiState.Thread -> RootShell.Connected
@@ -202,6 +222,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
             ConnectedRoute.Home(sidebarState)
         }
         is AndrodexDestinationUiState.Thread -> ConnectedRoute.Thread(destination.state)
+        is AndrodexDestinationUiState.Onboarding -> null
         is AndrodexDestinationUiState.Pairing -> null
     }
     val connectedRouteTransitionKey = connectedShellTransitionKey(destination)
@@ -221,23 +242,50 @@ fun AndrodexApp(viewModel: MainViewModel) {
     ) { route ->
         when (route) {
             RootShell.Pairing -> {
-                cachedPairing?.let { pairingState ->
-                    PairingScreen(
-                        state = pairingState,
-                        onPairingInputChanged = viewModel::updatePairingInput,
-                        onScanQr = {
-                            scanLauncher.launch(
-                                ScanOptions()
-                                    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                    .setPrompt("Scan the Androdex pairing QR")
-                                    .setBeepEnabled(false)
-                                    .setOrientationLocked(false)
+                when (destination) {
+                    is AndrodexDestinationUiState.Onboarding -> {
+                        val onboardingState = cachedOnboarding ?: destination.state
+                        FirstPairingOnboardingScreen(
+                            state = onboardingState,
+                            onStartPairing = {
+                                viewModel.markFirstPairingOnboardingSeen()
+                                launchPairingScan()
+                            },
+                        )
+                    }
+
+                    is AndrodexDestinationUiState.Pairing -> {
+                        val pairingState = cachedPairing ?: destination.state
+                        PairingScreen(
+                            state = pairingState,
+                            onPairingInputChanged = viewModel::updatePairingInput,
+                            onScanQr = launchPairingScan,
+                            onConnect = viewModel::connectWithCurrentPairingInput,
+                            onReconnectSaved = viewModel::reconnectSaved,
+                            onForgetTrustedHost = viewModel::forgetTrustedHost,
+                        )
+                    }
+
+                    else -> {
+                        cachedOnboarding?.let { onboardingState ->
+                            FirstPairingOnboardingScreen(
+                                state = onboardingState,
+                                onStartPairing = {
+                                    viewModel.markFirstPairingOnboardingSeen()
+                                    launchPairingScan()
+                                },
                             )
-                        },
-                        onConnect = viewModel::connectWithCurrentPairingInput,
-                        onReconnectSaved = viewModel::reconnectSaved,
-                        onForgetTrustedHost = viewModel::forgetTrustedHost,
-                    )
+                        } ?: cachedPairing?.let { pairingState ->
+                            PairingScreen(
+                                state = pairingState,
+                                onPairingInputChanged = viewModel::updatePairingInput,
+                                onScanQr = launchPairingScan,
+                                onConnect = viewModel::connectWithCurrentPairingInput,
+                                onReconnectSaved = viewModel::reconnectSaved,
+                                onForgetTrustedHost = viewModel::forgetTrustedHost,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -468,6 +516,7 @@ internal fun connectedShellTransitionKey(
 ): ConnectedShellTransitionKey? = when (destination) {
     is AndrodexDestinationUiState.Home -> ConnectedShellTransitionKey.Home
     is AndrodexDestinationUiState.Thread -> ConnectedShellTransitionKey.Thread(destination.state.threadId)
+    is AndrodexDestinationUiState.Onboarding -> null
     is AndrodexDestinationUiState.Pairing -> null
 }
 

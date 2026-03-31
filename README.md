@@ -68,6 +68,7 @@ Androdex does **not** run Codex on the phone itself.
 ## Current Status
 
 - the host bridge is published to npm as `androdex`
+- `npm install -g androdex@latest` now installs the macOS host-service CLI with `up`, `start`, `restart`, `stop`, and `status`
 - the Android app source lives in `android/`
 - the repository is built around a host-local Codex runtime plus relay-backed remote access
 
@@ -77,6 +78,12 @@ If you want to work from this repo today, use the bridge from npm or source, the
 
 ```sh
 npm install -g androdex@latest
+```
+
+If you previously installed an older global build, reinstall `@latest` before using the current docs and verify the command surface with:
+
+```sh
+androdex status
 ```
 
 Start the macOS host service, print a QR code, and bind the current workspace:

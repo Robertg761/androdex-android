@@ -102,6 +102,26 @@ npm install
 npm start
 ```
 
+## Release
+
+Publish the npm package from this directory, not from the repository root:
+
+```sh
+cd androdex-bridge
+npm test
+npm pack --dry-run
+npm version patch --no-git-tag-version
+npm publish --access public
+```
+
+Verify the published version after the release:
+
+```sh
+npm view androdex version
+```
+
+If your npm account requires write-time 2FA, rerun the publish command with `--otp=<code>`.
+
 ## Manual Smoke Checklist
 
 1. Run `androdex up` and confirm the Android app can pair successfully.

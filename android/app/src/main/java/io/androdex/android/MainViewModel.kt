@@ -44,6 +44,8 @@ import io.androdex.android.model.readyAttachments
 import io.androdex.android.notifications.NotificationCoordinator
 import io.androdex.android.notifications.NoopNotificationCoordinator
 import io.androdex.android.notifications.decodeNotificationOpenPayload
+import io.androdex.android.onboarding.FirstPairingOnboardingStore
+import io.androdex.android.onboarding.InMemoryFirstPairingOnboardingStore
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import io.androdex.android.ui.pairing.PairingPayloadValidationResult
@@ -61,6 +63,9 @@ data class AndrodexUiState(
     val pairingInput: String = "",
     val hasSavedPairing: Boolean = false,
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
+    val freshPairingAttempt: FreshPairingAttemptState? = null,
+    val hasSeenFirstPairingOnboarding: Boolean = false,
+    val isFirstPairingOnboardingActive: Boolean = false,
     val hostAccountSnapshot: HostAccountSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
@@ -143,6 +148,7 @@ data class AndrodexUiState(
 class MainViewModel(
     repository: AndrodexRepositoryContract,
     private val notificationCoordinator: NotificationCoordinator = NoopNotificationCoordinator,
+    private val firstPairingOnboardingStore: FirstPairingOnboardingStore = InMemoryFirstPairingOnboardingStore(),
 ) : ViewModel() {
     private val service = AndrodexService(repository, viewModelScope)
     private val repository = repository
@@ -152,11 +158,9 @@ class MainViewModel(
     private var skillAutocompleteJob: Job? = null
     private val autocompleteDebounceMs = 180L
 
+    private val initialServiceState = service.state.value
     private val uiStateFlow = MutableStateFlow(
-        applyServiceState(
-            current = AndrodexUiState(),
-            serviceState = service.state.value,
-        )
+        createInitialUiState(initialServiceState)
     )
 
     val uiState: StateFlow<AndrodexUiState> = uiStateFlow.asStateFlow()
@@ -165,6 +169,7 @@ class MainViewModel(
         viewModelScope.launch {
             service.state.collect { serviceState ->
                 uiStateFlow.update { current -> applyServiceState(current, serviceState) }
+                syncFirstPairingOnboardingSeenFlag(serviceState)
                 if (serviceState.skillInventoryVersion != lastSkillInventoryVersion
                     && uiStateFlow.value.isSkillAutocompleteVisible
                 ) {
@@ -205,9 +210,11 @@ class MainViewModel(
             ?: deepLinkText?.takeIf { it.isNotEmpty() }
             ?: return
         uiStateFlow.update { it.copy(pairingInput = payload) }
-        if (deepLinkText != null) {
-            connectWithCurrentPairingInput()
-        }
+        connectWithCurrentPairingInput(fromExternalPayload = true)
+    }
+
+    fun beginFreshPairingScan() {
+        service.beginFreshPairingScan()
     }
 
     fun updatePairingInput(value: String) {
@@ -1077,12 +1084,13 @@ class MainViewModel(
         service.dismissMissingNotificationThreadPrompt()
     }
 
-    fun connectWithCurrentPairingInput() {
+    fun connectWithCurrentPairingInput(fromExternalPayload: Boolean = false) {
         val payload = uiStateFlow.value.pairingInput.trim()
         if (payload.isEmpty()) {
             service.reportError("Paste or scan the pairing payload first.")
             return
         }
+        service.recordFreshPairingPayloadCaptured()
         when (val validation = validatePairingPayload(payload)) {
             is PairingPayloadValidationResult.Error -> {
                 service.reportError(validation.message)
@@ -1095,8 +1103,46 @@ class MainViewModel(
             is PairingPayloadValidationResult.Success -> Unit
         }
 
-        runBusyAction {
-            service.connectWithPairingPayload(payload)
+        if (fromExternalPayload) {
+            markFirstPairingOnboardingSeen()
+            dismissFirstPairingOnboarding()
+        }
+        viewModelScope.launch {
+            uiStateFlow.update { it.copy(isBusy = true, busyLabel = null) }
+            try {
+                service.connectWithPairingPayload(payload, isFreshPairing = true)
+            } catch (error: Throwable) {
+                service.failFreshPairingAttempt()
+                service.reportError(error.message ?: "Request failed.")
+            } finally {
+                uiStateFlow.update { it.copy(isBusy = false, busyLabel = null) }
+            }
+        }
+    }
+
+    fun completeFreshPairingScan(payload: String?) {
+        val normalizedPayload = payload?.trim()
+        if (normalizedPayload.isNullOrEmpty()) {
+            service.cancelFreshPairingScan()
+            return
+        }
+        updatePairingInput(normalizedPayload)
+        service.recordFreshPairingPayloadCaptured()
+        connectWithCurrentPairingInput()
+    }
+
+    fun markFirstPairingOnboardingSeen() {
+        if (!uiStateFlow.value.hasSeenFirstPairingOnboarding) {
+            firstPairingOnboardingStore.markFirstPairingOnboardingSeen()
+        }
+        uiStateFlow.update {
+            it.copy(hasSeenFirstPairingOnboarding = true)
+        }
+    }
+
+    fun dismissFirstPairingOnboarding() {
+        uiStateFlow.update {
+            it.copy(isFirstPairingOnboardingActive = false)
         }
     }
 
@@ -1113,7 +1159,10 @@ class MainViewModel(
     }
 
     fun reconnectSavedIfAvailable() {
-        if (uiStateFlow.value.isBusy || uiStateFlow.value.pairingInput.isNotBlank()) {
+        if (uiStateFlow.value.isBusy
+            || uiStateFlow.value.pairingInput.isNotBlank()
+            || uiStateFlow.value.freshPairingAttempt != null
+        ) {
             return
         }
         service.reconnectSavedIfAvailable()
@@ -2252,6 +2301,33 @@ class MainViewModel(
         }
     }
 
+    private fun createInitialUiState(serviceState: AndrodexServiceState): AndrodexUiState {
+        val persistedOnboardingSeen = firstPairingOnboardingStore.hasSeenFirstPairingOnboarding()
+        val isAlreadyPaired = serviceState.hasSavedPairing || serviceState.trustedPairSnapshot != null
+        val effectiveOnboardingSeen = persistedOnboardingSeen || isAlreadyPaired
+        if (effectiveOnboardingSeen && !persistedOnboardingSeen) {
+            firstPairingOnboardingStore.markFirstPairingOnboardingSeen()
+        }
+        return applyServiceState(
+            current = AndrodexUiState(
+                hasSeenFirstPairingOnboarding = effectiveOnboardingSeen,
+                isFirstPairingOnboardingActive = !effectiveOnboardingSeen && !isAlreadyPaired,
+            ),
+            serviceState = serviceState,
+        )
+    }
+
+    private fun syncFirstPairingOnboardingSeenFlag(serviceState: AndrodexServiceState) {
+        val isPaired = serviceState.hasSavedPairing || serviceState.trustedPairSnapshot != null
+        if (!isPaired || uiStateFlow.value.hasSeenFirstPairingOnboarding) {
+            return
+        }
+        firstPairingOnboardingStore.markFirstPairingOnboardingSeen()
+        uiStateFlow.update {
+            it.copy(hasSeenFirstPairingOnboarding = true)
+        }
+    }
+
     private fun runBusyAction(label: String? = null, block: suspend () -> Unit) {
         viewModelScope.launch {
             uiStateFlow.update { it.copy(isBusy = true, busyLabel = label) }
@@ -2551,9 +2627,13 @@ private fun applyServiceState(
             requestId to filteredAnswers
         }
     }.toMap()
+    val hasPairingIdentity = serviceState.hasSavedPairing || serviceState.trustedPairSnapshot != null
     return current.copy(
         hasSavedPairing = serviceState.hasSavedPairing,
         trustedPairSnapshot = serviceState.trustedPairSnapshot,
+        freshPairingAttempt = serviceState.freshPairingAttempt,
+        hasSeenFirstPairingOnboarding = current.hasSeenFirstPairingOnboarding || hasPairingIdentity,
+        isFirstPairingOnboardingActive = current.isFirstPairingOnboardingActive && !hasPairingIdentity,
         hostAccountSnapshot = serviceState.hostAccountSnapshot,
         defaultRelayUrl = serviceState.defaultRelayUrl,
         connectionStatus = serviceState.connectionStatus,

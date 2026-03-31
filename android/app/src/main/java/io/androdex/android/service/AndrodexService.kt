@@ -2,6 +2,8 @@ package io.androdex.android.service
 
 import io.androdex.android.AppEnvironment
 import io.androdex.android.data.AndrodexRepositoryContract
+import io.androdex.android.FreshPairingAttemptState
+import io.androdex.android.FreshPairingStage
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.attachmentSignature
@@ -71,6 +73,7 @@ private data class SubagentIdentityEntry(
 data class AndrodexServiceState(
     val hasSavedPairing: Boolean = false,
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
+    val freshPairingAttempt: FreshPairingAttemptState? = null,
     val hostAccountSnapshot: HostAccountSnapshot? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
@@ -185,11 +188,75 @@ class AndrodexService(
         cancelSavedReconnectRetry()
     }
 
-    suspend fun connectWithPairingPayload(rawPayload: String) {
-        suppressSavedReconnect = false
+    fun beginFreshPairingScan() {
+        suppressSavedReconnect = true
+        cancelSavedReconnectRetry()
+        val shouldResumeSavedReconnect = stateFlow.value.hasSavedPairing
+        stateFlow.update {
+            it.copy(
+                freshPairingAttempt = FreshPairingAttemptState(
+                    stage = FreshPairingStage.SCANNER_OPEN,
+                    shouldResumeSavedReconnectOnCancel = shouldResumeSavedReconnect,
+                ),
+            )
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatching {
+                repository.disconnect(clearSavedPairing = false)
+            }
+            stateFlow.update { it.copy(isLoadingThreadList = false) }
+        }
+    }
+
+    fun recordFreshPairingPayloadCaptured() {
+        suppressSavedReconnect = true
         cancelSavedReconnectRetry()
         stateFlow.update {
             it.copy(
+                freshPairingAttempt = FreshPairingAttemptState(
+                    stage = FreshPairingStage.PAYLOAD_CAPTURED,
+                ),
+            )
+        }
+    }
+
+    fun cancelFreshPairingScan() {
+        val shouldResumeSavedReconnect = stateFlow.value
+            .freshPairingAttempt
+            ?.shouldResumeSavedReconnectOnCancel == true
+        stateFlow.update { it.copy(freshPairingAttempt = null) }
+        if (shouldResumeSavedReconnect) {
+            reportError("No QR code was captured. Reconnecting to the saved pair.")
+            reconnectSavedIfAvailable()
+        } else {
+            reportError("No QR code was captured.")
+        }
+    }
+
+    fun failFreshPairingAttempt() {
+        val freshPairingAttempt = stateFlow.value.freshPairingAttempt ?: return
+        if (freshPairingAttempt.stage == FreshPairingStage.CONNECTING) {
+            stateFlow.update {
+                it.copy(
+                    freshPairingAttempt = freshPairingAttempt.copy(
+                        stage = FreshPairingStage.PAYLOAD_CAPTURED,
+                        shouldResumeSavedReconnectOnCancel = false,
+                    ),
+                )
+            }
+        }
+    }
+
+    suspend fun connectWithPairingPayload(rawPayload: String, isFreshPairing: Boolean = false) {
+        suppressSavedReconnect = isFreshPairing
+        cancelSavedReconnectRetry()
+        stateFlow.update {
+            it.copy(
+                freshPairingAttempt = if (isFreshPairing) {
+                    FreshPairingAttemptState(stage = FreshPairingStage.CONNECTING)
+                } else {
+                    null
+                },
                 threads = emptyList(),
                 hasLoadedThreadList = false,
                 isLoadingThreadList = false,
@@ -197,14 +264,29 @@ class AndrodexService(
                 selectedThreadTitle = null,
             )
         }
-        repository.connectWithPairingPayload(rawPayload)
-        refreshThreadsInternal()
-        loadWorkspaceState()
+        try {
+            if (isFreshPairing) {
+                runCatching {
+                    repository.disconnect(clearSavedPairing = false)
+                }
+            }
+            repository.connectWithPairingPayload(rawPayload)
+            suppressSavedReconnect = false
+            stateFlow.update { it.copy(freshPairingAttempt = null) }
+            refreshThreadsInternal()
+            loadWorkspaceState()
+        } catch (error: Throwable) {
+            if (isFreshPairing) {
+                failFreshPairingAttempt()
+            }
+            throw error
+        }
     }
 
     suspend fun reconnectSaved() {
         suppressSavedReconnect = false
         cancelSavedReconnectRetry()
+        stateFlow.update { it.copy(freshPairingAttempt = null) }
         repository.reconnectSaved()
         refreshThreadsInternal()
         loadWorkspaceState()
@@ -213,6 +295,7 @@ class AndrodexService(
     suspend fun forgetTrustedHost() {
         suppressSavedReconnect = true
         cancelSavedReconnectRetry()
+        stateFlow.update { it.copy(freshPairingAttempt = null) }
         repository.forgetTrustedHost()
     }
 
@@ -221,7 +304,7 @@ class AndrodexService(
             return
         }
         val snapshot = stateFlow.value
-        if (!snapshot.hasSavedPairing || savedReconnectInFlight) {
+        if (!snapshot.hasSavedPairing || savedReconnectInFlight || snapshot.freshPairingAttempt != null) {
             return
         }
         if (snapshot.connectionStatus == ConnectionStatus.CONNECTED
@@ -240,7 +323,12 @@ class AndrodexService(
         cancelSavedReconnectRetry()
         clearThreadRunState()
         repository.disconnect(clearSavedPairing)
-        stateFlow.update { it.copy(isLoadingThreadList = false) }
+        stateFlow.update {
+            it.copy(
+                freshPairingAttempt = null,
+                isLoadingThreadList = false,
+            )
+        }
     }
 
     suspend fun refreshThreads() {
@@ -846,8 +934,22 @@ class AndrodexService(
     internal fun processClientUpdate(update: ClientUpdate) {
         when (update) {
             is ClientUpdate.Connection -> {
+                val freshPairingAttempt = stateFlow.value.freshPairingAttempt
+                if (freshPairingAttempt != null) {
+                    if (update.status == ConnectionStatus.RETRYING_SAVED_PAIRING) {
+                        return
+                    }
+                    if ((update.status == ConnectionStatus.CONNECTING
+                            || update.status == ConnectionStatus.HANDSHAKING
+                            || update.status == ConnectionStatus.CONNECTED)
+                        && freshPairingAttempt.stage != FreshPairingStage.CONNECTING
+                    ) {
+                        return
+                    }
+                }
                 stateFlow.update {
                     it.copy(
+                        freshPairingAttempt = if (update.status == ConnectionStatus.CONNECTED) null else it.freshPairingAttempt,
                         connectionStatus = update.status,
                         connectionDetail = update.detail,
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
@@ -856,6 +958,7 @@ class AndrodexService(
                 }
                 when (update.status) {
                     ConnectionStatus.CONNECTED -> {
+                        suppressSavedReconnect = false
                         cancelSavedReconnectRetry()
                         scope.launch {
                             refreshThreadsInternal()
@@ -895,7 +998,7 @@ class AndrodexService(
                         hasLoadedThreadList = if (update.hasSavedPairing) it.hasLoadedThreadList else false,
                     )
                 }
-                if (!update.hasSavedPairing) {
+                if (!update.hasSavedPairing && stateFlow.value.freshPairingAttempt == null) {
                     suppressSavedReconnect = false
                     cancelSavedReconnectRetry()
                 }

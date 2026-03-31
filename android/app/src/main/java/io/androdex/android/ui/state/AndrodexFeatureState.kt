@@ -5,6 +5,8 @@ import io.androdex.android.AndrodexUiState
 import io.androdex.android.ComposerSlashCommand
 import io.androdex.android.ComposerReviewSelection
 import io.androdex.android.ComposerReviewTarget
+import io.androdex.android.FreshPairingAttemptState
+import io.androdex.android.FreshPairingStage
 import io.androdex.android.GitActionKind
 import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
@@ -56,6 +58,8 @@ internal data class AndrodexOverlayUiState(
 )
 
 internal sealed interface AndrodexDestinationUiState {
+    data class Onboarding(val state: FirstPairingOnboardingUiState) : AndrodexDestinationUiState
+
     data class Pairing(val state: PairingScreenUiState) : AndrodexDestinationUiState
 
     data class Home(val state: HomeScreenUiState) : AndrodexDestinationUiState
@@ -67,6 +71,14 @@ internal data class ConnectionBannerUiState(
     val status: ConnectionStatus,
     val detail: String?,
     val fingerprint: String?,
+    val presentationOverride: ConnectionBannerOverrideUiState? = null,
+)
+
+internal data class ConnectionBannerOverrideUiState(
+    val title: String,
+    val badgeLabel: String,
+    val tone: SharedStatusTone,
+    val guidance: String? = null,
 )
 
 internal enum class SharedStatusTone {
@@ -80,6 +92,12 @@ internal enum class SharedStatusTone {
 internal data class BusyUiState(
     val isVisible: Boolean,
     val label: String?,
+)
+
+internal data class FirstPairingOnboardingUiState(
+    val codexInstallCommand: String,
+    val bridgeInstallCommand: String,
+    val bridgeStartCommand: String,
 )
 
 internal data class PairingScreenUiState(
@@ -388,6 +406,9 @@ internal fun AndrodexUiState.toAppUiState(
             connectionStatus == ConnectionStatus.CONNECTED -> AndrodexDestinationUiState.Home(
                 state = toHomeScreenUiState(nowEpochMs)
             )
+            shouldShowFirstPairingOnboarding() -> AndrodexDestinationUiState.Onboarding(
+                state = toFirstPairingOnboardingUiState()
+            )
             else -> AndrodexDestinationUiState.Pairing(
                 state = toPairingScreenUiState()
             )
@@ -418,19 +439,30 @@ internal fun relativeTimeLabel(
 }
 
 private fun AndrodexUiState.toPairingScreenUiState(): PairingScreenUiState {
+    val effectiveConnectionStatus = effectivePairingConnectionStatus()
     return PairingScreenUiState(
         pairingInput = pairingInput,
         hasSavedPairing = hasSavedPairing,
-        trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
+        trustedPair = trustedPairSnapshot.toTrustedPairUiState(effectiveConnectionStatus),
         hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         defaultRelayUrl = defaultRelayUrl,
         isBusy = isBusy,
         reconnectButtonLabel = reconnectButtonLabel(),
-        reconnectEnabled = !isBusy && connectionStatus != ConnectionStatus.RETRYING_SAVED_PAIRING,
+        reconnectEnabled = !isBusy
+            && connectionStatus != ConnectionStatus.RETRYING_SAVED_PAIRING
+            && freshPairingAttempt == null,
         recoveryTitle = pairingRecoveryTitle(),
         recoveryMessage = pairingRecoveryMessage(),
         compatibilityMessage = compatibilityMessage(),
-        connection = toConnectionBannerUiState(),
+        connection = toPairingConnectionBannerUiState(),
+    )
+}
+
+private fun AndrodexUiState.toFirstPairingOnboardingUiState(): FirstPairingOnboardingUiState {
+    return FirstPairingOnboardingUiState(
+        codexInstallCommand = "npm install -g @openai/codex@latest",
+        bridgeInstallCommand = "npm install -g androdex@latest",
+        bridgeStartCommand = AppEnvironment.bridgeStartCommand,
     )
 }
 
@@ -937,6 +969,21 @@ private fun AndrodexUiState.toConnectionBannerUiState(): ConnectionBannerUiState
     )
 }
 
+private fun AndrodexUiState.toPairingConnectionBannerUiState(): ConnectionBannerUiState {
+    val freshPairingAttempt = freshPairingAttempt
+    return ConnectionBannerUiState(
+        status = when (freshPairingAttempt?.stage) {
+            FreshPairingStage.SCANNER_OPEN,
+            FreshPairingStage.PAYLOAD_CAPTURED -> ConnectionStatus.CONNECTING
+            FreshPairingStage.CONNECTING -> ConnectionStatus.HANDSHAKING
+            null -> connectionStatus
+        },
+        detail = freshPairingAttempt?.toDetailMessage() ?: connectionDetail,
+        fingerprint = secureFingerprint,
+        presentationOverride = freshPairingAttempt?.toConnectionBannerOverride(),
+    )
+}
+
 private fun AndrodexUiState.toBusyUiState(): BusyUiState {
     return BusyUiState(
         isVisible = isBusy || isLoadingRuntimeConfig,
@@ -954,6 +1001,9 @@ private fun AndrodexUiState.threadRunBadge(threadId: String): ThreadRunBadgeUiSt
 }
 
 private fun AndrodexUiState.reconnectButtonLabel(): String {
+    if (freshPairingAttempt != null) {
+        return "Reconnect Saved Pairing"
+    }
     return when (connectionStatus) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying Saved Pairing..."
         ConnectionStatus.RECONNECT_REQUIRED -> "Reconnect Saved Pairing"
@@ -968,13 +1018,32 @@ private fun AndrodexUiState.reconnectButtonLabel(): String {
 }
 
 private fun AndrodexUiState.pairingRecoveryTitle(): String {
+    if (freshPairingAttempt != null) {
+        return "Fresh Pairing"
+    }
     return when {
         hasSavedPairing -> "Saved Pair Recovery"
         else -> "First Pairing"
     }
 }
 
+private fun AndrodexUiState.shouldShowFirstPairingOnboarding(): Boolean {
+    return isFirstPairingOnboardingActive
+        && !hasSavedPairing
+        && trustedPairSnapshot == null
+}
+
 private fun AndrodexUiState.pairingRecoveryMessage(): String {
+    freshPairingAttempt?.let { attempt ->
+        return when (attempt.stage) {
+            FreshPairingStage.SCANNER_OPEN ->
+                "A fresh QR scan is in progress. Saved reconnect is paused until the scanner returns or you cancel."
+            FreshPairingStage.PAYLOAD_CAPTURED ->
+                "A fresh pairing payload is loaded. Connect with it to replace the stale reconnect, or choose reconnect manually if you want the old host."
+            FreshPairingStage.CONNECTING ->
+                "A fresh pairing payload is connecting now. Saved reconnect stays paused until this attempt succeeds or fails."
+        }
+    }
     return when (connectionStatus) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> {
             "This phone still trusts the host. Keep Androdex running on the PC and we'll retry automatically in the foreground."
@@ -1005,6 +1074,49 @@ private fun AndrodexUiState.compatibilityMessage(): String? {
             "This host bridge is missing some newer Android features. Updating the npm package keeps runtime controls and fork behavior aligned."
         }
         else -> null
+    }
+}
+
+private fun AndrodexUiState.effectivePairingConnectionStatus(): ConnectionStatus {
+    return when (freshPairingAttempt?.stage) {
+        FreshPairingStage.SCANNER_OPEN,
+        FreshPairingStage.PAYLOAD_CAPTURED -> ConnectionStatus.CONNECTING
+        FreshPairingStage.CONNECTING -> ConnectionStatus.HANDSHAKING
+        null -> connectionStatus
+    }
+}
+
+private fun FreshPairingAttemptState.toConnectionBannerOverride(): ConnectionBannerOverrideUiState {
+    return when (stage) {
+        FreshPairingStage.SCANNER_OPEN -> ConnectionBannerOverrideUiState(
+            title = "Fresh pairing ready",
+            badgeLabel = "Scanner",
+            tone = SharedStatusTone.Accent,
+            guidance = "Use the fresh QR or return to manual recovery. Saved reconnect stays paused during this handoff.",
+        )
+        FreshPairingStage.PAYLOAD_CAPTURED -> ConnectionBannerOverrideUiState(
+            title = "Fresh pairing payload captured",
+            badgeLabel = "Manual pair",
+            tone = SharedStatusTone.Accent,
+            guidance = "Finish connecting with this payload to replace the stale reconnect, or switch back to saved reconnect yourself.",
+        )
+        FreshPairingStage.CONNECTING -> ConnectionBannerOverrideUiState(
+            title = "Connecting fresh pairing",
+            badgeLabel = "Pairing",
+            tone = SharedStatusTone.Accent,
+            guidance = "Saved reconnect stays paused until this fresh pairing attempt finishes.",
+        )
+    }
+}
+
+private fun FreshPairingAttemptState.toDetailMessage(): String {
+    return when (stage) {
+        FreshPairingStage.SCANNER_OPEN ->
+            "Scan the fresh QR code now. Background reconnect is paused so this new pairing can take over cleanly."
+        FreshPairingStage.PAYLOAD_CAPTURED ->
+            "A fresh pairing payload is ready. Tap connect to finish replacing the stale reconnect."
+        FreshPairingStage.CONNECTING ->
+            "Connecting with the fresh pairing payload. Background reconnect remains paused."
     }
 }
 

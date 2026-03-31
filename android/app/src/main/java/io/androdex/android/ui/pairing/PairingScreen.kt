@@ -187,7 +187,7 @@ private fun PairingHeroCard(
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    text = "Keep Codex running on your host. Pair once, then reconnect securely from Android whenever the bridge comes back.",
+                    text = "Reconnect to a trusted host, or scan a fresh QR from the bridge when you need to repair or replace the current pairing.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = colors.textSecondary,
                     textAlign = TextAlign.Center,
@@ -203,13 +203,13 @@ private fun PairingHeroCard(
             ) {
                 PairingFeatureRow(
                     icon = Icons.Outlined.Computer,
-                    title = "Host-local runtime",
-                    description = "Threads, tools, and git actions keep running on your computer.",
+                    title = "Recovery stays host-first",
+                    description = "Threads, tools, and git actions still stay on your computer while Android repairs or resumes access.",
                 )
                 PairingFeatureRow(
                     icon = Icons.Outlined.Lock,
-                    title = "Saved trust reconnects fast",
-                    description = "Use the same trusted pair again before you fall back to scanning or pasting.",
+                    title = "Trusted pair first",
+                    description = "Try the saved pair before falling back to a fresh QR or a pasted payload.",
                 )
             }
 
@@ -249,7 +249,7 @@ private fun PairingHeroCard(
                         modifier = Modifier.size(geometry.iconSize),
                     )
                     Text(
-                        text = "Scan QR",
+                        text = "Scan fresh QR",
                         modifier = Modifier.padding(start = geometry.spacing8),
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                     )
@@ -437,7 +437,7 @@ private fun SavedReconnectCard(
                 text = when {
                     state.trustedPair != null && !state.trustedPair.hasSavedRelaySession -> "Resolve a fresh live session"
                     state.trustedPair != null -> "Reconnect without rescanning"
-                    else -> "Saved pairing is ready"
+                    else -> "Recovery is ready"
                 },
                 style = MaterialTheme.typography.titleLarge,
                 color = colors.textPrimary,
@@ -699,7 +699,7 @@ private fun ManualPairingCard(
             verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
         ) {
             Text(
-                text = "MANUAL PAIRING",
+                text = "MANUAL RECOVERY",
                 style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
                 color = colors.textSecondary,
             )
@@ -729,7 +729,7 @@ private fun ManualPairingCard(
                         color = colors.textPrimary,
                     )
                     Text(
-                        text = "Use this when the QR camera flow is unavailable or you already copied the bridge payload from your host.",
+                        text = "Use this when scanning is unavailable or you already copied the bridge payload from the host terminal.",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textSecondary,
                     )
