@@ -29,9 +29,15 @@ jobs:
           cache: npm
           cache-dependency-path: androdex-bridge/package-lock.json
 
-      - name: Install bridge dependencies
+      - name: Install bridge dependencies (Linux)
+        if: runner.os == 'Linux'
         working-directory: androdex-bridge
-        run: npm ci --os=darwin
+        run: npm ci --force
+
+      - name: Install bridge dependencies (macOS)
+        if: runner.os == 'macOS'
+        working-directory: androdex-bridge
+        run: npm ci
 
       - name: Run bridge tests
         working-directory: androdex-bridge
