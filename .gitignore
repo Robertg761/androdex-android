@@ -48,6 +48,12 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+*.aab
+*.apks
+*.pepk
+*play*-service-account*.json
+*google-play*.json
+*play-account*.json
 
 # Minified JS bundles (not part of this project)
 /main.js

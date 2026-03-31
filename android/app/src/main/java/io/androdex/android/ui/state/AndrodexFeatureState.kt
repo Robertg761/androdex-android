@@ -271,6 +271,8 @@ internal data class ThreadGitUiState(
     val branchTargets: GitBranchesWithStatusResult?,
     val diffPatch: String?,
     val isRefreshing: Boolean,
+    val isBranchContextLoading: Boolean,
+    val isBranchContextReady: Boolean,
     val runningAction: GitActionKind?,
     val canRunActions: Boolean,
     val commitDialog: GitCommitDialogState?,
@@ -654,6 +656,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     )
     val gitState = gitStateByThread[threadId]
     val runningGitAction = runningGitActionByThread[threadId]
+    val hasGitBranchContext = gitState?.status != null && gitState.branchTargets != null
+    val isGitBranchContextLoading = gitState?.isLoadingBranchTargets == true
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
@@ -676,6 +680,8 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
             branchTargets = gitState?.branchTargets,
             diffPatch = gitState?.diffPatch,
             isRefreshing = gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true,
+            isBranchContextLoading = isGitBranchContextLoading,
+            isBranchContextReady = hasGitBranchContext && !isGitBranchContextLoading,
             runningAction = runningGitAction,
             canRunActions = workingDirectory != null
                 && connectionStatus == ConnectionStatus.CONNECTED

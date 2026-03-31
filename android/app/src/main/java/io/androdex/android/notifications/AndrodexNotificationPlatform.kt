@@ -1,13 +1,16 @@
 package io.androdex.android.notifications
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import io.androdex.android.MainActivity
 import io.androdex.android.R
 
@@ -39,6 +42,19 @@ internal object AndrodexNotificationPlatform {
         notification: AndrodexRunCompletionNotification,
     ) {
         ensureRunCompletionChannel(context)
+        val notificationManager = NotificationManagerCompat.from(context)
+        val permissionGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!notificationAlertsEnabled(
+                sdkInt = Build.VERSION.SDK_INT,
+                permissionGranted = permissionGranted,
+                notificationsEnabled = notificationManager.areNotificationsEnabled(),
+            )
+        ) {
+            return
+        }
 
         val intent = Intent(context, MainActivity::class.java)
             .putExtra(AndrodexNotificationKeys.source, RUN_COMPLETION_NOTIFICATION_SOURCE)
@@ -63,6 +79,8 @@ internal object AndrodexNotificationPlatform {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        NotificationManagerCompat.from(context).notify(notification.threadId.hashCode(), built)
+        postNotificationBestEffort {
+            notificationManager.notify(notification.threadId.hashCode(), built)
+        }
     }
 }

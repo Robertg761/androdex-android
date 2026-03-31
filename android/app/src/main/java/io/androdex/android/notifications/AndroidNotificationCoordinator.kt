@@ -148,12 +148,16 @@ class AndroidNotificationCoordinator(
     }
 
     private fun areAlertsEnabled(): Boolean {
-        val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(
-                appContext,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-        return permissionGranted && NotificationManagerCompat.from(appContext).areNotificationsEnabled()
+        val notificationsEnabled = NotificationManagerCompat.from(appContext).areNotificationsEnabled()
+        val permissionGranted = ContextCompat.checkSelfPermission(
+            appContext,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        return notificationAlertsEnabled(
+            sdkInt = Build.VERSION.SDK_INT,
+            permissionGranted = permissionGranted,
+            notificationsEnabled = notificationsEnabled,
+        )
     }
 
     private fun notificationAuthorizationStatus(): String {

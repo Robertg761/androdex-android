@@ -121,14 +121,20 @@ For a local signed release build, copy `android/keystore.properties.example` to
 
 ```sh
 cd android
-gradlew assembleRelease
+gradlew bundleRelease
+```
+
+The signed app bundle is typically written to:
+
+```text
+android/app/build/outputs/bundle/release/app-release.aab
 ```
 
 The local keystore file and `keystore.properties` are ignored by git on purpose.
 
-## Build a Signed Android APK with GitHub Actions
+## Build a Signed Android App Bundle with GitHub Actions
 
-The repo includes [`.github/workflows/android-release.yml`](.github/workflows/android-release.yml) to build a signed release APK on GitHub-hosted runners.
+The repo includes [`.github/workflows/android-release.yml`](.github/workflows/android-release.yml) to build a signed release Android App Bundle (AAB) on GitHub-hosted runners.
 
 Add these repository or environment secrets before running the workflow:
 
@@ -144,8 +150,8 @@ The workflow:
 1. checks out the repo
 2. installs Java 17 with the Gradle cache enabled
 3. decodes the keystore from `ANDRODEX_ANDROID_KEYSTORE_BASE64`
-4. builds `android/app/build/outputs/apk/release/app-release.apk` with `assembleRelease`
-5. uploads the signed APK as the `androdex-release-apk` workflow artifact
+4. builds `android/app/build/outputs/bundle/release/app-release.aab` with `bundleRelease`
+5. uploads the signed app bundle as the `androdex-release-aab` workflow artifact
 
 It now runs automatically on every push to `main`. You can also trigger it manually from the Actions tab with `workflow_dispatch`, or by pushing a tag that matches `android-v*`.
 
@@ -154,6 +160,8 @@ Example command to create the base64 secret value locally:
 ```sh
 base64 -i android/release-keystore.jks | tr -d '\n'
 ```
+
+For Play Console submission assets, store-listing copy, policy drafts, and review notes, see [Docs/play-store/README.md](Docs/play-store/README.md).
 
 ## Quick Start
 

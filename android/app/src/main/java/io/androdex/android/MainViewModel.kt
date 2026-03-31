@@ -823,69 +823,85 @@ class MainViewModel(
     }
 
     fun requestCreateGitBranch() {
-        val snapshot = uiStateFlow.value
-        val threadId = snapshot.selectedThreadId ?: return
-        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
-        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
-            return
-        }
-        val branchName = snapshot.gitBranchDialog?.newBranchName?.trim().orEmpty()
-        if (branchName.isEmpty()) {
-            return
-        }
-        val operation = GitBranchUserOperation.Create(branchName)
-        val alert = gitBranchAlert(snapshot, operation)
-        if (alert != null) {
-            uiStateFlow.update {
-                it.copy(
-                    gitAlert = alert,
-                    pendingGitBranchOperation = operation,
-                    pendingGitRemoveWorktree = null,
-                )
+        viewModelScope.launch {
+            var snapshot = uiStateFlow.value
+            val threadId = snapshot.selectedThreadId ?: return@launch
+            val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
             }
-            return
+            val initialBranchName = snapshot.gitBranchDialog?.newBranchName?.trim().orEmpty()
+            if (initialBranchName.isEmpty()) {
+                return@launch
+            }
+            snapshot = ensureGitBranchContextLoaded(threadId, workingDirectory) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
+            }
+            val branchName = snapshot.gitBranchDialog?.newBranchName?.trim().orEmpty()
+            if (branchName.isEmpty()) {
+                return@launch
+            }
+            val operation = GitBranchUserOperation.Create(branchName)
+            val alert = gitBranchAlert(snapshot, operation)
+            if (alert != null) {
+                uiStateFlow.update {
+                    it.copy(
+                        gitAlert = alert,
+                        pendingGitBranchOperation = operation,
+                        pendingGitRemoveWorktree = null,
+                    )
+                }
+                return@launch
+            }
+            performGitCreateBranch(threadId, workingDirectory, branchName)
         }
-        performGitCreateBranch(threadId, workingDirectory, branchName)
     }
 
     fun requestSwitchGitBranch(branch: String) {
-        val snapshot = uiStateFlow.value
-        val threadId = snapshot.selectedThreadId ?: return
-        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
-        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
-            return
-        }
-        val trimmedBranch = branch.trim()
-        if (trimmedBranch.isEmpty()) {
-            return
-        }
-        val branchTargets = snapshot.gitStateByThread[threadId]?.branchTargets
-        if (trimmedBranch in branchTargets?.branchesCheckedOutElsewhere.orEmpty()) {
-            uiStateFlow.update {
-                it.copy(
-                    gitAlert = dismissOnlyGitAlert(
-                        title = "Branch switch failed",
-                        message = "Cannot switch branches: this branch is already open in another worktree.",
-                    ),
-                    pendingGitBranchOperation = null,
-                    pendingGitRemoveWorktree = null,
-                )
+        viewModelScope.launch {
+            var snapshot = uiStateFlow.value
+            val threadId = snapshot.selectedThreadId ?: return@launch
+            val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
             }
-            return
-        }
-        val operation = GitBranchUserOperation.SwitchTo(trimmedBranch)
-        val alert = gitBranchAlert(snapshot, operation)
-        if (alert != null) {
-            uiStateFlow.update {
-                it.copy(
-                    gitAlert = alert,
-                    pendingGitBranchOperation = operation,
-                    pendingGitRemoveWorktree = null,
-                )
+            val trimmedBranch = branch.trim()
+            if (trimmedBranch.isEmpty()) {
+                return@launch
             }
-            return
+            snapshot = ensureGitBranchContextLoaded(threadId, workingDirectory) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
+            }
+            val branchTargets = snapshot.gitStateByThread[threadId]?.branchTargets
+            if (trimmedBranch in branchTargets?.branchesCheckedOutElsewhere.orEmpty()) {
+                uiStateFlow.update {
+                    it.copy(
+                        gitAlert = dismissOnlyGitAlert(
+                            title = "Branch switch failed",
+                            message = "Cannot switch branches: this branch is already open in another worktree.",
+                        ),
+                        pendingGitBranchOperation = null,
+                        pendingGitRemoveWorktree = null,
+                    )
+                }
+                return@launch
+            }
+            val operation = GitBranchUserOperation.SwitchTo(trimmedBranch)
+            val alert = gitBranchAlert(snapshot, operation)
+            if (alert != null) {
+                uiStateFlow.update {
+                    it.copy(
+                        gitAlert = alert,
+                        pendingGitBranchOperation = operation,
+                        pendingGitRemoveWorktree = null,
+                    )
+                }
+                return@launch
+            }
+            performGitSwitchBranch(threadId, workingDirectory, trimmedBranch)
         }
-        performGitSwitchBranch(threadId, workingDirectory, trimmedBranch)
     }
 
     fun openGitWorktreeDialog() {
@@ -940,41 +956,51 @@ class MainViewModel(
     }
 
     fun requestCreateGitWorktree() {
-        val snapshot = uiStateFlow.value
-        val threadId = snapshot.selectedThreadId ?: return
-        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
-        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
-            return
-        }
-        val dialog = snapshot.gitWorktreeDialog ?: return
-        val branchName = dialog.branchName.trim()
-        val baseBranch = dialog.baseBranch.trim()
-        if (branchName.isEmpty() || baseBranch.isEmpty()) {
-            return
-        }
-        val operation = GitBranchUserOperation.CreateWorktree(
-            branchName = branchName,
-            baseBranch = baseBranch,
-            changeTransfer = dialog.changeTransfer,
-        )
-        val alert = gitBranchAlert(snapshot, operation)
-        if (alert != null) {
-            uiStateFlow.update {
-                it.copy(
-                    gitAlert = alert,
-                    pendingGitBranchOperation = operation,
-                    pendingGitRemoveWorktree = null,
-                )
+        viewModelScope.launch {
+            var snapshot = uiStateFlow.value
+            val threadId = snapshot.selectedThreadId ?: return@launch
+            val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
             }
-            return
+            val initialDialog = snapshot.gitWorktreeDialog ?: return@launch
+            if (initialDialog.branchName.trim().isEmpty() || initialDialog.baseBranch.trim().isEmpty()) {
+                return@launch
+            }
+            snapshot = ensureGitBranchContextLoaded(threadId, workingDirectory) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
+            }
+            val dialog = snapshot.gitWorktreeDialog ?: return@launch
+            val branchName = dialog.branchName.trim()
+            val baseBranch = dialog.baseBranch.trim()
+            if (branchName.isEmpty() || baseBranch.isEmpty()) {
+                return@launch
+            }
+            val operation = GitBranchUserOperation.CreateWorktree(
+                branchName = branchName,
+                baseBranch = baseBranch,
+                changeTransfer = dialog.changeTransfer,
+            )
+            val alert = gitBranchAlert(snapshot, operation)
+            if (alert != null) {
+                uiStateFlow.update {
+                    it.copy(
+                        gitAlert = alert,
+                        pendingGitBranchOperation = operation,
+                        pendingGitRemoveWorktree = null,
+                    )
+                }
+                return@launch
+            }
+            performGitCreateWorktree(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                branchName = branchName,
+                baseBranch = baseBranch,
+                changeTransfer = dialog.changeTransfer,
+            )
         }
-        performGitCreateWorktree(
-            threadId = threadId,
-            workingDirectory = workingDirectory,
-            branchName = branchName,
-            baseBranch = baseBranch,
-            changeTransfer = dialog.changeTransfer,
-        )
     }
 
     fun requestRemoveGitWorktree(branch: String, worktreePath: String) {
@@ -1795,6 +1821,20 @@ class MainViewModel(
         }
     }
 
+    private suspend fun ensureGitBranchContextLoaded(
+        threadId: String,
+        workingDirectory: String,
+    ): AndrodexUiState? {
+        var snapshot = uiStateFlow.value
+        val gitState = snapshot.gitStateByThread[threadId]
+        if (gitState.hasLoadedBranchContext() && gitState?.isLoadingBranchTargets != true) {
+            return snapshot
+        }
+        loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        snapshot = uiStateFlow.value
+        return snapshot.takeIf { it.gitStateByThread[threadId].hasLoadedBranchContext() }
+    }
+
     private fun performGitPull(threadId: String, workingDirectory: String) {
         runGitAction(threadId, GitActionKind.PULL) {
             val result = repository.gitPull(workingDirectory)
@@ -2575,6 +2615,10 @@ class MainViewModel(
 
     private fun AndrodexUiState.gitStateForThread(threadId: String): ThreadGitState? {
         return gitStateByThread[threadId]
+    }
+
+    private fun ThreadGitState?.hasLoadedBranchContext(): Boolean {
+        return this?.status != null && this.branchTargets != null
     }
 
     private fun selectedComposerRoot(state: AndrodexUiState): String? {

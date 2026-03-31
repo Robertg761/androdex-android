@@ -22,8 +22,11 @@ Androdex is a remote control system where:
 Depending on how the app is used, Androdex may handle:
 
 - pairing information such as relay URL, session ID, device ID, and cryptographic public keys
+- trusted-host and reconnect state stored on the device for secure reconnect flows
 - user-provided content such as prompts and conversation messages
+- user-selected image attachments when the user chooses photos from the camera or gallery
 - thread and conversation metadata
+- Android push notification tokens and notification authorization state when notifications are enabled
 - approval actions and local workflow actions initiated by the user
 
 ## How data is used
@@ -33,8 +36,10 @@ Androdex uses data to:
 - pair the Android client with the user's host bridge
 - route messages between the Android app and the host bridge
 - display threads, messages, and approval requests in the app
+- forward user-selected attachments to the paired host session when the user sends them
 - maintain secure encrypted sessions
 - store pairing and trusted-device information locally on the device
+- register the device for optional run-completion notifications when that feature is configured
 
 ## Encryption and transport
 
@@ -49,6 +54,8 @@ The Android app may store limited data locally on the device, including:
 - pairing details
 - trusted-device records
 - encrypted local persistence required for reconnect and secure operation
+- selected runtime preferences and per-thread runtime overrides
+- notification token state needed for optional push registration
 
 ## Data sharing
 
@@ -58,6 +65,7 @@ Data may be transmitted as part of core app functionality to:
 
 - the relay service used to connect the Android app and the host bridge
 - the host bridge running on the user's own computer
+- a push-notification provider or webhook chosen by the app operator if optional Android notifications are configured
 
 ## Ads
 

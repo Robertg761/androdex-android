@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -101,7 +102,7 @@ class MainViewModelGitWorkflowTest {
         viewModel.openGitBranchDialog()
         viewModel.updateGitBranchName("topic")
         viewModel.requestCreateGitBranch()
-        dispatcher.scheduler.runCurrent()
+        advanceUntilIdle()
 
         val alert = viewModel.uiState.value.gitAlert
         assertEquals("Local commits stay on main", alert?.title)
@@ -125,7 +126,7 @@ class MainViewModelGitWorkflowTest {
         val viewModel = prepareThreadViewModel(repository)
 
         viewModel.requestSwitchGitBranch("feature/existing")
-        dispatcher.scheduler.runCurrent()
+        advanceUntilIdle()
 
         val alert = viewModel.uiState.value.gitAlert
         assertEquals("Commit changes before switching branch?", alert?.title)
@@ -151,12 +152,29 @@ class MainViewModelGitWorkflowTest {
         viewModel.updateGitWorktreeBranchName("mobile-git")
         viewModel.updateGitWorktreeBaseBranch("develop")
         viewModel.requestCreateGitWorktree()
-        dispatcher.scheduler.runCurrent()
+        advanceUntilIdle()
 
         val alert = viewModel.uiState.value.gitAlert
         assertTrue(alert?.title?.contains("local changes", ignoreCase = true) == true)
         assertTrue(alert?.message?.contains("Switch the base branch") == true)
         assertTrue(repository.createdWorktrees.isEmpty())
+    }
+
+    @Test
+    fun requestCreateGitBranch_createsBranchAfterLazyGitContextLoad() = runTest(dispatcher) {
+        val repository = GitTestRepository().apply {
+            gitStatusResult = gitStatus(branch = "main", dirty = false)
+            gitBranchesWithStatusResult = gitBranchesResult(status = gitStatusResult)
+        }
+        val viewModel = prepareThreadViewModel(repository)
+
+        viewModel.openGitBranchDialog()
+        viewModel.updateGitBranchName("topic")
+        viewModel.requestCreateGitBranch()
+        advanceUntilIdle()
+
+        assertEquals(listOf("topic"), repository.createdBranches)
+        assertEquals(null, viewModel.uiState.value.gitAlert)
     }
 
     private fun prepareThreadViewModel(repository: GitTestRepository): MainViewModel {
@@ -187,7 +205,7 @@ class MainViewModelGitWorkflowTest {
         )
         dispatcher.scheduler.runCurrent()
         viewModel.openThread("thread-1")
-        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceUntilIdle()
         return viewModel
     }
 
@@ -260,6 +278,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
         defaultBranch = "main",
         status = gitStatusResult,
     )
+    val createdBranches = mutableListOf<String>()
     val createdWorktrees = mutableListOf<String>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
@@ -417,6 +436,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun gitCreateBranch(workingDirectory: String, name: String): GitCreateBranchResult {
+        createdBranches += name
         return GitCreateBranchResult("remodex/$name", gitStatusResult)
     }
 

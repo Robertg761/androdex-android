@@ -1,0 +1,32 @@
+Androdex lets you control Codex running on your own computer from Android.
+
+This app does not run Codex on the phone itself. Instead, it pairs your Android device with a host bridge running on your Mac so you can manage threads, projects, approvals, and runtime controls remotely.
+
+What you can do with Androdex:
+
+- Pair your phone with a host-local Codex runtime using a QR code or pairing payload
+- Open existing threads and create new ones from Android
+- Stream responses while work continues on the host machine
+- Switch projects and reconnect from a saved trusted pairing
+- Manage approvals, runtime settings, service tier, and model choices
+- Use Android-native Git actions for status, commit, push, pull, branch switching, and managed worktrees
+- Send photo attachments from the camera or gallery to the paired host workflow
+- Receive optional run-completion notifications when the host and notification path are configured
+
+Androdex is built for a host-local workflow:
+
+- your code and terminal actions stay on your own computer
+- Android acts as the paired remote control
+- relay transport is supported for cross-network access when configured
+
+Important:
+
+- You need a compatible host bridge and a local Codex environment on your own computer
+- Some features require the host bridge or relay configuration to be set up first
+- Camera and notification permissions are optional and only support their related features
+
+Best for:
+
+- developers who want host-local Codex execution with Android remote control
+- paired desktop-and-phone workflows
+- users who prefer their code and credentials to stay on their own machine

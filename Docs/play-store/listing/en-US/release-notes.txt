@@ -1,0 +1,3 @@
+First Google Play release of Androdex.
+
+Pair Android with a host-local Codex bridge, open and manage threads remotely, switch projects, use native Git workflows, send photo attachments, and reconnect from a saved trusted pairing.

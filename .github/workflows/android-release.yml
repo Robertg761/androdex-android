@@ -57,17 +57,17 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
 
-      - name: Build signed release APK
+      - name: Build signed release app bundle
         working-directory: android
         env:
           ANDRODEX_ANDROID_KEYSTORE_PATH: release-keystore.jks
           ANDRODEX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEYSTORE_PASSWORD }}
           ANDRODEX_ANDROID_KEY_ALIAS: ${{ secrets.ANDRODEX_ANDROID_KEY_ALIAS }}
           ANDRODEX_ANDROID_KEY_PASSWORD: ${{ secrets.ANDRODEX_ANDROID_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon bundleRelease
 
-      - name: Upload signed release APK
+      - name: Upload signed release app bundle
         uses: actions/upload-artifact@v4
         with:
-          name: androdex-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: androdex-release-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab

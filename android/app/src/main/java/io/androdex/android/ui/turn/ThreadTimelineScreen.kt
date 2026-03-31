@@ -530,6 +530,8 @@ internal fun ThreadTimelineScreen(
         GitBranchDialog(
             state = state.git.branchDialog,
             branchTargets = state.git.branchTargets,
+            isBranchContextLoading = state.git.isBranchContextLoading,
+            isBranchContextReady = state.git.isBranchContextReady,
             onDismiss = onDismissGitBranchDialog,
             onNameChange = onUpdateGitBranchName,
             onCreate = onRequestCreateGitBranch,
@@ -538,6 +540,8 @@ internal fun ThreadTimelineScreen(
         GitWorktreeDialog(
             state = state.git.worktreeDialog,
             branchTargets = state.git.branchTargets,
+            isBranchContextLoading = state.git.isBranchContextLoading,
+            isBranchContextReady = state.git.isBranchContextReady,
             onDismiss = onDismissGitWorktreeDialog,
             onBranchNameChange = onUpdateGitWorktreeBranchName,
             onBaseBranchChange = onUpdateGitWorktreeBaseBranch,
@@ -1450,6 +1454,8 @@ private fun GitCommitDialog(
 private fun GitBranchDialog(
     state: GitBranchDialogState?,
     branchTargets: GitBranchesWithStatusResult?,
+    isBranchContextLoading: Boolean,
+    isBranchContextReady: Boolean,
     onDismiss: () -> Unit,
     onNameChange: (String) -> Unit,
     onCreate: () -> Unit,
@@ -1470,6 +1476,17 @@ private fun GitBranchDialog(
                     label = { Text("New branch name") },
                     placeholder = { Text("topic/refactor") },
                 )
+                if (!isBranchContextReady) {
+                    Text(
+                        text = if (isBranchContextLoading) {
+                            "Loading Git status..."
+                        } else {
+                            "Git status is still loading..."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 branchTargets?.defaultBranch?.takeIf { it.isNotBlank() }?.let { defaultBranch ->
                     Text(
                         text = "Default branch: $defaultBranch",
@@ -1509,7 +1526,7 @@ private fun GitBranchDialog(
                         }
                         OutlinedButton(
                             onClick = { onSwitch(branch) },
-                            enabled = branch != branchTargets?.currentBranch,
+                            enabled = isBranchContextReady && branch != branchTargets?.currentBranch,
                         ) {
                             Text("Switch")
                         }
@@ -1520,7 +1537,7 @@ private fun GitBranchDialog(
         confirmButton = {
             Button(
                 onClick = onCreate,
-                enabled = state.newBranchName.trim().isNotEmpty(),
+                enabled = isBranchContextReady && state.newBranchName.trim().isNotEmpty(),
             ) {
                 Text("Create")
             }
@@ -1537,6 +1554,8 @@ private fun GitBranchDialog(
 private fun GitWorktreeDialog(
     state: GitWorktreeDialogState?,
     branchTargets: GitBranchesWithStatusResult?,
+    isBranchContextLoading: Boolean,
+    isBranchContextReady: Boolean,
     onDismiss: () -> Unit,
     onBranchNameChange: (String) -> Unit,
     onBaseBranchChange: (String) -> Unit,
@@ -1559,6 +1578,17 @@ private fun GitWorktreeDialog(
                     label = { Text("New worktree branch") },
                     placeholder = { Text("topic/mobile-git") },
                 )
+                if (!isBranchContextReady) {
+                    Text(
+                        text = if (isBranchContextLoading) {
+                            "Loading Git status..."
+                        } else {
+                            "Git status is still loading..."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     text = "Base branch",
                     style = MaterialTheme.typography.labelLarge,
@@ -1570,7 +1600,10 @@ private fun GitWorktreeDialog(
                 ) {
                     branchTargets?.branches.orEmpty().take(8).forEach { branch ->
                         val emphasized = branch == state.baseBranch
-                        OutlinedButton(onClick = { onBaseBranchChange(branch) }) {
+                        OutlinedButton(
+                            onClick = { onBaseBranchChange(branch) },
+                            enabled = isBranchContextReady,
+                        ) {
                             Text(if (emphasized) "• $branch" else branch)
                         }
                     }
@@ -1581,10 +1614,16 @@ private fun GitWorktreeDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.MOVE) }) {
+                    OutlinedButton(
+                        onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.MOVE) },
+                        enabled = isBranchContextReady,
+                    ) {
                         Text(if (state.changeTransfer == GitWorktreeChangeTransferMode.MOVE) "• Move" else "Move")
                     }
-                    OutlinedButton(onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.COPY) }) {
+                    OutlinedButton(
+                        onClick = { onTransferModeChange(GitWorktreeChangeTransferMode.COPY) },
+                        enabled = isBranchContextReady,
+                    ) {
                         Text(if (state.changeTransfer == GitWorktreeChangeTransferMode.COPY) "• Copy" else "Copy")
                     }
                 }
@@ -1632,7 +1671,9 @@ private fun GitWorktreeDialog(
         confirmButton = {
             Button(
                 onClick = onCreate,
-                enabled = state.branchName.trim().isNotEmpty() && state.baseBranch.trim().isNotEmpty(),
+                enabled = isBranchContextReady
+                    && state.branchName.trim().isNotEmpty()
+                    && state.baseBranch.trim().isNotEmpty(),
             ) {
                 Text("Create")
             }
