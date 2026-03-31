@@ -218,6 +218,8 @@ class AndrodexFeatureStateTest {
 
         assertEquals("30m ago", route.state.threadList.threads.single().updatedLabel)
         assertEquals("Androdex", route.state.threadList.threads.single().projectName)
+        assertEquals("C:\\Projects\\Androdex", route.state.threadList.threads.single().projectPath)
+        assertEquals("C:\\Projects\\Androdex", route.state.threadList.activeWorkspacePath)
         assertEquals(ThreadRunBadgeUiState.RUNNING, route.state.threadList.threads.single().runState)
         assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
@@ -302,6 +304,7 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.threadList.isLoading)
         assertFalse(route.state.threadList.showLoadingOverlay)
         assertEquals("No conversations yet", route.state.threadList.emptyState?.title)
+        assertFalse(route.state.threadList.emptyState?.message.orEmpty().contains("New Chat"))
     }
 
     @Test

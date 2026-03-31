@@ -365,8 +365,8 @@ class AndrodexService(
         }
     }
 
-    suspend fun createThread() {
-        val preferredWorkspace = stateFlow.value.activeWorkspacePath
+    suspend fun createThread(preferredWorkspacePath: String? = null) {
+        val preferredWorkspace = preferredWorkspacePath ?: stateFlow.value.activeWorkspacePath
         ensureWorkspaceActivated(preferredWorkspace)
         val thread = repository.startThread(preferredWorkspace)
         stateFlow.update { current ->

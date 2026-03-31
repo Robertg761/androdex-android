@@ -394,6 +394,31 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun createThread_activatesExplicitWorkspaceBeforeStartingThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "project-a", true),
+                    WorkspacePathSummary("/tmp/project-b", "project-b", false),
+                )
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        advanceUntilIdle()
+        service.createThread("/tmp/project-b")
+        advanceUntilIdle()
+
+        assertEquals(listOf("/tmp/project-b"), repository.activatedWorkspaces)
+        assertEquals(listOf("/tmp/project-b"), repository.startedThreadCwds)
+        assertEquals("/tmp/project-b", service.state.value.activeWorkspacePath)
+        assertEquals("thread-created", service.state.value.selectedThreadId)
+    }
+
+    @Test
     fun sendMessage_createsAndUsesThreadWhenBackgroundRefreshFails() = runTest {
         val repository = FakeRepository().apply {
             refreshThreadsError = IllegalStateException("Timed out waiting for 30000 ms")

@@ -1269,14 +1269,14 @@ class MainViewModel(
         service.closeThread()
     }
 
-    fun createThread() {
+    fun createThread(projectPath: String? = null) {
         clearComposerAutocomplete()
         viewModelScope.launch {
             uiStateFlow.update { it.copy(isBusy = true, busyLabel = "Creating thread...") }
             var createdThreadId: String? = null
             var workingDirectory: String? = null
             try {
-                service.createThread()
+                service.createThread(projectPath)
                 createdThreadId = service.state.value.selectedThreadId
                 workingDirectory = createdThreadId?.let { threadId ->
                     gitWorkingDirectoryForThread(threadId, uiStateFlow.value)

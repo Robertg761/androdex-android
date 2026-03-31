@@ -144,6 +144,29 @@ class MainViewModelWorkspaceTest {
     }
 
     @Test
+    fun createThread_usesExplicitWorkspaceAndActivatesIt() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true),
+                    WorkspacePathSummary("D:\\Client\\SiteB", "SiteB", false),
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+        viewModel.createThread("D:\\Client\\SiteB")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("D:\\Client\\SiteB"), repository.activatedWorkspaces)
+        assertEquals(listOf("D:\\Client\\SiteB"), repository.startedThreadCwds)
+        assertEquals("thread-created", viewModel.uiState.value.selectedThreadId)
+    }
+
+    @Test
     fun connect_doesNotAutoOpenProjectPicker() = runTest(dispatcher) {
         val repository = FakeRepository()
         val viewModel = MainViewModel(repository)

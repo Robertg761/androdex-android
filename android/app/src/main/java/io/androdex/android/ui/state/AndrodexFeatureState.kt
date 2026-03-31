@@ -167,6 +167,7 @@ internal data class HostAccountRateLimitUiState(
 )
 
 internal data class ThreadListPaneUiState(
+    val activeWorkspacePath: String?,
     val threads: List<ThreadListItemUiState>,
     val isLoading: Boolean,
     val showLoadingOverlay: Boolean,
@@ -178,6 +179,7 @@ internal data class ThreadListItemUiState(
     val title: String,
     val preview: String?,
     val projectName: String,
+    val projectPath: String?,
     val updatedLabel: String?,
     val runState: ThreadRunBadgeUiState?,
     val isForked: Boolean,
@@ -488,6 +490,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             title = thread.title,
             preview = thread.preview,
             projectName = thread.projectName,
+            projectPath = thread.cwd?.trim()?.takeIf { it.isNotEmpty() },
             updatedLabel = thread.updatedAtEpochMs?.let { relativeTimeLabel(it, nowEpochMs) },
             runState = threadRunBadge(thread.id),
             isForked = thread.forkedFromThreadId != null,
@@ -501,7 +504,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             message = if (activeWorkspacePath == null) {
                 "Choose a project to start chatting"
             } else {
-                "Tap \"New Chat\" to start one"
+                "Use the active project to start a chat."
             },
             showChooseProjectAction = activeWorkspacePath == null,
         )
@@ -510,6 +513,7 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
     }
 
     return ThreadListPaneUiState(
+        activeWorkspacePath = activeWorkspacePath,
         threads = items,
         isLoading = isLoading,
         showLoadingOverlay = showLoadingOverlay,

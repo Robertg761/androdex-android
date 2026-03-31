@@ -28,6 +28,7 @@ internal fun ThreadListPane(
                 expandedProjects + project
             }
         },
+        onCreateThread = { _ -> },
         onOpenThread = onOpenThread,
         modifier = Modifier,
         expandAllProjects = true,

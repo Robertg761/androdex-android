@@ -320,9 +320,9 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                 connection = sidebarState.connection,
                                 macName = sidebarState.trustedPair?.name,
                                 selectedThreadId = selectedThreadId,
-                                onCreateThread = {
+                                onCreateThread = { projectPath ->
                                     scope.launch { drawerState.close() }
-                                    viewModel.createThread()
+                                    viewModel.createThread(projectPath)
                                 },
                                 onOpenThread = { id ->
                                     scope.launch { drawerState.close() }

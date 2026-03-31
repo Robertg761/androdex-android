@@ -47,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,11 +80,10 @@ internal fun SidebarContent(
     connection: ConnectionBannerUiState,
     macName: String?,
     selectedThreadId: String?,
-    onCreateThread: () -> Unit,
+    onCreateThread: (String) -> Unit,
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val geometry = RemodexTheme.geometry
     var searchText by rememberSaveable { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
     var expandedProjects by rememberSaveable { mutableStateOf(setOf<String>()) }
@@ -99,7 +100,6 @@ internal fun SidebarContent(
                 searchFocused = false
             },
         )
-        SidebarNewChatButton(onCreate = onCreateThread)
         SidebarThreadCollection(
             threadList = threadList,
             searchText = searchText,
@@ -112,6 +112,7 @@ internal fun SidebarContent(
                     expandedProjects + project
                 }
             },
+            onCreateThread = onCreateThread,
             onOpenThread = onOpenThread,
             modifier = Modifier.weight(1f),
         )
@@ -221,105 +222,215 @@ private fun SidebarSearchField(
     }
 }
 
-// ── New Chat button ───────────────────────────────────────────────────────────
-
-@Composable
-private fun SidebarNewChatButton(onCreate: () -> Unit) {
-    val geometry = RemodexTheme.geometry
-
-    RemodexSelectionRow(
-        selected = false,
-        onClick = onCreate,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = geometry.rowHeight + geometry.spacing12)
-            .padding(horizontal = geometry.spacing4),
-        paddingValues = PaddingValues(
-            horizontal = geometry.sidebarRowHorizontalPadding,
-            vertical = geometry.spacing10,
-        ),
-    ) {
-        Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            tint = RemodexTheme.colors.textPrimary,
-            modifier = Modifier.size(20.dp),
-        )
-        Text(
-            text = "New Chat",
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontWeight = FontWeight.Medium,
-                fontSize = 15.sp,
-            ),
-            color = RemodexTheme.colors.textPrimary,
-        )
-    }
-}
+internal data class SidebarProjectGroupUiState(
+    val key: String,
+    val displayName: String,
+    val projectPath: String?,
+    val disambiguationLabel: String?,
+    val threadCount: Int,
+    val threads: List<ThreadListItemUiState>,
+    val canCreateThread: Boolean,
+)
 
 @Composable
 private fun SidebarProjectHeader(
     projectName: String,
+    projectPath: String?,
+    disambiguationLabel: String?,
     threadCount: Int,
     expanded: Boolean,
     onToggle: () -> Unit,
+    onCreateThread: (String) -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
     val interactionSource = remember { MutableInteractionSource() }
+    val displayName = projectName.trim().ifBlank { "No Project" }
 
-    // Display only the last path component (like remodex)
-    val displayName = projectName.trimEnd('/').substringAfterLast('/')
-        .ifBlank { projectName }
-
-    Surface(
-        onClick = onToggle,
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = geometry.spacing4)
-            .heightIn(min = geometry.rowHeight + geometry.spacing12)
-            .remodexPressedState(interactionSource = interactionSource),
-        color = Color.Transparent,
-        shape = RoundedCornerShape(geometry.cornerTiny),
-        interactionSource = interactionSource,
+            .padding(horizontal = geometry.spacing4),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
     ) {
-        Row(
+        Surface(
+            onClick = onToggle,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = geometry.sidebarRowHorizontalPadding,
-                    end = geometry.sidebarRowHorizontalPadding,
-                    top = geometry.spacing14,
-                    bottom = geometry.spacing6,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                .weight(1f)
+                .heightIn(min = geometry.rowHeight + geometry.spacing12)
+                .semantics {
+                    contentDescription = if (expanded) {
+                        "Collapse $displayName"
+                    } else {
+                        "Expand $displayName"
+                    }
+                }
+                .remodexPressedState(interactionSource = interactionSource),
+            color = Color.Transparent,
+            shape = RoundedCornerShape(geometry.cornerTiny),
+            interactionSource = interactionSource,
         ) {
-            Icon(
-                imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = if (expanded) "Collapse $displayName" else "Expand $displayName",
-                tint = RemodexTheme.colors.textSecondary,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = displayName.uppercase(),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 11.sp,
-                    letterSpacing = 0.5.sp,
-                ),
-                color = RemodexTheme.colors.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = threadCount.toString(),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 11.sp,
-                ),
-                color = RemodexTheme.colors.textSecondary,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = geometry.sidebarRowHorizontalPadding,
+                        end = geometry.sidebarRowHorizontalPadding,
+                        top = geometry.spacing14,
+                        bottom = geometry.spacing6,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = RemodexTheme.colors.textSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = displayName.uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.5.sp,
+                        ),
+                        color = RemodexTheme.colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    disambiguationLabel?.let { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = RemodexTheme.colors.textTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    text = threadCount.toString(),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                    ),
+                    color = RemodexTheme.colors.textSecondary,
+                )
+            }
+        }
+
+        if (projectPath != null) {
+            RemodexIconButton(
+                onClick = { onCreateThread(projectPath) },
+                contentDescription = "Create chat in $displayName",
+                modifier = Modifier.padding(top = geometry.spacing6),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = RemodexTheme.colors.textPrimary,
+                    modifier = Modifier.size(RemodexTheme.geometry.iconSize),
+                )
+            }
+        }
+    }
+}
+
+internal fun buildSidebarProjectGroups(
+    threadList: ThreadListPaneUiState,
+    searchText: String,
+): List<SidebarProjectGroupUiState> {
+    val normalizedSearchText = searchText.trim()
+    val filteredThreads = if (normalizedSearchText.isBlank()) {
+        threadList.threads
+    } else {
+        threadList.threads.filter { thread ->
+            thread.title.contains(normalizedSearchText, ignoreCase = true) ||
+                thread.projectName.contains(normalizedSearchText, ignoreCase = true) ||
+                thread.projectPath.orEmpty().contains(normalizedSearchText, ignoreCase = true) ||
+                thread.preview.orEmpty().contains(normalizedSearchText, ignoreCase = true)
+        }
+    }
+
+    val groupedThreads = filteredThreads.groupBy { thread ->
+        normalizedProjectPath(thread.projectPath) ?: NO_PROJECT_GROUP_KEY
+    }.toMutableMap()
+
+    val activeWorkspacePath = normalizedProjectPath(threadList.activeWorkspacePath)
+    if (activeWorkspacePath != null && activeWorkspacePath !in groupedThreads) {
+        val activeDisplayName = displayNameForProjectPath(activeWorkspacePath)
+        val shouldIncludeActiveProject = normalizedSearchText.isBlank() ||
+            activeDisplayName.contains(normalizedSearchText, ignoreCase = true) ||
+            activeWorkspacePath.contains(normalizedSearchText, ignoreCase = true)
+        if (shouldIncludeActiveProject) {
+            groupedThreads[activeWorkspacePath] = emptyList()
+        }
+    }
+
+    val displayNameCollisions = groupedThreads.keys
+        .mapNotNull { key ->
+            key.takeUnless { it == NO_PROJECT_GROUP_KEY }?.let(::displayNameForProjectPath)
+        }
+        .groupingBy { it.lowercase() }
+        .eachCount()
+
+    return groupedThreads.entries
+        .map { (groupKey, threads) ->
+            val projectPath = groupKey.takeUnless { it == NO_PROJECT_GROUP_KEY }
+            val displayName = projectPath?.let(::displayNameForProjectPath) ?: "No Project"
+            SidebarProjectGroupUiState(
+                key = groupKey,
+                displayName = displayName,
+                projectPath = projectPath,
+                disambiguationLabel = if (
+                    projectPath != null &&
+                    displayNameCollisions[displayName.lowercase()] ?: 0 > 1
+                ) {
+                    disambiguationLabelForProjectPath(projectPath)
+                } else {
+                    null
+                },
+                threadCount = threads.size,
+                threads = threads,
+                canCreateThread = projectPath != null,
             )
         }
+        .sortedWith(
+            compareBy<SidebarProjectGroupUiState> { it.projectPath == null }
+                .thenBy { it.displayName.lowercase() }
+                .thenBy { it.projectPath?.lowercase().orEmpty() },
+        )
+}
+
+private const val NO_PROJECT_GROUP_KEY = "__no_project__"
+
+private fun normalizedProjectPath(projectPath: String?): String? {
+    return projectPath?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+private fun displayNameForProjectPath(projectPath: String): String {
+    return projectPath
+        .trim()
+        .trimEnd('/', '\\')
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .ifBlank { projectPath }
+}
+
+private fun disambiguationLabelForProjectPath(projectPath: String): String {
+    val normalized = projectPath.trim().trimEnd('/', '\\')
+    val slashIndex = normalized.lastIndexOf('/')
+    val backslashIndex = normalized.lastIndexOf('\\')
+    val separatorIndex = maxOf(slashIndex, backslashIndex)
+    return if (separatorIndex > 0) {
+        normalized.substring(0, separatorIndex)
+    } else {
+        normalized
     }
 }
 
@@ -384,37 +495,14 @@ internal fun SidebarThreadCollection(
     selectedThreadId: String?,
     expandedProjects: Set<String>,
     onToggleProject: (String) -> Unit,
+    onCreateThread: (String) -> Unit,
     onOpenThread: (String) -> Unit,
     modifier: Modifier = Modifier,
     expandAllProjects: Boolean = false,
 ) {
     val geometry = RemodexTheme.geometry
-    val filteredThreads = remember(threadList.threads, searchText) {
-        if (searchText.isBlank()) {
-            threadList.threads
-        } else {
-            threadList.threads.filter { thread ->
-                thread.title.contains(searchText, ignoreCase = true) ||
-                    thread.projectName.contains(searchText, ignoreCase = true) ||
-                    thread.preview.orEmpty().contains(searchText, ignoreCase = true)
-            }
-        }
-    }
-    val groupedThreads = remember(filteredThreads) {
-        filteredThreads
-            .groupBy { thread ->
-                thread.projectName
-                    .trim()
-                    .ifBlank { "Untitled" }
-            }
-            .entries
-            .sortedBy { entry ->
-                if (entry.key == "Untitled") {
-                    "\uFFFF"
-                } else {
-                    entry.key.lowercase()
-                }
-            }
+    val projectGroups = remember(threadList, searchText) {
+        buildSidebarProjectGroups(threadList, searchText)
     }
 
     Box(modifier = modifier.fillMaxHeight()) {
@@ -433,7 +521,7 @@ internal fun SidebarThreadCollection(
                     }
                 }
 
-                threadList.emptyState != null && searchText.isBlank() -> {
+                threadList.emptyState != null && searchText.isBlank() && projectGroups.isEmpty() -> {
                     item {
                         SidebarListStatusCard(
                             title = threadList.emptyState.title,
@@ -442,7 +530,7 @@ internal fun SidebarThreadCollection(
                     }
                 }
 
-                filteredThreads.isEmpty() && searchText.isNotBlank() -> {
+                projectGroups.isEmpty() && searchText.isNotBlank() -> {
                     item {
                         SidebarListStatusCard(
                             title = "No matching conversations",
@@ -452,21 +540,24 @@ internal fun SidebarThreadCollection(
                 }
 
                 else -> {
-                    groupedThreads.forEach { (project, threads) ->
+                    projectGroups.forEach { projectGroup ->
                         val isExpanded = expandAllProjects ||
                             searchText.isNotBlank() ||
-                            selectedThreadId in threads.map { it.id } ||
-                            project in expandedProjects
-                        item(key = "project_$project") {
+                            projectGroup.threads.any { it.id == selectedThreadId } ||
+                            projectGroup.key in expandedProjects
+                        item(key = "project_${projectGroup.key}") {
                             SidebarProjectHeader(
-                                projectName = project,
-                                threadCount = threads.size,
+                                projectName = projectGroup.displayName,
+                                projectPath = projectGroup.projectPath.takeIf { projectGroup.canCreateThread },
+                                disambiguationLabel = projectGroup.disambiguationLabel,
+                                threadCount = projectGroup.threadCount,
                                 expanded = isExpanded,
-                                onToggle = { onToggleProject(project) },
+                                onToggle = { onToggleProject(projectGroup.key) },
+                                onCreateThread = onCreateThread,
                             )
                         }
                         if (isExpanded) {
-                            items(threads, key = { thread -> thread.id }) { thread ->
+                            items(projectGroup.threads, key = { thread -> thread.id }) { thread ->
                                 SidebarThreadRow(
                                     thread = thread,
                                     isSelected = thread.id == selectedThreadId,
