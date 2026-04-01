@@ -74,6 +74,61 @@ test("automatic thread refreshes preserve the current desktop context by default
   }]);
 });
 
+test("preserve-mode refresh coalesces the new-thread lifecycle into a single relaunch", async () => {
+  const refreshCalls = [];
+  let watchedThreads = 0;
+  let currentTime = 1_000;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    preserveModeThreadCooldownMs: 10_000,
+    now: () => currentTime,
+    refreshExecutor: async ({ targetUrl, refreshMode }) => {
+      refreshCalls.push({ targetUrl, refreshMode });
+    },
+    watchThreadRolloutFactory: () => {
+      watchedThreads += 1;
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "thread/started",
+    params: {
+      thread: {
+        id: "thread-preserve-once",
+      },
+    },
+  }));
+  await wait(10);
+
+  currentTime = 1_200;
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-preserve-once",
+    },
+  }));
+  await wait(10);
+
+  currentTime = 1_400;
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-preserve-once",
+      turnId: "turn-preserve-once",
+    },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, [{
+    targetUrl: "",
+    refreshMode: "relaunch-preserve",
+  }]);
+  assert.equal(watchedThreads, 0);
+});
+
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
   const refreshCalls = [];
   const refresher = new CodexDesktopRefresher({

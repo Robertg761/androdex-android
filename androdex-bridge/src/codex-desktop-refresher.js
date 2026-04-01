@@ -17,6 +17,7 @@ const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_PRESERVE_MODE_THREAD_COOLDOWN_MS = 10_000;
 const DEFAULT_ROUTE_THREAD_TARGETS = false;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
 const NEW_THREAD_DEEP_LINK = "codex://threads/new";
@@ -38,6 +39,7 @@ class CodexDesktopRefresher {
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    preserveModeThreadCooldownMs = DEFAULT_PRESERVE_MODE_THREAD_COOLDOWN_MS,
     routeThreadTargets = DEFAULT_ROUTE_THREAD_TARGETS,
   } = {}) {
     this.enabled = enabled;
@@ -56,6 +58,7 @@ class CodexDesktopRefresher {
     this.refreshBackend = refreshBackend
       || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.preserveModeThreadCooldownMs = preserveModeThreadCooldownMs;
     this.routeThreadTargets = routeThreadTargets;
 
     this.mode = "idle";
@@ -82,6 +85,8 @@ class CodexDesktopRefresher {
     this.runtimeRefreshAvailable = enabled;
     this.consecutiveRefreshFailures = 0;
     this.unavailableLogged = false;
+    this.lastPreserveRefreshThreadId = "";
+    this.lastPreserveRefreshAt = 0;
   }
 
   handleInbound(rawMessage) {
@@ -113,7 +118,7 @@ class CodexDesktopRefresher {
       }
 
       this.queueRefresh("phone", target, `phone ${method}`);
-      if (target.threadId) {
+      if (this.shouldWatchRolloutActivity() && target.threadId) {
         this.ensureWatcher(target.threadId);
       }
     }
@@ -128,6 +133,10 @@ class CodexDesktopRefresher {
     const method = parsed.method;
     if (method === "turn/completed") {
       this.clearFallbackTimer();
+      if (!this.shouldWatchRolloutActivity()) {
+        return;
+      }
+
       const turnId = extractTurnId(parsed);
       if (turnId && turnId === this.lastTurnIdRefreshed) {
         this.log(`refresh skipped (debounced): completion already refreshed for ${turnId}`);
@@ -144,7 +153,7 @@ class CodexDesktopRefresher {
       this.pendingNewThread = false;
       this.clearFallbackTimer();
       this.queueRefresh("phone", target, `codex ${method}`);
-      if (target?.threadId) {
+      if (this.shouldWatchRolloutActivity() && target?.threadId) {
         this.mode = "watching_thread";
         this.ensureWatcher(target.threadId);
       }
@@ -156,6 +165,8 @@ class CodexDesktopRefresher {
     this.clearPendingState();
     this.lastRefreshAt = 0;
     this.lastRefreshSignature = "";
+    this.lastPreserveRefreshThreadId = "";
+    this.lastPreserveRefreshAt = 0;
     this.mode = "idle";
     this.clearFallbackTimer();
     this.stopWatcher();
@@ -371,16 +382,27 @@ class CodexDesktopRefresher {
         targetThreadId,
       });
       const refreshSignature = `${refreshTarget.targetUrl || "app"}|${targetThreadId || "no-thread"}|${refreshTarget.refreshMode}`;
+      const shouldSuppressPreserveModeDuplicate = this.shouldSuppressPreserveModeDuplicateRefresh({
+        targetThreadId,
+        refreshMode: refreshTarget.refreshMode,
+      });
       if (
-        !shouldForceCompletionRefresh
-        && refreshSignature === this.lastRefreshSignature
-        && this.now() - this.lastRefreshAt < this.debounceMs
+        shouldSuppressPreserveModeDuplicate
+        || (
+          !shouldForceCompletionRefresh
+          && refreshSignature === this.lastRefreshSignature
+          && this.now() - this.lastRefreshAt < this.debounceMs
+        )
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
         const refreshResult = await this.executeRefresh(refreshTarget);
         this.lastRefreshAt = this.now();
         this.lastRefreshSignature = refreshSignature;
+        this.noteSuccessfulRefresh({
+          targetThreadId,
+          refreshMode: refreshTarget.refreshMode,
+        });
         this.consecutiveRefreshFailures = 0;
         didRefresh = true;
         const summary = summarizeRefreshResult(refreshResult);
@@ -458,6 +480,30 @@ class CodexDesktopRefresher {
   clearPendingCompletionTarget() {
     this.pendingCompletionTargetUrl = "";
     this.pendingCompletionTargetThreadId = "";
+  }
+
+  shouldWatchRolloutActivity() {
+    return this.routeThreadTargets;
+  }
+
+  shouldSuppressPreserveModeDuplicateRefresh({ targetThreadId, refreshMode }) {
+    if (refreshMode !== "relaunch-preserve" || !targetThreadId) {
+      return false;
+    }
+
+    return (
+      this.lastPreserveRefreshThreadId === targetThreadId
+      && this.now() - this.lastPreserveRefreshAt < this.preserveModeThreadCooldownMs
+    );
+  }
+
+  noteSuccessfulRefresh({ targetThreadId, refreshMode }) {
+    if (refreshMode !== "relaunch-preserve" || !targetThreadId) {
+      return;
+    }
+
+    this.lastPreserveRefreshThreadId = targetThreadId;
+    this.lastPreserveRefreshAt = this.now();
   }
 
   handleWatcherEvent(event) {
