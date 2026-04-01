@@ -3,51 +3,141 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Androdex</title>
+    <title>Androdex Closed Beta</title>
     <meta
       name="description"
-      content="Androdex is an Android remote client for controlling Codex running on your own computer."
+      content="Androdex is in closed beta. Request access to the Android remote client for host-local Codex workflows."
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;700&family=Cormorant+Garamond:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/png" href="/app-icon-512.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
-    <main class="shell">
-      <section class="card hero">
-        <p class="eyebrow">Androdex</p>
-        <h1>Host-local Codex, remote control from Android.</h1>
-        <p class="lede">
-          Androdex connects an Android client to a host bridge running on your own
-          computer so you can work with Codex away from the keyboard.
-        </p>
-        <div class="actions">
-          <a class="button" href="/privacy-policy/">Read the privacy policy</a>
-          <a class="button secondary" href="https://github.com/Robertg761/androdex">View the repository</a>
+  <body class="landing-page">
+    <main class="page-shell">
+      <section class="hero-panel">
+        <header class="topbar">
+          <a class="brand" href="/">
+            <img class="brand-mark" src="/app-icon-512.png" alt="" />
+            <span>Androdex</span>
+          </a>
+          <nav class="topnav" aria-label="Primary">
+            <a href="#request-access">Request access</a>
+            <a href="/privacy-policy/">Privacy</a>
+            <a href="https://github.com/Robertg761/androdex">GitHub</a>
+          </nav>
+        </header>
+
+        <section class="hero-copy">
+          <img class="hero-mark" src="/app-icon-512.png" alt="Androdex app logo" />
+          <p class="kicker">Closed beta</p>
+          <h1>Codex on your computer. Android in your hand.</h1>
+          <p>
+            Androdex is an Android remote client for host-local Codex workflows. It
+            is in closed beta right now, and access is being granted by request.
+          </p>
+          <p class="hero-note">
+            Leave your email if you want an invite or updates when more spots open.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#request-access">Request access</a>
+            <a class="button button-secondary" href="/privacy-policy/">Privacy policy</a>
+          </div>
+        </section>
+      </section>
+
+      <section class="facts-grid" aria-label="Product summary">
+        <article class="panel fact-card">
+          <p class="fact-kicker">Runtime</p>
+          <h2>Host-local first</h2>
+          <p>Codex runs on your own computer instead of inside a hosted workspace.</p>
+        </article>
+
+        <article class="panel fact-card">
+          <p class="fact-kicker">Access</p>
+          <h2>Closed beta</h2>
+          <p>Requests are reviewed manually while the product is still being tightened up.</p>
+        </article>
+
+        <article class="panel fact-card">
+          <p class="fact-kicker">Waitlist</p>
+          <h2>Email required</h2>
+          <p>Your email is how invite decisions and rollout updates will reach you.</p>
+        </article>
+      </section>
+
+      <section class="panel request-panel" id="request-access">
+        <div class="request-copy">
+          <p class="kicker">Request access</p>
+          <h2>Join the waitlist for the closed beta.</h2>
+          <p>
+            Send your email and a short note about how you would use Androdex.
+          </p>
+          <p class="request-note">
+            This site is ready for a lightweight static form backend. Replace the
+            placeholder Formspree endpoint and submissions can go straight to your
+            inbox.
+          </p>
         </div>
+
+        <form
+          class="request-form"
+          id="beta-request-form"
+          action="https://formspree.io/f/mlgolebk"
+          method="post"
+          novalidate
+        >
+          <input
+            type="hidden"
+            name="subject"
+            value="Androdex closed beta request from {{email}}"
+          />
+          <div class="honeypot-field" aria-hidden="true">
+            <label for="company_site">Leave this field empty</label>
+            <input id="company_site" name="_gotcha" type="text" tabindex="-1" autocomplete="off" />
+          </div>
+
+          <label>
+            Name
+            <input name="name" type="text" autocomplete="name" placeholder="Your name" />
+          </label>
+
+          <label>
+            Email
+            <input
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="you@company.com"
+              required
+            />
+          </label>
+
+          <label>
+            What would you use Androdex for?
+            <textarea
+              name="use_case"
+              rows="5"
+              placeholder="A sentence or two is enough."
+            ></textarea>
+          </label>
+
+          <button class="button button-primary form-button" type="submit">
+            Request beta access
+          </button>
+          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+        </form>
       </section>
 
-      <section class="card content">
-        <section>
-          <h2>What this site is for</h2>
-          <p>
-            This site exists to host the public privacy policy required for app
-            distribution and to provide a stable public home for Androdex legal and
-            support links.
-          </p>
-        </section>
-
-        <section>
-          <h2>Support</h2>
-          <p>
-            For support or bug reports, use the
-            <a href="https://github.com/Robertg761/androdex/issues">GitHub issue tracker</a>.
-          </p>
-        </section>
+      <section class="closing-strip">
+        <p>Androdex is built around user-owned runtime, pairing, and remote access.</p>
       </section>
-
-      <p class="footer">
-        Androdex is open source and designed around user-owned host runtime and
-        relay-compatible remote connectivity.
-      </p>
     </main>
+
+    <script src="/app.js"></script>
   </body>
 </html>
