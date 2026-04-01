@@ -3,141 +3,98 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Androdex Closed Beta</title>
-    <meta
-      name="description"
-      content="Androdex is in closed beta. Request access to the Android remote client for host-local Codex workflows."
-    />
+    <title>Androdex</title>
+    <meta name="description" content="Androdex is in closed beta. Request access to the Android remote client for host-local Codex workflows." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;700&family=Cormorant+Garamond:wght@500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
     <link rel="icon" type="image/png" href="/app-icon-512.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="landing-page">
-    <main class="page-shell">
-      <section class="hero-panel">
-        <header class="topbar">
-          <a class="brand" href="/">
-            <img class="brand-mark" src="/app-icon-512.png" alt="" />
-            <span>Androdex</span>
-          </a>
-          <nav class="topnav" aria-label="Primary">
-            <a href="#request-access">Request access</a>
-            <a href="/privacy-policy/">Privacy</a>
-            <a href="https://github.com/Robertg761/androdex">GitHub</a>
-          </nav>
-        </header>
+  <body>
+    <div class="site-wrapper">
+      <header class="site-header">
+        <a class="brand" href="/">
+          <img class="brand-logo" src="/app-icon-512.png" alt="Androdex" />
+          <span>Androdex</span>
+        </a>
+        <nav class="site-nav">
+          <a href="#beta">Request Access</a>
+          <a href="/privacy-policy/">Privacy</a>
+          <a href="https://github.com/Robertg761/androdex" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </header>
 
-        <section class="hero-copy">
-          <img class="hero-mark" src="/app-icon-512.png" alt="Androdex app logo" />
-          <p class="kicker">Closed beta</p>
-          <h1>Codex on your computer. Android in your hand.</h1>
-          <p>
-            Androdex is an Android remote client for host-local Codex workflows. It
-            is in closed beta right now, and access is being granted by request.
+      <main>
+        <section class="hero">
+          <span class="eyebrow">Closed Beta</span>
+          <h1 class="hero-title">Host-local Codex workflows.<br />Controlled from Android.</h1>
+          <p class="hero-subtitle">
+            Use your Android phone to control Codex running on your own computer, with secure pairing and relay-backed remote access when you need it.
           </p>
-          <p class="hero-note">
-            Leave your email if you want an invite or updates when more spots open.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#request-access">Request access</a>
-            <a class="button button-secondary" href="/privacy-policy/">Privacy policy</a>
-          </div>
+          <p class="hero-note">Current setup: macOS host bridge, Android client.</p>
         </section>
-      </section>
 
-      <section class="facts-grid" aria-label="Product summary">
-        <article class="panel fact-card">
-          <p class="fact-kicker">Runtime</p>
-          <h2>Host-local first</h2>
-          <p>Codex runs on your own computer instead of inside a hosted workspace.</p>
-        </article>
-
-        <article class="panel fact-card">
-          <p class="fact-kicker">Access</p>
-          <h2>Closed beta</h2>
-          <p>Requests are reviewed manually while the product is still being tightened up.</p>
-        </article>
-
-        <article class="panel fact-card">
-          <p class="fact-kicker">Waitlist</p>
-          <h2>Email required</h2>
-          <p>Your email is how invite decisions and rollout updates will reach you.</p>
-        </article>
-      </section>
-
-      <section class="panel request-panel" id="request-access">
-        <div class="request-copy">
-          <p class="kicker">Request access</p>
-          <h2>Join the waitlist for the closed beta.</h2>
-          <p>
-            Send your email and a short note about how you would use Androdex.
-          </p>
-          <p class="request-note">
-            This site is ready for a lightweight static form backend. Replace the
-            placeholder Formspree endpoint and submissions can go straight to your
-            inbox.
-          </p>
-        </div>
-
-        <form
-          class="request-form"
-          id="beta-request-form"
-          action="https://formspree.io/f/mlgolebk"
-          method="post"
-          novalidate
-        >
-          <input
-            type="hidden"
-            name="subject"
-            value="Androdex closed beta request from {{email}}"
-          />
-          <div class="honeypot-field" aria-hidden="true">
-            <label for="company_site">Leave this field empty</label>
-            <input id="company_site" name="_gotcha" type="text" tabindex="-1" autocomplete="off" />
+        <section class="features">
+          <div class="feature-item">
+            <div class="feature-number">01</div>
+            <div class="feature-content">
+              <h3>Host-local First</h3>
+              <p>Codex runs on your computer. Your repository, git commands, and workspace stay on the host instead of moving to your phone.</p>
+            </div>
           </div>
+          
+          <div class="feature-item">
+            <div class="feature-number">02</div>
+            <div class="feature-content">
+              <h3>Secure Pairing</h3>
+              <p>Pair your phone with your computer once, then use Androdex over an encrypted connection for app traffic between them.</p>
+            </div>
+          </div>
+          
 
-          <label>
-            Name
-            <input name="name" type="text" autocomplete="name" placeholder="Your name" />
-          </label>
+        </section>
 
-          <label>
-            Email
-            <input
-              name="email"
-              type="email"
-              autocomplete="email"
-              placeholder="you@company.com"
-              required
-            />
-          </label>
+        <section id="beta" class="waitlist-section">
+          <div class="waitlist-header">
+            <h2>Join the Waitlist</h2>
+            <p>We are currently reviewing requests manually to ensure early stability. Leave your details below.</p>
+          </div>
+          
+          <form id="beta-request-form" class="waitlist-form" action="https://formspree.io/f/mlgolebk" method="post" novalidate>
+            <input type="hidden" name="subject" value="Androdex closed beta request from {{email}}" />
+            <div class="sr-only" aria-hidden="true">
+              <label for="company_site">Leave this field empty</label>
+              <input id="company_site" name="_gotcha" type="text" tabindex="-1" autocomplete="off" />
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <input id="name" name="name" type="text" placeholder="Name" required />
+              </div>
+              <div class="form-group">
+                <input id="email" name="email" type="email" placeholder="Email Address" required />
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <textarea id="use_case" name="use_case" rows="1" placeholder="How do you plan to use Androdex?" required></textarea>
+            </div>
+            
+            <button type="submit" class="btn">Submit Request</button>
+            <p id="form-status" class="form-status" aria-live="polite"></p>
+          </form>
+        </section>
+      </main>
 
-          <label>
-            What would you use Androdex for?
-            <textarea
-              name="use_case"
-              rows="5"
-              placeholder="A sentence or two is enough."
-            ></textarea>
-          </label>
-
-          <button class="button button-primary form-button" type="submit">
-            Request beta access
-          </button>
-          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
-        </form>
-      </section>
-
-      <section class="closing-strip">
-        <p>Androdex is built around user-owned runtime, pairing, and remote access.</p>
-      </section>
-    </main>
-
+      <footer class="site-footer">
+        <p>&copy; 2026 Androdex.</p>
+        <div class="footer-links">
+          <a href="/privacy-policy/">Privacy Policy</a>
+          <a href="https://github.com/Robertg761/androdex">GitHub</a>
+        </div>
+      </footer>
+    </div>
     <script src="/app.js"></script>
   </body>
 </html>
