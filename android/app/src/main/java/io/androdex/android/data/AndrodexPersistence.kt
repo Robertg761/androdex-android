@@ -16,20 +16,24 @@ open class AndrodexPersistence internal constructor(
 ) {
     constructor(context: Context) : this(SecureStore(context))
 
-    private var startupNotice: String?
+    private var startupReport: SecureStateStartupReport
 
     init {
-        startupNotice = sanitizeUnreadableSecureState()
+        startupReport = sanitizeUnreadableSecureState()
         migrateLegacySavedPairingIfNeeded()
     }
 
     fun hasSavedPairing(): Boolean = loadSavedRelaySession() != null
 
     fun takeStartupNotice(): String? {
-        val notice = startupNotice
-        startupNotice = null
+        val notice = startupReport.notice
+        startupReport = startupReport.copy(notice = null)
         return notice
     }
+
+    fun startupBlockedTrustDetail(): String? = startupReport.blockedTrustDetail
+
+    fun hasStartupBlockedTrust(): Boolean = !startupReport.blockedTrustDetail.isNullOrBlank()
 
     fun loadSavedRelaySession(): SavedRelaySession? {
         val current = secureStore.readString(KEY_SAVED_RELAY_SESSION)
@@ -69,6 +73,10 @@ open class AndrodexPersistence internal constructor(
         secureStore.writeString(KEY_PHONE_IDENTITY, identityState.toJson().toString())
     }
 
+    fun clearPhoneIdentity() {
+        secureStore.remove(KEY_PHONE_IDENTITY)
+    }
+
     fun loadTrustedMacRegistry(): TrustedMacRegistry {
         val raw = secureStore.readString(KEY_TRUSTED_MACS) ?: return TrustedMacRegistry.empty
         return runCatching { TrustedMacRegistry.fromJson(JSONObject(raw)) }.getOrDefault(TrustedMacRegistry.empty)
@@ -76,6 +84,10 @@ open class AndrodexPersistence internal constructor(
 
     fun saveTrustedMacRegistry(registry: TrustedMacRegistry) {
         secureStore.writeString(KEY_TRUSTED_MACS, registry.toJson().toString())
+    }
+
+    fun clearTrustedMacRegistry() {
+        secureStore.remove(KEY_TRUSTED_MACS)
     }
 
     fun loadLastTrustedMacDeviceId(): String? {
@@ -91,16 +103,22 @@ open class AndrodexPersistence internal constructor(
         }
     }
 
+    fun clearAllPairingState() {
+        clearSavedRelaySession()
+        clearPhoneIdentity()
+        clearTrustedMacRegistry()
+        saveLastTrustedMacDeviceId(null)
+        startupReport = SecureStateStartupReport()
+    }
+
     fun loadLastAppliedBridgeOutboundSeq(): Int {
-        return loadSavedRelaySession()?.lastAppliedBridgeOutboundSeq
-            ?: secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull()
+        return secureStore.readString(KEY_LAST_APPLIED_SEQ)?.toIntOrNull()
+            ?: loadSavedRelaySession()?.lastAppliedBridgeOutboundSeq
             ?: 0
     }
 
     fun saveLastAppliedBridgeOutboundSeq(value: Int) {
-        secureStore.writeString(KEY_LAST_APPLIED_SEQ, value.toString())
-        val currentSession = loadSavedRelaySession() ?: return
-        saveSavedRelaySession(currentSession.copy(lastAppliedBridgeOutboundSeq = value.coerceAtLeast(0)))
+        secureStore.writeString(KEY_LAST_APPLIED_SEQ, value.coerceAtLeast(0).toString())
     }
 
     fun loadSelectedModelId(): String? {
@@ -164,7 +182,7 @@ open class AndrodexPersistence internal constructor(
         }
     }
 
-    private fun sanitizeUnreadableSecureState(): String? {
+    private fun sanitizeUnreadableSecureState(): SecureStateStartupReport {
         val savedRelaySessionState = secureStore.readStringState(KEY_SAVED_RELAY_SESSION)
         val pairingState = secureStore.readStringState(KEY_PAIRING)
         val phoneIdentityState = secureStore.readStringState(KEY_PHONE_IDENTITY)
@@ -187,16 +205,7 @@ open class AndrodexPersistence internal constructor(
         if (savedRelaySessionUnreadable) {
             clearSavedRelaySession()
         }
-        if (trustedMacUnreadable) {
-            secureStore.remove(KEY_TRUSTED_MACS)
-        }
-        if (lastTrustedMacUnreadable || trustedMacUnreadable) {
-            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
-        }
-        if (phoneIdentityUnreadable) {
-            clearSavedRelaySession()
-            secureStore.remove(KEY_PHONE_IDENTITY)
-            secureStore.remove(KEY_TRUSTED_MACS)
+        if (lastTrustedMacUnreadable) {
             secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         }
 
@@ -216,10 +225,16 @@ open class AndrodexPersistence internal constructor(
             secureStore.remove(KEY_THREAD_RUNTIME_OVERRIDES)
         }
 
-        return buildSecureStateRecoveryNotice(
-            savedRelaySessionUnreadable = savedRelaySessionUnreadable,
-            phoneIdentityUnreadable = phoneIdentityUnreadable,
-            trustedMacUnreadable = trustedMacUnreadable || lastTrustedMacUnreadable,
+        return SecureStateStartupReport(
+            notice = buildSecureStateRecoveryNotice(
+                savedRelaySessionUnreadable = savedRelaySessionUnreadable,
+                phoneIdentityUnreadable = phoneIdentityUnreadable,
+                trustedMacUnreadable = trustedMacUnreadable || lastTrustedMacUnreadable,
+            ),
+            blockedTrustDetail = buildBlockedDurableTrustDetail(
+                phoneIdentityUnreadable = phoneIdentityUnreadable,
+                trustedMacUnreadable = trustedMacUnreadable,
+            ),
         )
     }
 
@@ -253,6 +268,11 @@ open class AndrodexPersistence internal constructor(
     }
 }
 
+internal data class SecureStateStartupReport(
+    val notice: String? = null,
+    val blockedTrustDetail: String? = null,
+)
+
 internal fun PairingPayload.toSavedRelaySession(
     lastAppliedBridgeOutboundSeq: Int = 0,
 ): SavedRelaySession? {
@@ -277,13 +297,28 @@ internal fun buildSecureStateRecoveryNotice(
 ): String? {
     return when {
         phoneIdentityUnreadable -> {
-            "This Android device can no longer read its secure identity after an install or restore change. Trusted reconnect was reset, so scan a fresh QR code to pair again."
+            "Androdex could not read this phone's saved trusted identity. Durable trust was preserved, but automatic reconnect is blocked until you repair with a fresh QR or forget the trusted host."
         }
         savedRelaySessionUnreadable -> {
-            "The saved live relay session was unreadable, so Androdex cleared only that reconnect target. Your trusted host record was kept when possible."
+            "The saved live relay session was unreadable, so Androdex cleared only that disposable reconnect target. Your trusted host details were kept when possible."
         }
         trustedMacUnreadable -> {
-            "The trusted host registry was unreadable, so only the remembered trust records were cleared. A still-valid live relay session can keep working until it expires."
+            "Androdex could not read the trusted host registry. Durable trust was preserved, but automatic reconnect is blocked until you repair with a fresh QR or forget the trusted host."
+        }
+        else -> null
+    }
+}
+
+internal fun buildBlockedDurableTrustDetail(
+    phoneIdentityUnreadable: Boolean,
+    trustedMacUnreadable: Boolean,
+): String? {
+    return when {
+        phoneIdentityUnreadable -> {
+            "This Android device cannot read its saved trusted identity, so secure reconnect is blocked. Repair with a fresh QR code or forget the trusted host on this phone."
+        }
+        trustedMacUnreadable -> {
+            "This Android device cannot read its trusted host registry, so secure reconnect is blocked. Repair with a fresh QR code or forget the trusted host on this phone."
         }
         else -> null
     }

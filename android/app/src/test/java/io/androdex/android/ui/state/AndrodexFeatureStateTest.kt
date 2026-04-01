@@ -130,6 +130,32 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun pairingRoute_surfacesTrustBlockedRepairState() {
+        val state = AndrodexUiState(
+            hasSeenFirstPairingOnboarding = true,
+            hasSavedPairing = true,
+            trustedPairSnapshot = TrustedPairSnapshot(
+                deviceId = "host-1234",
+                relayUrl = "wss://relay.example.com/socket",
+                fingerprint = "ABCD1234EFGH5678",
+                lastPairedAtEpochMs = 1_000L,
+            ),
+            connectionStatus = ConnectionStatus.TRUST_BLOCKED,
+            connectionDetail = "Local trust is unreadable.",
+        )
+
+        val appState = state.toAppUiState(isSettingsVisible = false)
+        val route = appState.destination as AndrodexDestinationUiState.Pairing
+        val homeState = state.toHomeScreenUiState()
+
+        assertEquals("Repair With Fresh QR", route.state.reconnectButtonLabel)
+        assertTrue(route.state.reconnectEnabled)
+        assertEquals(ConnectionStatus.TRUST_BLOCKED, route.state.connection.status)
+        assertEquals("Repair with fresh QR", route.state.trustedPair?.statusLabel)
+        assertEquals("Local Trust Blocked", homeState.bridgeStatus.title)
+    }
+
+    @Test
     fun pairingRoute_surfacesAccountSourceAndRateLimits() {
         val state = AndrodexUiState(
             hasSeenFirstPairingOnboarding = true,
@@ -252,6 +278,17 @@ class AndrodexFeatureStateTest {
         assertEquals(SharedStatusTone.Warning, repairState.bridgeStatus.tone)
         assertEquals("Update required", updateState.bridgeStatus.statusLabel)
         assertEquals(SharedStatusTone.Warning, updateState.bridgeStatus.tone)
+    }
+
+    @Test
+    fun homeRoute_marksTrustBlockedBridgeStateWithWarningTone() {
+        val blockedState = AndrodexUiState(
+            connectionStatus = ConnectionStatus.TRUST_BLOCKED,
+        ).toHomeScreenUiState()
+
+        assertEquals("Local Trust Blocked", blockedState.bridgeStatus.title)
+        assertEquals("Blocked", blockedState.bridgeStatus.statusLabel)
+        assertEquals(SharedStatusTone.Warning, blockedState.bridgeStatus.tone)
     }
 
     @Test

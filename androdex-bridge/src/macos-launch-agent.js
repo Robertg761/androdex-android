@@ -114,7 +114,7 @@ async function startMacOSBridgeService({
     };
   }
 
-  const pairingSession = await waitForFreshPairingSession({
+  const readyPairing = await waitForPairingReadiness({
     env,
     fsImpl,
     startedAt,
@@ -123,7 +123,8 @@ async function startMacOSBridgeService({
   });
   return {
     plistPath,
-    pairingSession,
+    pairingSession: readyPairing.pairingSession,
+    bridgeStatus: readyPairing.bridgeStatus,
   };
 }
 
@@ -305,7 +306,7 @@ function buildLaunchAgentPlist({
 `;
 }
 
-async function waitForFreshPairingSession({
+async function waitForPairingReadiness({
   env = process.env,
   fsImpl = fs,
   startedAt = Date.now(),
@@ -313,19 +314,37 @@ async function waitForFreshPairingSession({
   intervalMs = DEFAULT_PAIRING_WAIT_INTERVAL_MS,
 } = {}) {
   const deadline = Date.now() + timeoutMs;
+  let lastBridgeStatus = null;
 
   while (Date.now() <= deadline) {
     const pairingSession = readPairingSession({ env, fsImpl });
-    const createdAt = Date.parse(pairingSession?.createdAt || "");
-    if (pairingSession?.pairingPayload && Number.isFinite(createdAt) && createdAt >= startedAt) {
-      return pairingSession;
+    const bridgeStatus = readBridgeStatus({ env, fsImpl });
+    const pairingCreatedAt = Date.parse(pairingSession?.createdAt || "");
+    const bridgeUpdatedAt = Date.parse(bridgeStatus?.updatedAt || "");
+    const hasFreshPairingPayload = Boolean(
+      pairingSession?.pairingPayload
+      && Number.isFinite(pairingCreatedAt)
+      && pairingCreatedAt >= startedAt
+    );
+    const relayConnected = bridgeStatus?.connectionStatus === "connected"
+      && Number.isFinite(bridgeUpdatedAt)
+      && bridgeUpdatedAt >= startedAt;
+
+    lastBridgeStatus = bridgeStatus;
+    if (hasFreshPairingPayload && relayConnected) {
+      return {
+        pairingSession,
+        bridgeStatus,
+      };
     }
     await sleep(intervalMs);
   }
 
+  const lastError = normalizeNonEmptyString(lastBridgeStatus?.lastError);
   throw new Error(
-    `Timed out waiting for the macOS bridge service to publish a pairing QR. `
+    `Timed out waiting for the macOS bridge service to publish a ready pairing QR. `
     + `Check ${resolveBridgeStderrLogPath({ env })}.`
+    + (lastError ? ` Last relay note: ${lastError}` : "")
   );
 }
 
@@ -559,4 +578,5 @@ module.exports = {
   runMacOSBridgeService,
   startMacOSBridgeService,
   stopMacOSBridgeService,
+  waitForPairingReadiness,
 };

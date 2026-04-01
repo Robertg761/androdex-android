@@ -57,6 +57,7 @@ internal fun connectionStatusDotColor(status: ConnectionStatus): Color = when (s
     ConnectionStatus.CONNECTING,
     ConnectionStatus.HANDSHAKING,
     ConnectionStatus.RETRYING_SAVED_PAIRING -> RemodexTheme.colors.statusDotSyncing
+    ConnectionStatus.TRUST_BLOCKED,
     ConnectionStatus.RECONNECT_REQUIRED,
     ConnectionStatus.UPDATE_REQUIRED -> RemodexTheme.colors.statusDotError
     ConnectionStatus.DISCONNECTED -> RemodexTheme.colors.statusDotOffline
@@ -78,6 +79,9 @@ internal fun connectionBannerPresentation(
     val guidance = when (status) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> {
             "Saved pairing is still trusted. We'll keep retrying automatically when the host or relay comes back."
+        }
+        ConnectionStatus.TRUST_BLOCKED -> {
+            "This phone cannot read its local trusted identity. Repair with a fresh QR code or forget the trusted host to reset local pairing."
         }
         ConnectionStatus.RECONNECT_REQUIRED -> {
             "Saved pairing needs attention. Reconnect from the trusted pair first, then scan a fresh QR if trust changed."
@@ -108,6 +112,12 @@ internal fun connectionBannerPresentation(
             title = "Waiting for trusted host",
             badgeLabel = "Retrying",
             tone = SharedStatusTone.Accent,
+            guidance = guidance,
+        )
+        ConnectionStatus.TRUST_BLOCKED -> ConnectionBannerPresentation(
+            title = "Local trust needs repair",
+            badgeLabel = "Blocked",
+            tone = SharedStatusTone.Warning,
             guidance = guidance,
         )
         ConnectionStatus.RECONNECT_REQUIRED -> ConnectionBannerPresentation(

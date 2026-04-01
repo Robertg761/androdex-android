@@ -35,6 +35,19 @@ class ConnectionStatusUiPresentationTest {
     }
 
     @Test
+    fun trustBlockedUsesWarningBlockedPresentation() {
+        val presentation = connectionBannerPresentation(
+            status = ConnectionStatus.TRUST_BLOCKED,
+            detail = "Local trust is unreadable.",
+        )
+
+        assertEquals("Local trust needs repair", presentation.title)
+        assertEquals("Blocked", presentation.badgeLabel)
+        assertEquals(SharedStatusTone.Warning, presentation.tone)
+        assertTrue(presentation.guidance?.contains("fresh QR code") == true)
+    }
+
+    @Test
     fun overridePresentation_replacesRetryingSavedPairingCopy() {
         val presentation = connectionBannerPresentation(
             status = ConnectionStatus.RETRYING_SAVED_PAIRING,

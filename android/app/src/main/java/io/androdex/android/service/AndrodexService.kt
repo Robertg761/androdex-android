@@ -141,6 +141,8 @@ class AndrodexService(
             hasSavedPairing = repository.hasSavedPairing(),
             trustedPairSnapshot = repository.currentTrustedPairSnapshot(),
             defaultRelayUrl = AppEnvironment.defaultRelayUrl.takeIf { it.isNotEmpty() },
+            connectionStatus = repository.startupConnectionStatus() ?: ConnectionStatus.DISCONNECTED,
+            connectionDetail = repository.startupConnectionDetail(),
             secureFingerprint = repository.currentFingerprint(),
             errorMessage = repository.startupNotice(),
         )
@@ -324,6 +326,7 @@ class AndrodexService(
         if (snapshot.connectionStatus == ConnectionStatus.CONNECTED
             || snapshot.connectionStatus == ConnectionStatus.CONNECTING
             || snapshot.connectionStatus == ConnectionStatus.HANDSHAKING
+            || snapshot.connectionStatus == ConnectionStatus.TRUST_BLOCKED
         ) {
             return
         }
@@ -1018,7 +1021,18 @@ class AndrodexService(
                         }
                     }
 
-                    ConnectionStatus.DISCONNECTED,
+                    ConnectionStatus.DISCONNECTED -> {
+                        cancelSavedReconnectRetry()
+                        val snapshot = stateFlow.value
+                        if (appInForeground
+                            && snapshot.hasSavedPairing
+                            && snapshot.trustedPairSnapshot?.hasSavedRelaySession == false
+                        ) {
+                            scheduleSavedReconnectRetry(immediate = true)
+                        }
+                    }
+
+                    ConnectionStatus.TRUST_BLOCKED,
                     ConnectionStatus.RECONNECT_REQUIRED,
                     ConnectionStatus.UPDATE_REQUIRED -> {
                         cancelSavedReconnectRetry()

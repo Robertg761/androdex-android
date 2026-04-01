@@ -66,6 +66,7 @@ internal fun PairingScreen(
     onScanQr: () -> Unit,
     onConnect: () -> Unit,
     onReconnectSaved: () -> Unit,
+    onRepairWithFreshQr: () -> Unit,
     onForgetTrustedHost: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
@@ -104,10 +105,14 @@ internal fun PairingScreen(
                     modifier = cardModifier,
                 )
 
-                if (state.hasSavedPairing || state.trustedPair != null) {
+                if (state.hasSavedPairing || state.trustedPair != null || state.connection.status == ConnectionStatus.TRUST_BLOCKED) {
                     SavedReconnectCard(
                         state = state,
-                        onReconnectSaved = onReconnectSaved,
+                        onPrimaryAction = if (state.connection.status == ConnectionStatus.TRUST_BLOCKED) {
+                            onRepairWithFreshQr
+                        } else {
+                            onReconnectSaved
+                        },
                         onForgetTrustedHost = onForgetTrustedHost,
                         modifier = cardModifier,
                     )
@@ -401,13 +406,14 @@ private fun PairingFeatureRow(
 @Composable
 private fun SavedReconnectCard(
     state: PairingScreenUiState,
-    onReconnectSaved: () -> Unit,
+    onPrimaryAction: () -> Unit,
     onForgetTrustedHost: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
     val reconnectStyle = when (state.connection.status) {
+        ConnectionStatus.TRUST_BLOCKED,
         ConnectionStatus.RECONNECT_REQUIRED,
         ConnectionStatus.UPDATE_REQUIRED -> RemodexPillStyle.Warning
         ConnectionStatus.RETRYING_SAVED_PAIRING -> RemodexPillStyle.Accent
@@ -435,6 +441,7 @@ private fun SavedReconnectCard(
 
             Text(
                 text = when {
+                    state.connection.status == ConnectionStatus.TRUST_BLOCKED -> "Repair local trust with a fresh QR"
                     state.trustedPair != null && !state.trustedPair.hasSavedRelaySession -> "Resolve a fresh live session"
                     state.trustedPair != null -> "Reconnect without rescanning"
                     else -> "Recovery is ready"
@@ -447,6 +454,8 @@ private fun SavedReconnectCard(
                 text = when (state.connection.status) {
                     ConnectionStatus.RETRYING_SAVED_PAIRING ->
                         "Android still trusts this host. Keep the bridge running and Androdex will keep retrying in the foreground."
+                    ConnectionStatus.TRUST_BLOCKED ->
+                        "This phone cannot read its saved trusted identity. Use a fresh QR code to repair pairing locally, or forget the trusted host on this phone."
                     ConnectionStatus.RECONNECT_REQUIRED ->
                         "Your previous trust still exists, but the phone identity or host trust needs repair before a clean reconnect."
                     ConnectionStatus.UPDATE_REQUIRED ->
@@ -485,7 +494,7 @@ private fun SavedReconnectCard(
             }
 
             RemodexButton(
-                onClick = onReconnectSaved,
+                onClick = onPrimaryAction,
                 enabled = state.reconnectEnabled,
                 modifier = Modifier.fillMaxWidth(),
                 style = RemodexButtonStyle.Secondary,
@@ -604,12 +613,14 @@ private fun RecoveryCard(
     val colors = RemodexTheme.colors
     val geometry = RemodexTheme.geometry
     val noticeColor = when (state.connection.status) {
+        ConnectionStatus.TRUST_BLOCKED,
         ConnectionStatus.RECONNECT_REQUIRED,
         ConnectionStatus.UPDATE_REQUIRED -> colors.errorRed
         ConnectionStatus.RETRYING_SAVED_PAIRING -> colors.accentOrange
         else -> colors.accentBlue
     }
     val noticeTone = when (state.connection.status) {
+        ConnectionStatus.TRUST_BLOCKED,
         ConnectionStatus.RECONNECT_REQUIRED,
         ConnectionStatus.UPDATE_REQUIRED -> colors.errorRed.copy(alpha = 0.08f)
         ConnectionStatus.RETRYING_SAVED_PAIRING -> colors.accentOrange.copy(alpha = 0.08f)
@@ -773,6 +784,8 @@ private fun PairingMetadataChip(label: String) {
 
 private fun recoveryFootnote(status: ConnectionStatus): String? {
     return when (status) {
+        ConnectionStatus.TRUST_BLOCKED ->
+            "Use a fresh QR code to repair local pairing on this phone, or forget the trusted host to reset local trust explicitly."
         ConnectionStatus.RECONNECT_REQUIRED ->
             "If this host was paired to another mobile client, reset trust on the host before scanning a new QR code."
         ConnectionStatus.UPDATE_REQUIRED ->

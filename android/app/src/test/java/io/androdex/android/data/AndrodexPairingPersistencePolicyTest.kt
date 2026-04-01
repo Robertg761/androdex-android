@@ -3,6 +3,7 @@ package io.androdex.android.data
 import io.androdex.android.model.PairingPayload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class AndrodexPairingPersistencePolicyTest {
@@ -50,7 +51,7 @@ class AndrodexPairingPersistencePolicyTest {
         )
 
         assertEquals(
-            "This Android device can no longer read its secure identity after an install or restore change. Trusted reconnect was reset, so scan a fresh QR code to pair again.",
+            "Androdex could not read this phone's saved trusted identity. Durable trust was preserved, but automatic reconnect is blocked until you repair with a fresh QR or forget the trusted host.",
             notice,
         )
     }
@@ -69,12 +70,26 @@ class AndrodexPairingPersistencePolicyTest {
         )
 
         assertEquals(
-            "The saved live relay session was unreadable, so Androdex cleared only that reconnect target. Your trusted host record was kept when possible.",
+            "The saved live relay session was unreadable, so Androdex cleared only that disposable reconnect target. Your trusted host details were kept when possible.",
             savedSessionNotice,
         )
         assertEquals(
-            "The trusted host registry was unreadable, so only the remembered trust records were cleared. A still-valid live relay session can keep working until it expires.",
+            "Androdex could not read the trusted host registry. Durable trust was preserved, but automatic reconnect is blocked until you repair with a fresh QR or forget the trusted host.",
             trustedRegistryNotice,
+        )
+    }
+
+    @Test
+    fun blockedDurableTrustDetail_isReturnedForUnreadablePhoneIdentity() {
+        val detail = buildBlockedDurableTrustDetail(
+            phoneIdentityUnreadable = true,
+            trustedMacUnreadable = false,
+        )
+
+        assertNotNull(detail)
+        assertEquals(
+            "This Android device cannot read its saved trusted identity, so secure reconnect is blocked. Repair with a fresh QR code or forget the trusted host on this phone.",
+            detail,
         )
     }
 }

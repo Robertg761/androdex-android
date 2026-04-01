@@ -455,6 +455,7 @@ private fun AndrodexUiState.toPairingScreenUiState(): PairingScreenUiState {
         reconnectButtonLabel = reconnectButtonLabel(),
         reconnectEnabled = !isBusy
             && connectionStatus != ConnectionStatus.RETRYING_SAVED_PAIRING
+            && connectionStatus != ConnectionStatus.UPDATE_REQUIRED
             && freshPairingAttempt == null,
         recoveryTitle = pairingRecoveryTitle(),
         recoveryMessage = pairingRecoveryMessage(),
@@ -1018,6 +1019,7 @@ private fun AndrodexUiState.reconnectButtonLabel(): String {
     }
     return when (connectionStatus) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying Saved Pairing..."
+        ConnectionStatus.TRUST_BLOCKED -> "Repair With Fresh QR"
         ConnectionStatus.RECONNECT_REQUIRED -> "Reconnect Saved Pairing"
         ConnectionStatus.UPDATE_REQUIRED -> "Reconnect After Updating"
         ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot?.hasSavedRelaySession == false) {
@@ -1059,6 +1061,9 @@ private fun AndrodexUiState.pairingRecoveryMessage(): String {
     return when (connectionStatus) {
         ConnectionStatus.RETRYING_SAVED_PAIRING -> {
             "This phone still trusts the host. Keep Androdex running on the PC and we'll retry automatically in the foreground."
+        }
+        ConnectionStatus.TRUST_BLOCKED -> {
+            "This phone cannot read its saved trusted identity, so automatic reconnect is blocked locally. Repair with a fresh QR code or forget the trusted host on this phone."
         }
         ConnectionStatus.RECONNECT_REQUIRED -> {
             "The previous trusted pair needs attention. Trusted-host details were preserved, but this phone needs repair before a secure reconnect."
@@ -1137,6 +1142,7 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.CONNECTED -> "Bridge Ready"
         ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Connecting To Host"
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Waiting For Host"
+        ConnectionStatus.TRUST_BLOCKED -> "Local Trust Blocked"
         ConnectionStatus.RECONNECT_REQUIRED -> "Pair Needs Repair"
         ConnectionStatus.UPDATE_REQUIRED -> "Update Needed"
         ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
@@ -1149,6 +1155,7 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.CONNECTED -> "Connected"
         ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Syncing"
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying"
+        ConnectionStatus.TRUST_BLOCKED -> "Blocked"
         ConnectionStatus.RECONNECT_REQUIRED -> "Repair needed"
         ConnectionStatus.UPDATE_REQUIRED -> "Update required"
         ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
@@ -1160,6 +1167,7 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
     val summary = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Codex stays on the host machine. Android is acting as the paired remote control for threads, projects, approvals, and runtime changes."
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still present. Automatic reconnect stays available while the host or relay comes back."
+        ConnectionStatus.TRUST_BLOCKED -> "The host may still be trusted, but this Android device cannot read its local trusted identity. Repair with a fresh QR code or forget the trusted host on this phone."
         ConnectionStatus.RECONNECT_REQUIRED -> "The trusted host record is still present, but this phone identity needs repair before secure reconnect can resume."
         ConnectionStatus.UPDATE_REQUIRED -> "The host bridge and Android build are speaking different compatibility levels. Update the older side, then reconnect."
         ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
@@ -1203,6 +1211,7 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
                 ConnectionStatus.CONNECTING -> "Connecting"
                 ConnectionStatus.HANDSHAKING -> "Pairing"
                 ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
+                ConnectionStatus.TRUST_BLOCKED -> "Local trust blocked"
                 ConnectionStatus.RECONNECT_REQUIRED -> "Needs repair"
                 ConnectionStatus.UPDATE_REQUIRED -> "Update required"
                 ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved pair available" else "Trusted host known"
@@ -1216,6 +1225,7 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
         title = when (connectionStatus) {
             ConnectionStatus.CONNECTED -> "Connected Pair"
             ConnectionStatus.HANDSHAKING -> "Pairing Host"
+            ConnectionStatus.TRUST_BLOCKED -> "Trusted Host Blocked"
             ConnectionStatus.RECONNECT_REQUIRED -> "Trusted Host Needs Repair"
             ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved Pair" else "Trusted Host"
             else -> "Saved Pair"
@@ -1225,6 +1235,7 @@ private fun TrustedPairSnapshot?.toTrustedPairUiState(
             ConnectionStatus.CONNECTING -> "Connecting"
             ConnectionStatus.HANDSHAKING -> "Pairing in progress"
             ConnectionStatus.RETRYING_SAVED_PAIRING -> "Retrying saved pair"
+            ConnectionStatus.TRUST_BLOCKED -> "Repair with fresh QR"
             ConnectionStatus.RECONNECT_REQUIRED -> "Needs repair"
             ConnectionStatus.UPDATE_REQUIRED -> "Update required"
             ConnectionStatus.DISCONNECTED -> if (snapshot.hasSavedRelaySession) "Saved pair" else "Trusted host"
@@ -1286,6 +1297,7 @@ private fun ConnectionStatus.toSharedStatusTone(): SharedStatusTone {
         ConnectionStatus.CONNECTING,
         ConnectionStatus.HANDSHAKING,
         ConnectionStatus.RETRYING_SAVED_PAIRING -> SharedStatusTone.Accent
+        ConnectionStatus.TRUST_BLOCKED,
         ConnectionStatus.RECONNECT_REQUIRED,
         ConnectionStatus.UPDATE_REQUIRED -> SharedStatusTone.Warning
         ConnectionStatus.DISCONNECTED -> SharedStatusTone.Neutral

@@ -42,6 +42,8 @@ interface AndrodexRepositoryContract {
     fun currentFingerprint(): String?
     fun currentTrustedPairSnapshot(): TrustedPairSnapshot?
     fun startupNotice(): String?
+    fun startupConnectionStatus(): io.androdex.android.model.ConnectionStatus? = null
+    fun startupConnectionDetail(): String? = null
     suspend fun connectWithPairingPayload(rawPayload: String)
     suspend fun reconnectSaved()
     suspend fun forgetTrustedHost() = Unit
@@ -149,6 +151,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     override fun currentTrustedPairSnapshot(): TrustedPairSnapshot? = client.currentTrustedPairSnapshot()
 
     override fun startupNotice(): String? = persistence.takeStartupNotice()
+
+    override fun startupConnectionStatus(): io.androdex.android.model.ConnectionStatus? = client.startupConnectionStatus()
+
+    override fun startupConnectionDetail(): String? = client.startupConnectionDetail()
 
     override suspend fun connectWithPairingPayload(rawPayload: String) {
         client.connectWithPairingPayload(rawPayload)

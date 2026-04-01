@@ -281,6 +281,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                             onScanQr = launchPairingScan,
                             onConnect = viewModel::connectWithCurrentPairingInput,
                             onReconnectSaved = viewModel::reconnectSaved,
+                            onRepairWithFreshQr = launchPairingScan,
                             onForgetTrustedHost = viewModel::forgetTrustedHost,
                         )
                     }
@@ -301,6 +302,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                 onScanQr = launchPairingScan,
                                 onConnect = viewModel::connectWithCurrentPairingInput,
                                 onReconnectSaved = viewModel::reconnectSaved,
+                                onRepairWithFreshQr = launchPairingScan,
                                 onForgetTrustedHost = viewModel::forgetTrustedHost,
                             )
                         }

@@ -162,6 +162,25 @@ test("corrupted canonical state is recovered from the legacy keychain mirror on 
   });
 });
 
+test("corrupted canonical state without a recoverable mirror throws instead of minting a new identity", () => {
+  withTempHome(({ tempHome, secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const { primaryFile } = getStatePaths(tempHome);
+
+    fs.writeFileSync(primaryFile, "{not-json", "utf8");
+
+    delete require.cache[modulePath];
+    const reloadedModule = require(modulePath);
+
+    assert.throws(
+      () => reloadedModule.loadOrCreateBridgeDeviceState(),
+      /Saved bridge identity state is corrupted in device-state\.json/i
+    );
+    assert.equal(fs.readFileSync(primaryFile, "utf8"), "{not-json");
+    assert.equal(initialState.macDeviceId.length > 0, true);
+  });
+});
+
 test("resolveBridgeRelaySession issues a fresh relay session id without changing the host identity", () => {
   withTempHome(({ secureDeviceState }) => {
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();

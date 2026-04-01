@@ -79,7 +79,7 @@ android {
         applicationId = "io.androdex.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
+        versionCode = 12
         versionName = "0.2.0"
         buildConfigField(
             "String",

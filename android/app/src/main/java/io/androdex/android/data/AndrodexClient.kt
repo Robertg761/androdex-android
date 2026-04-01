@@ -177,6 +177,7 @@ class AndrodexClient(
     private val requestMutex = Mutex()
     private val socketMutex = Mutex()
     private val connectionLifecycleMutex = Mutex()
+    private val incomingMessageMutex = Mutex()
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val pendingSecureControlWaiters = mutableMapOf<String, MutableList<CompletableDeferred<String>>>()
     private val bufferedSecureControlMessages = mutableMapOf<String, ArrayDeque<String>>()
@@ -188,9 +189,15 @@ class AndrodexClient(
     private var pendingTerminalConnectionUpdate: ClientUpdate.Connection? = null
     private var lastSocketCloseDetail: String? = null
     private var lastSocketFailureDetail: String? = null
-    private var phoneIdentityState: PhoneIdentityState = persistence.loadPhoneIdentity() ?: generatePhoneIdentityState().also {
-        persistence.savePhoneIdentity(it)
-    }
+    private var durableTrustBlockedDetail: String? = persistence.startupBlockedTrustDetail()
+    private var phoneIdentityState: PhoneIdentityState? = persistence.loadPhoneIdentity()
+        ?: if (durableTrustBlockedDetail == null) {
+            generatePhoneIdentityState().also {
+                persistence.savePhoneIdentity(it)
+            }
+        } else {
+            null
+        }
     private var trustedMacRegistry: TrustedMacRegistry = persistence.loadTrustedMacRegistry()
     private var lastTrustedMacDeviceId: String? = persistence.loadLastTrustedMacDeviceId()
     private var savedRelaySession: SavedRelaySession? = persistence.loadSavedRelaySession()
@@ -216,6 +223,14 @@ class AndrodexClient(
         emitPairingAvailability()
         emitRuntimeConfig()
     }
+
+    fun startupConnectionStatus(): ConnectionStatus? = if (durableTrustBlockedDetail != null) {
+        ConnectionStatus.TRUST_BLOCKED
+    } else {
+        null
+    }
+
+    fun startupConnectionDetail(): String? = durableTrustBlockedDetail
 
     fun hasSavedPairing(): Boolean = savedRelaySession != null || currentTrustedMacRecord() != null
 
@@ -317,19 +332,57 @@ class AndrodexClient(
         emitPairingAvailability()
     }
 
+    private fun clearDurableTrustBlockedState() {
+        durableTrustBlockedDetail = null
+    }
+
+    private fun ensurePhoneIdentityForFreshPairing(): PhoneIdentityState {
+        phoneIdentityState?.let { return it }
+        return generatePhoneIdentityState().also {
+            persistence.savePhoneIdentity(it)
+            phoneIdentityState = it
+            clearDurableTrustBlockedState()
+        }
+    }
+
+    private suspend fun requirePhoneIdentityForReconnect(): PhoneIdentityState {
+        durableTrustBlockedDetail?.let { detail ->
+            emitTerminalConnectionUpdate(ClientUpdate.Connection(ConnectionStatus.TRUST_BLOCKED, detail))
+            disconnectInternal(clearSavedPairing = false)
+            updatesFlow.emit(
+                consumePendingTerminalConnectionUpdate()
+                    ?: ClientUpdate.Connection(ConnectionStatus.TRUST_BLOCKED, detail)
+            )
+            throw IllegalStateException(detail)
+        }
+        phoneIdentityState?.let { return it }
+        val message = durableTrustBlockedDetail
+            ?: "This Android device cannot read its saved trusted identity. Repair with a fresh QR code or forget the trusted host on this phone."
+        emitTerminalConnectionUpdate(ClientUpdate.Connection(ConnectionStatus.TRUST_BLOCKED, message))
+        disconnectInternal(clearSavedPairing = false)
+        updatesFlow.emit(
+            consumePendingTerminalConnectionUpdate()
+                ?: ClientUpdate.Connection(ConnectionStatus.TRUST_BLOCKED, message)
+        )
+        throw IllegalStateException(message)
+    }
+
     suspend fun connectWithPairingPayload(rawPayload: String) {
         val pairing = parsePairingPayload(rawPayload)
+        ensurePhoneIdentityForFreshPairing()
         resetBridgeOutboundReplayCursor()
         connect(pairing)
         val savedSession = pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)
             ?: throw IllegalStateException("Failed to save the paired relay session.")
         persistence.saveSavedRelaySession(savedSession)
         savedRelaySession = savedSession
+        clearDurableTrustBlockedState()
         rememberLastTrustedMacDeviceId(pairing.macDeviceId)
         emitPairingAvailability()
     }
 
     suspend fun reconnectSaved() {
+        requirePhoneIdentityForReconnect()
         val reconnectCandidate = reconnectCandidate()
             ?: throw IllegalStateException("No saved or trusted pairing is available.")
         when (val resolved = resolveTrustedPairing(reconnectCandidate)) {
@@ -378,7 +431,22 @@ class AndrodexClient(
     }
 
     suspend fun forgetTrustedHost() {
-        val trusted = currentTrustedMacRecord() ?: return
+        val trusted = currentTrustedMacRecord()
+        if (trusted == null) {
+            if (durableTrustBlockedDetail != null || savedRelaySession != null || trustedMacRegistry.records.isNotEmpty() || phoneIdentityState == null) {
+                persistence.clearAllPairingState()
+                savedRelaySession = null
+                trustedMacRegistry = TrustedMacRegistry.empty
+                phoneIdentityState = null
+                lastTrustedMacDeviceId = null
+                lastAppliedBridgeOutboundSeq = 0
+                clearDurableTrustBlockedState()
+                disconnectInternal(clearSavedPairing = false)
+                updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.DISCONNECTED, "Trusted host forgotten."))
+                emitPairingAvailability()
+            }
+            return
+        }
         if (savedRelaySession?.macDeviceId == trusted.macDeviceId) {
             clearSavedRelaySession()
         }
@@ -1089,7 +1157,9 @@ class AndrodexClient(
                                 return@launch
                             }
                             try {
-                                handleIncomingWireText(text)
+                                incomingMessageMutex.withLock {
+                                    handleIncomingWireText(text)
+                                }
                             } catch (error: Throwable) {
                                 Log.e(logTag, "failed to process relay message: ${error.message}", error)
                                 updatesFlow.emit(ClientUpdate.Error(error.message ?: "Failed to process relay message."))
@@ -1160,6 +1230,7 @@ class AndrodexClient(
     }
 
     private suspend fun resolveTrustedPairing(pairing: PairingPayload): TrustedSessionResolveResult {
+        val phoneIdentity = requirePhoneIdentityForReconnect()
         if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId)) {
             return TrustedSessionResolveResult.RepairRequired(
                 "Trusted reconnect data is from an older live-session format. Open a fresh pairing payload from the host to repair this phone.",
@@ -1181,21 +1252,21 @@ class AndrodexClient(
                 val nonce = encodeBase64(randomNonce(16))
                 val transcriptBytes = buildTrustedSessionResolveTranscript(
                     macDeviceId = pairing.macDeviceId,
-                    phoneDeviceId = phoneIdentityState.phoneDeviceId,
-                    phoneIdentityPublicKey = phoneIdentityState.phoneIdentityPublicKey,
+                    phoneDeviceId = phoneIdentity.phoneDeviceId,
+                    phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
                     nonce = nonce,
                     timestamp = timestamp,
                 )
                 val signature = encodeBase64(
                     signEd25519(
-                        privateKeyBase64 = phoneIdentityState.phoneIdentityPrivateKey,
+                        privateKeyBase64 = phoneIdentity.phoneIdentityPrivateKey,
                         payload = transcriptBytes,
                     )
                 )
                 val requestBody = JSONObject()
                     .put("macDeviceId", pairing.macDeviceId)
-                    .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
-                    .put("phoneIdentityPublicKey", phoneIdentityState.phoneIdentityPublicKey)
+                    .put("phoneDeviceId", phoneIdentity.phoneDeviceId)
+                    .put("phoneIdentityPublicKey", phoneIdentity.phoneIdentityPublicKey)
                     .put("nonce", nonce)
                     .put("timestamp", timestamp)
                     .put("signature", signature)
@@ -1339,6 +1410,8 @@ class AndrodexClient(
     }
 
     private suspend fun performSecureHandshake(pairing: PairingPayload) {
+        val phoneIdentity = phoneIdentityState
+            ?: throw IllegalStateException("A phone identity is required before starting secure pairing.")
         val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
         val handshakePlan = resolveSecureHandshakePlan(pairing, trustedMac)
         val handshakeMode = handshakePlan.handshakeMode
@@ -1355,8 +1428,8 @@ class AndrodexClient(
             .put("hostId", routingId)
             .put("sessionId", pairing.sessionId ?: routingId)
             .put("handshakeMode", handshakeMode)
-            .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
-            .put("phoneIdentityPublicKey", phoneIdentityState.phoneIdentityPublicKey)
+            .put("phoneDeviceId", phoneIdentity.phoneDeviceId)
+            .put("phoneIdentityPublicKey", phoneIdentity.phoneIdentityPublicKey)
             .put("phoneEphemeralPublicKey", phoneEphemeralPublicKey)
             .put("clientNonce", encodeBase64(clientNonce))
         if (handshakeMode == handshakeModeQrBootstrap && !pairing.bootstrapToken.isNullOrBlank()) {
@@ -1367,7 +1440,7 @@ class AndrodexClient(
             mode = handshakeMode,
             transcriptBytes = ByteArray(0),
             phoneEphemeralPrivateKey = phoneEphemeralPrivateKey,
-            phoneDeviceId = phoneIdentityState.phoneDeviceId,
+            phoneDeviceId = phoneIdentity.phoneDeviceId,
         )
         sendRawText(clientHello.toString())
 
@@ -1392,9 +1465,9 @@ class AndrodexClient(
             handshakeMode = serverHello.optString("handshakeMode"),
             keyEpoch = serverHello.optInt("keyEpoch"),
             macDeviceId = pairing.macDeviceId,
-            phoneDeviceId = phoneIdentityState.phoneDeviceId,
+            phoneDeviceId = phoneIdentity.phoneDeviceId,
             macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
-            phoneIdentityPublicKey = phoneIdentityState.phoneIdentityPublicKey,
+            phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
             macEphemeralPublicKey = serverHello.optString("macEphemeralPublicKey"),
             phoneEphemeralPublicKey = phoneEphemeralPublicKey,
             clientNonce = clientNonce,
@@ -1422,11 +1495,11 @@ class AndrodexClient(
             mode = handshakeMode,
             transcriptBytes = transcriptBytes,
             phoneEphemeralPrivateKey = phoneEphemeralPrivateKey,
-            phoneDeviceId = phoneIdentityState.phoneDeviceId,
+            phoneDeviceId = phoneIdentity.phoneDeviceId,
         )
 
         val phoneSignature = signEd25519(
-            privateKeyBase64 = phoneIdentityState.phoneIdentityPrivateKey,
+            privateKeyBase64 = phoneIdentity.phoneIdentityPrivateKey,
             payload = buildClientAuthTranscript(transcriptBytes),
         )
         sendRawText(
@@ -1434,7 +1507,7 @@ class AndrodexClient(
                 .put("kind", "clientAuth")
                 .put("hostId", routingId)
                 .put("sessionId", pairing.sessionId ?: routingId)
-                .put("phoneDeviceId", phoneIdentityState.phoneDeviceId)
+                .put("phoneDeviceId", phoneIdentity.phoneDeviceId)
                 .put("keyEpoch", serverHello.optInt("keyEpoch"))
                 .put("phoneSignature", encodeBase64(phoneSignature))
                 .toString()
@@ -1451,7 +1524,7 @@ class AndrodexClient(
             publicKeyBase64 = serverHello.optString("macEphemeralPublicKey"),
         )
         val salt = sha256(transcriptBytes)
-        val infoPrefix = "${io.androdex.android.crypto.secureHandshakeTag}|$routingId|${pairing.macDeviceId}|${phoneIdentityState.phoneDeviceId}|${serverHello.optInt("keyEpoch")}"
+        val infoPrefix = "${io.androdex.android.crypto.secureHandshakeTag}|$routingId|${pairing.macDeviceId}|${phoneIdentity.phoneDeviceId}|${serverHello.optInt("keyEpoch")}"
         val phoneToMacKey = hkdfSha256(sharedSecret, salt, "$infoPrefix|phoneToMac".toByteArray(), 32)
         val macToPhoneKey = hkdfSha256(sharedSecret, salt, "$infoPrefix|macToPhone".toByteArray(), 32)
 
@@ -1515,6 +1588,8 @@ class AndrodexClient(
         clientNonce: ByteArray,
         phoneEphemeralPublicKey: String,
     ): String {
+        val phoneIdentity = phoneIdentityState
+            ?: throw IllegalStateException("A phone identity is required before validating the secure handshake.")
         while (true) {
             val raw = waitForSecureControlMessage("serverHello")
             val hello = JSONObject(raw)
@@ -1529,9 +1604,9 @@ class AndrodexClient(
                     handshakeMode = hello.optString("handshakeMode"),
                     keyEpoch = hello.optInt("keyEpoch"),
                     macDeviceId = hello.optString("macDeviceId"),
-                    phoneDeviceId = phoneIdentityState.phoneDeviceId,
+                    phoneDeviceId = phoneIdentity.phoneDeviceId,
                     macIdentityPublicKey = hello.optString("macIdentityPublicKey"),
-                    phoneIdentityPublicKey = phoneIdentityState.phoneIdentityPublicKey,
+                    phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
                     macEphemeralPublicKey = hello.optString("macEphemeralPublicKey"),
                     phoneEphemeralPublicKey = phoneEphemeralPublicKey,
                     clientNonce = clientNonce,
@@ -1645,6 +1720,7 @@ class AndrodexClient(
         if (bridgeOutboundSeq > 0) {
             lastAppliedBridgeOutboundSeq = bridgeOutboundSeq
             persistence.saveLastAppliedBridgeOutboundSeq(bridgeOutboundSeq)
+            savedRelaySession = savedRelaySession?.copy(lastAppliedBridgeOutboundSeq = bridgeOutboundSeq)
         }
         processIncomingApplicationText(payload.optString("payloadText"))
     }

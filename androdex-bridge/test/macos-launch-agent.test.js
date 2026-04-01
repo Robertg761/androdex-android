@@ -11,6 +11,7 @@ const {
   runMacOSBridgeService,
   startMacOSBridgeService,
   stopMacOSBridgeService,
+  waitForPairingReadiness,
 } = require("../src/macos-launch-agent");
 const {
   readBridgeStatus,
@@ -227,6 +228,57 @@ test("startMacOSBridgeService preserves enabled desktop refresh when the env fla
     assert.equal(daemonConfig.refreshEnabled, true);
     assert.match(plist, /<key>ANDRODEX_REFRESH_ENABLED<\/key>/);
     assert.match(plist, /<string>true<\/string>/);
+  });
+});
+
+test("waitForPairingReadiness waits for the relay to connect before returning a fresh QR", async () => {
+  await withTempDaemonEnv(async () => {
+    const startedAt = Date.now();
+
+    setTimeout(() => {
+      writePairingSession({ sessionId: "session-ready" });
+    }, 5);
+    setTimeout(() => {
+      writeBridgeStatus({ state: "running", connectionStatus: "connecting" });
+    }, 10);
+    setTimeout(() => {
+      writeBridgeStatus({ state: "running", connectionStatus: "connected" });
+    }, 30);
+
+    const ready = await waitForPairingReadiness({
+      env: process.env,
+      fsImpl: fs,
+      startedAt,
+      timeoutMs: 500,
+      intervalMs: 5,
+    });
+
+    assert.equal(ready.pairingSession?.pairingPayload?.sessionId, "session-ready");
+    assert.equal(ready.bridgeStatus?.connectionStatus, "connected");
+  });
+});
+
+test("waitForPairingReadiness times out when the relay never reaches connected", async () => {
+  await withTempDaemonEnv(async () => {
+    const startedAt = Date.now();
+
+    writePairingSession({ sessionId: "session-stuck" });
+    writeBridgeStatus({
+      state: "running",
+      connectionStatus: "disconnected",
+      lastError: "Host relay registration failed.",
+    });
+
+    await assert.rejects(
+      waitForPairingReadiness({
+        env: process.env,
+        fsImpl: fs,
+        startedAt,
+        timeoutMs: 50,
+        intervalMs: 5,
+      }),
+      /Timed out waiting for the macOS bridge service to publish a ready pairing QR\..*Last relay note: Host relay registration failed\./
+    );
   });
 });
 
