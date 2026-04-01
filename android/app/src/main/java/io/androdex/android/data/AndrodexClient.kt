@@ -2409,13 +2409,7 @@ class AndrodexClient(
             ?: params.objectOrNull("msg", "event")?.let(::extractThreadId)
     }
 
-    private fun extractTurnId(params: JSONObject?): String? {
-        if (params == null) return null
-        return params.stringOrNull("turnId", "turn_id", "id")
-            ?: params.optJSONObject("turn")?.stringOrNull("id", "turnId", "turn_id")
-            ?: params.optJSONObject("item")?.stringOrNull("turnId", "turn_id")
-            ?: params.objectOrNull("msg", "event")?.let(::extractTurnId)
-    }
+    private fun extractTurnId(params: JSONObject?): String? = extractExplicitTurnId(params)
 
     private fun extractItemId(params: JSONObject?): String? {
         if (params == null) return null
@@ -4097,6 +4091,14 @@ private fun terminalStateForStatus(normalizedStatus: String?): TurnTerminalState
         isCompletedTurnStatus(normalizedStatus) -> TurnTerminalState.COMPLETED
         else -> null
     }
+}
+
+internal fun extractExplicitTurnId(params: JSONObject?): String? {
+    if (params == null) return null
+    return params.stringOrNull("turnId", "turn_id")
+        ?: params.optJSONObject("turn")?.stringOrNull("id", "turnId", "turn_id")
+        ?: params.optJSONObject("item")?.stringOrNull("turnId", "turn_id")
+        ?: params.objectOrNull("msg", "event")?.let(::extractExplicitTurnId)
 }
 
 internal fun shouldApplyBridgeOutboundSeq(

@@ -10,6 +10,57 @@ import org.junit.Test
 
 class ProtocolJsonHelpersTest {
     @Test
+    fun extractTurnId_prefersExplicitTurnIdOverTopLevelItemId() {
+        val turnId = extractExplicitTurnId(
+            JSONObject(
+                """
+                {
+                  "id": "item-1",
+                  "turnId": "turn-1"
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals("turn-1", turnId)
+    }
+
+    @Test
+    fun extractTurnId_readsNestedTurnObjectId() {
+        val turnId = extractExplicitTurnId(
+            JSONObject(
+                """
+                {
+                  "turn": {
+                    "id": "turn-2"
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals("turn-2", turnId)
+    }
+
+    @Test
+    fun extractTurnId_ignoresTopLevelItemIdWithoutTurnSignals() {
+        val turnId = extractExplicitTurnId(
+            JSONObject(
+                """
+                {
+                  "id": "item-1",
+                  "item": {
+                    "id": "item-1"
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals(null, turnId)
+    }
+
+    @Test
     fun decodeHostAccountSnapshot_readsRateLimitBuckets() {
         val snapshot = decodeHostAccountSnapshot(
             JSONObject(

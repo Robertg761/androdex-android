@@ -307,6 +307,22 @@ internal fun pendingToolInputSummary(requestCount: Int): String {
     return if (requestCount == 1) "1 request waiting" else "$requestCount requests waiting"
 }
 
+internal fun timelineScrollTargetIndex(
+    messages: List<ConversationMessage>,
+    focusedTurnId: String?,
+): Int? {
+    if (messages.isEmpty()) {
+        return null
+    }
+    val normalizedFocusedTurnId = focusedTurnId?.trim()?.takeIf { it.isNotEmpty() }
+    if (normalizedFocusedTurnId == null) {
+        return messages.lastIndex
+    }
+    return messages.indexOfFirst { it.turnId == normalizedFocusedTurnId }
+        .takeIf { it >= 0 }
+        ?: messages.lastIndex
+}
+
 internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): String {
     return if (question.options.isEmpty()) "Answer" else "Other answer"
 }
@@ -319,6 +335,7 @@ internal fun ThreadTimelineScreen(
     onBack: () -> Unit,
     onOpenSidebar: () -> Unit,
     onRefresh: () -> Unit,
+    onConsumeFocusTurn: () -> Unit,
     onComposerChanged: (String) -> Unit,
     onPlanModeChanged: (Boolean) -> Unit,
     onSubagentsModeChanged: (Boolean) -> Unit,
@@ -409,9 +426,16 @@ internal fun ThreadTimelineScreen(
         }
     }
 
-    LaunchedEffect(state.threadId, state.messages.size) {
-        if (state.messages.isNotEmpty()) {
-            listState.scrollToItem(state.messages.lastIndex)
+    LaunchedEffect(state.threadId, state.messages.size, state.focusedTurnId) {
+        val targetIndex = timelineScrollTargetIndex(
+            messages = state.messages,
+            focusedTurnId = state.focusedTurnId,
+        )
+        if (targetIndex != null) {
+            listState.scrollToItem(targetIndex)
+            if (state.focusedTurnId != null) {
+                onConsumeFocusTurn()
+            }
         }
     }
     val bubbleContexts = remember(state.messages) { buildBubbleContexts(state.messages) }

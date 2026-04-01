@@ -19,6 +19,28 @@ import org.junit.Test
 
 class ThreadTimelineFormattingTest {
     @Test
+    fun timelineScrollTargetIndex_prefersFirstMessageInFocusedTurn() {
+        val messages = listOf(
+            chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+            systemMessage(id = "thinking", kind = ConversationKind.THINKING, createdAt = 2_000L).copy(turnId = "turn-2"),
+            chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 3_000L).copy(turnId = "turn-2"),
+        )
+
+        assertEquals(1, timelineScrollTargetIndex(messages, "turn-2"))
+    }
+
+    @Test
+    fun timelineScrollTargetIndex_fallsBackToLatestWhenTurnMissing() {
+        val messages = listOf(
+            chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+            chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 2_000L).copy(turnId = "turn-2"),
+        )
+
+        assertEquals(messages.lastIndex, timelineScrollTargetIndex(messages, "turn-missing"))
+        assertEquals(messages.lastIndex, timelineScrollTargetIndex(messages, null))
+    }
+
+    @Test
     fun buildBubbleContexts_groupsAssistantChatMessagesWithinWindow() {
         val messages = listOf(
             chatMessage(id = "a1", role = ConversationRole.ASSISTANT, createdAt = 1_000L),

@@ -218,6 +218,7 @@ internal data class ThreadTimelineUiState(
     val title: String,
     val subtitle: String?,
     val messages: List<ConversationMessage>,
+    val focusedTurnId: String?,
     val runState: ThreadRunBadgeUiState?,
     val isForkedThread: Boolean,
     val busy: BusyUiState,
@@ -668,6 +669,7 @@ private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
         subtitle = selectedThread?.projectName
             ?.takeIf { it.isNotBlank() && it != (selectedThreadTitle ?: "Conversation") },
         messages = messages,
+        focusedTurnId = focusedTurnId,
         runState = threadRunBadge(threadId),
         isForkedThread = selectedThread?.forkedFromThreadId != null,
         busy = toBusyUiState(),

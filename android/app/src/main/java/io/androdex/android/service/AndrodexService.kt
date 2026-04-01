@@ -113,6 +113,7 @@ data class AndrodexServiceState(
     val isWorkspaceBrowserLoading: Boolean = false,
     val pendingNotificationOpenThreadId: String? = null,
     val pendingNotificationOpenTurnId: String? = null,
+    val focusedTurnId: String? = null,
     val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
     val skillInventoryVersion: Long = 0L,
     val errorMessage: String? = null,
@@ -162,6 +163,17 @@ class AndrodexService(
         stateFlow.update { it.copy(missingNotificationThreadPrompt = null) }
     }
 
+    fun consumeFocusedTurnId(threadId: String) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        stateFlow.update { current ->
+            if (current.selectedThreadId != normalizedThreadId || current.focusedTurnId == null) {
+                current
+            } else {
+                current.copy(focusedTurnId = null)
+            }
+        }
+    }
+
     fun reportError(message: String) {
         stateFlow.update { it.copy(errorMessage = message) }
     }
@@ -171,6 +183,7 @@ class AndrodexService(
             it.copy(
                 selectedThreadId = null,
                 selectedThreadTitle = null,
+                focusedTurnId = null,
             )
         }
     }
@@ -262,6 +275,7 @@ class AndrodexService(
                 isLoadingThreadList = false,
                 selectedThreadId = null,
                 selectedThreadTitle = null,
+                focusedTurnId = null,
             )
         }
         try {
@@ -327,6 +341,7 @@ class AndrodexService(
             it.copy(
                 freshPairingAttempt = null,
                 isLoadingThreadList = false,
+                focusedTurnId = null,
             )
         }
     }
@@ -342,6 +357,7 @@ class AndrodexService(
             current.copy(
                 selectedThreadId = threadId,
                 selectedThreadTitle = targetThread?.title,
+                focusedTurnId = null,
                 readyThreadIds = current.readyThreadIds - threadId,
                 failedThreadIds = current.failedThreadIds - threadId,
             )
@@ -357,6 +373,7 @@ class AndrodexService(
             it.copy(
                 pendingNotificationOpenThreadId = normalizedThreadId,
                 pendingNotificationOpenTurnId = turnId?.trim()?.takeIf { value -> value.isNotEmpty() },
+                focusedTurnId = null,
                 missingNotificationThreadPrompt = null,
             )
         }
@@ -374,6 +391,7 @@ class AndrodexService(
                 threads = mergeRecoveredNotificationThread(current.threads, thread),
                 selectedThreadId = thread.id,
                 selectedThreadTitle = thread.title.ifBlank { "Conversation" },
+                focusedTurnId = null,
                 timelineByThread = current.timelineByThread + (thread.id to emptyList()),
             )
         }
@@ -401,6 +419,7 @@ class AndrodexService(
                     threads = mergeRecoveredNotificationThread(current.threads, thread),
                     selectedThreadId = thread.id,
                     selectedThreadTitle = thread.title.ifBlank { "Conversation" },
+                    focusedTurnId = null,
                     timelineByThread = current.timelineByThread + (
                         thread.id to current.timelineByThread[thread.id].orEmpty()
                     ),
@@ -654,9 +673,11 @@ class AndrodexService(
             current.copy(
                 selectedThreadId = forkedThread.id,
                 selectedThreadTitle = forkedThread.title,
+                focusedTurnId = null,
                 timelineByThread = current.timelineByThread + (forkedThread.id to current.timelineByThread[forkedThread.id].orEmpty()),
             )
         }
+        ensureWorkspaceActivated(forkedThread.cwd ?: preferredProjectPath)
         refreshThreadsInternal()
         loadWorkspaceState()
         loadThreadIntoState(forkedThread.id)
@@ -722,6 +743,7 @@ class AndrodexService(
                 workspaceBrowserEntries = emptyList(),
                 selectedThreadId = null,
                 selectedThreadTitle = null,
+                focusedTurnId = null,
                 threads = emptyList(),
                 hasLoadedThreadList = false,
                 isLoadingThreadList = true,
@@ -820,33 +842,25 @@ class AndrodexService(
         val pendingThreadId = stateFlow.value.pendingNotificationOpenThreadId?.trim()?.takeIf { it.isNotEmpty() }
             ?: return false
 
-        when (attemptPendingNotificationOpen(pendingThreadId)) {
-            NotificationRouteResult.Opened -> return true
-            NotificationRouteResult.Missing -> Unit
-            NotificationRouteResult.Unavailable -> Unit
-        }
-
-        if (stateFlow.value.connectionStatus != ConnectionStatus.CONNECTED) {
-            return false
-        }
-
-        if (refreshIfNeeded) {
-            val refreshed = runCatching {
-                refreshThreadsInternal()
-                true
-            }.getOrDefault(false)
-            if (!refreshed) {
-                return false
+        return when (val lookup = resolveNotificationTargetThread(
+            threadId = pendingThreadId,
+            refreshIfNeeded = refreshIfNeeded,
+        )) {
+            is NotificationThreadLookupResult.Found -> when (attemptPendingNotificationOpen(lookup.thread)) {
+                NotificationRouteResult.Opened -> true
+                NotificationRouteResult.Missing -> {
+                    finalizeMissingNotificationThread(pendingThreadId)
+                    false
+                }
+                NotificationRouteResult.Unavailable -> false
             }
-        }
 
-        return when (attemptPendingNotificationOpen(pendingThreadId)) {
-            NotificationRouteResult.Opened -> true
-            NotificationRouteResult.Missing -> {
+            NotificationThreadLookupResult.Missing -> {
                 finalizeMissingNotificationThread(pendingThreadId)
                 false
             }
-            NotificationRouteResult.Unavailable -> false
+
+            NotificationThreadLookupResult.Unavailable -> false
         }
     }
 
@@ -859,7 +873,31 @@ class AndrodexService(
         stateFlow.update { it.copy(activeWorkspacePath = status.currentCwd ?: normalizedPath) }
     }
 
-    private suspend fun attemptPendingNotificationOpen(threadId: String): NotificationRouteResult {
+    private suspend fun resolveNotificationTargetThread(
+        threadId: String,
+        refreshIfNeeded: Boolean,
+    ): NotificationThreadLookupResult {
+        stateFlow.value.threads.firstOrNull { it.id == threadId }?.let {
+            return NotificationThreadLookupResult.Found(it)
+        }
+        if (stateFlow.value.connectionStatus != ConnectionStatus.CONNECTED || !refreshIfNeeded) {
+            return NotificationThreadLookupResult.Unavailable
+        }
+        val refreshed = runCatching {
+            refreshThreadsInternal()
+            true
+        }.getOrDefault(false)
+        if (!refreshed) {
+            return NotificationThreadLookupResult.Unavailable
+        }
+        return stateFlow.value.threads.firstOrNull { it.id == threadId }
+            ?.let(NotificationThreadLookupResult::Found)
+            ?: NotificationThreadLookupResult.Missing
+    }
+
+    private suspend fun attemptPendingNotificationOpen(thread: ThreadSummary): NotificationRouteResult {
+        val threadId = thread.id
+        ensureWorkspaceActivated(thread.cwd)
         return runCatching { repository.loadThread(threadId) }.fold(
             onSuccess = { result ->
                 openNotificationThread(threadId, result)
@@ -880,6 +918,7 @@ class AndrodexService(
         result: ThreadLoadResult,
     ) {
         ensureWorkspaceActivated(result.thread?.cwd)
+        val pendingFocusedTurnId = stateFlow.value.pendingNotificationOpenTurnId
         val turnIdToInvalidatePendingToolInputs =
             pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
         stateFlow.update { current ->
@@ -897,6 +936,7 @@ class AndrodexService(
                 ),
                 pendingNotificationOpenThreadId = null,
                 pendingNotificationOpenTurnId = null,
+                focusedTurnId = pendingFocusedTurnId,
                 missingNotificationThreadPrompt = null,
                 pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
                     current.pendingToolInputsByThread.removePendingToolInputTurn(
@@ -926,6 +966,7 @@ class AndrodexService(
                 selectedThreadTitle = current.threads.firstOrNull { it.id == nextSelectedThreadId }?.title,
                 pendingNotificationOpenThreadId = null,
                 pendingNotificationOpenTurnId = null,
+                focusedTurnId = null,
                 missingNotificationThreadPrompt = MissingNotificationThreadPrompt(threadId),
             )
         }
@@ -1785,8 +1826,8 @@ class AndrodexService(
     private fun isMissingNotificationThreadError(error: Throwable): Boolean {
         val message = error.message?.lowercase() ?: return false
         return message.contains("thread not found")
-            || message.contains("not found")
             || message.contains("unknown thread")
+            || Regex("""\bthread\b.*\bnot found\b""").containsMatchIn(message)
     }
 
     private fun mergeRecoveredNotificationThread(
@@ -1815,6 +1856,12 @@ class AndrodexService(
         Opened,
         Missing,
         Unavailable,
+    }
+
+    private sealed interface NotificationThreadLookupResult {
+        data class Found(val thread: ThreadSummary) : NotificationThreadLookupResult
+        data object Missing : NotificationThreadLookupResult
+        data object Unavailable : NotificationThreadLookupResult
     }
 
     private fun updateSubagentIdentitiesFromThreads(threads: List<ThreadSummary>) {

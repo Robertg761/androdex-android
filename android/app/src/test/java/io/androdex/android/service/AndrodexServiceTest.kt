@@ -941,6 +941,9 @@ class AndrodexServiceTest {
                 shouldAssumeRunningFromLatestTurn = false,
             ),
         )
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-pending", "Pending thread", null, null, null, null)
+        )
         repository.emit(
             ClientUpdate.ThreadsLoaded(
                 listOf(ThreadSummary("thread-pending", "Pending thread", null, null, null, null))
@@ -950,9 +953,59 @@ class AndrodexServiceTest {
         service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
         advanceUntilIdle()
 
-        assertNull(service.state.value.pendingNotificationOpenThreadId)
-        assertEquals("thread-pending", service.state.value.selectedThreadId)
+        assertEquals("thread-pending", service.state.value.pendingNotificationOpenThreadId)
+        assertNull(service.state.value.selectedThreadId)
         assertNull(service.state.value.missingNotificationThreadPrompt)
+    }
+
+    @Test
+    fun notificationOpen_activatesTargetWorkspaceBeforeLoadingThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "D:\\Client\\SiteB",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("D:\\Client\\SiteB", "SiteB", true),
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", false),
+                )
+            )
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Thread 1", null, "C:\\Projects\\AppA", null, null)
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Thread 1", null, "C:\\Projects\\AppA", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, "C:\\Projects\\AppA", null, null))
+            )
+        )
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-1", "turn-7")
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        advanceUntilIdle()
+
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals("turn-7", service.state.value.focusedTurnId)
+
+        service.consumeFocusedTurnId("thread-1")
+
+        assertNull(service.state.value.focusedTurnId)
     }
 
     @Test
@@ -989,6 +1042,41 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun notificationOpen_genericNotFoundErrorStaysUnavailable() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadError = IllegalStateException("File not found in current workspace")
+            recentState = WorkspaceRecentState(
+                activeCwd = "D:\\Client\\SiteB",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("D:\\Client\\SiteB", "SiteB", true),
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", false),
+                )
+            )
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Thread 1", null, "C:\\Projects\\AppA", null, null)
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, "C:\\Projects\\AppA", null, null))
+            )
+        )
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-1", null)
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        advanceUntilIdle()
+
+        assertEquals("thread-1", service.state.value.pendingNotificationOpenThreadId)
+        assertNull(service.state.value.missingNotificationThreadPrompt)
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.activatedWorkspaces)
+    }
+
+    @Test
     fun notificationOpen_keepsPendingStateWhenRefreshFails() = runTest {
         val repository = FakeRepository().apply {
             loadThreadError = IllegalStateException("temporary refresh failure")
@@ -1005,6 +1093,47 @@ class AndrodexServiceTest {
         assertEquals("thread-retry", service.state.value.pendingNotificationOpenThreadId)
         assertNull(service.state.value.missingNotificationThreadPrompt)
         assertNull(service.state.value.selectedThreadId)
+    }
+
+    @Test
+    fun forkThread_activatesPreferredProjectBeforeLoadingFork() = runTest {
+        val repository = FakeRepository().apply {
+            forkThreadResult = ThreadSummary(
+                id = "thread-fork",
+                title = "Forked thread",
+                preview = null,
+                cwd = "C:\\Projects\\Forked",
+                createdAtEpochMs = null,
+                updatedAtEpochMs = null,
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = forkThreadResult,
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-1", "Source", null, "D:\\Client\\Source", null, null, model = "gpt-5.4")
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        service.forkThread("thread-1", preferredProjectPath = "C:\\Projects\\Forked")
+        advanceUntilIdle()
+
+        assertEquals(listOf("C:\\Projects\\Forked"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-fork"), repository.loadedThreadIds)
     }
 
     @Test
@@ -1973,6 +2102,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     val compactedThreadIds = mutableListOf<String>()
     val rollbackRequests = mutableListOf<String>()
     val cleanedBackgroundTerminalThreadIds = mutableListOf<String>()
+    val forkRequests = mutableListOf<String>()
     var lastToolInputRequest: ToolUserInputRequest? = null
     var lastToolInputResponse: ToolUserInputResponse? = null
     var lastRejectedToolInputRequest: ToolUserInputRequest? = null
@@ -1989,6 +2119,7 @@ private class FakeRepository : AndrodexRepositoryContract {
             shouldAssumeRunningFromLatestTurn = false,
         ),
     )
+    var forkThreadResult = ThreadSummary("thread-fork", "Forked", null, null, null, null)
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
         loadedThreadIds += threadId
@@ -2060,6 +2191,15 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun cleanBackgroundTerminals(threadId: String) {
         cleanedBackgroundTerminalThreadIds += threadId
+    }
+
+    override suspend fun forkThread(
+        threadId: String,
+        preferredProjectPath: String?,
+        preferredModel: String?,
+    ): ThreadSummary {
+        forkRequests += listOfNotNull(threadId, preferredProjectPath, preferredModel).joinToString("|")
+        return forkThreadResult
     }
 
     override suspend fun registerPushNotifications(

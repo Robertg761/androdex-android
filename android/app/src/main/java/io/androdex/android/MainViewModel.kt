@@ -77,6 +77,7 @@ data class AndrodexUiState(
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
     val messages: List<ConversationMessage> = emptyList(),
+    val focusedTurnId: String? = null,
     val activeTurnIdByThread: Map<String, String> = emptyMap(),
     val runningThreadIds: Set<String> = emptySet(),
     val protectedRunningFallbackThreadIds: Set<String> = emptySet(),
@@ -1753,6 +1754,11 @@ class MainViewModel(
         service.updateWorkspaceBrowserPath(path)
     }
 
+    fun consumeFocusedTurnId() {
+        val threadId = uiStateFlow.value.selectedThreadId ?: return
+        service.consumeFocusedTurnId(threadId)
+    }
+
     fun activateWorkspace(path: String) {
         runBusyAction("Switching project...") {
             service.activateWorkspace(path)
@@ -2707,6 +2713,7 @@ private fun applyServiceState(
         selectedThreadId = serviceState.selectedThreadId,
         selectedThreadTitle = serviceState.selectedThreadTitle,
         messages = serviceState.messages,
+        focusedTurnId = serviceState.focusedTurnId,
         activeTurnIdByThread = serviceState.activeTurnIdByThread,
         runningThreadIds = serviceState.runningThreadIds,
         protectedRunningFallbackThreadIds = serviceState.protectedRunningFallbackThreadIds,
