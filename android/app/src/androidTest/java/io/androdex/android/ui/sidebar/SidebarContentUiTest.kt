@@ -9,7 +9,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.ui.state.ThreadListItemUiState
+import io.androdex.android.ui.state.ConnectionBannerUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
 import io.androdex.android.ui.theme.AndrodexTheme
 import org.junit.Assert.assertEquals
@@ -98,6 +100,33 @@ class SidebarContentUiTest {
         }
 
         assertEquals(1, composeRule.onAllNodesWithText("Alpha thread").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun refreshButton_invokesSidebarRefreshAction() {
+        var refreshCount = 0
+
+        composeRule.setContent {
+            AndrodexTheme {
+                SidebarContent(
+                    threadList = sidebarThreadList(),
+                    connection = ConnectionBannerUiState(
+                        status = ConnectionStatus.CONNECTED,
+                        detail = null,
+                        fingerprint = null,
+                    ),
+                    macName = "Robert's Mac",
+                    selectedThreadId = null,
+                    onRefreshThreads = { refreshCount += 1 },
+                    onCreateThread = { _ -> },
+                    onOpenThread = { _ -> },
+                    onOpenSettings = { },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Refresh threads").performClick()
+        assertEquals(1, refreshCount)
     }
 }
 

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -80,6 +81,7 @@ internal fun SidebarContent(
     connection: ConnectionBannerUiState,
     macName: String?,
     selectedThreadId: String?,
+    onRefreshThreads: () -> Unit,
     onCreateThread: (String) -> Unit,
     onOpenThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -89,7 +91,10 @@ internal fun SidebarContent(
     var expandedProjects by rememberSaveable { mutableStateOf(setOf<String>()) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        SidebarHeader()
+        SidebarHeader(
+            refreshing = threadList.isLoading || threadList.showLoadingOverlay,
+            onRefreshThreads = onRefreshThreads,
+        )
         SidebarSearchField(
             text = searchText,
             focused = searchFocused,
@@ -127,7 +132,10 @@ internal fun SidebarContent(
 // ── Header ──────────────────────────────────────────────────────────────────
 
 @Composable
-private fun SidebarHeader() {
+private fun SidebarHeader(
+    refreshing: Boolean,
+    onRefreshThreads: () -> Unit,
+) {
     val geometry = RemodexTheme.geometry
 
     Row(
@@ -165,6 +173,21 @@ private fun SidebarHeader() {
             ),
             color = RemodexTheme.colors.textPrimary,
         )
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        RemodexIconButton(
+            onClick = onRefreshThreads,
+            enabled = !refreshing,
+            contentDescription = "Refresh threads",
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = null,
+                tint = RemodexTheme.colors.textPrimary,
+                modifier = Modifier.size(RemodexTheme.geometry.iconSize),
+            )
+        }
     }
 }
 
