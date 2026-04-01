@@ -11,7 +11,6 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
-const { createDesktopThreadReadRefresher } = require("./codex-desktop-thread-sync");
 const { createCodexRpcClient } = require("./codex-rpc-client");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
@@ -78,6 +77,7 @@ function startBridge({
   let relayWatchdogTimer = null;
   let statusHeartbeatTimer = null;
   let lastRelayActivityAt = 0;
+  let hasSeenInboundRelayTraffic = false;
   let lastPublishedBridgeStatus = null;
   let lastConnectionStatus = null;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
@@ -132,18 +132,12 @@ function startBridge({
     },
     requestIdPrefix: `androdex-bridge-${sessionId}`,
   });
-  const refreshDesktopThreadState = createDesktopThreadReadRefresher({
-    sendCodexRequest(method, params) {
-      return codexRpcClient.sendRequest(method, params);
-    },
-  });
   const desktopRefresher = new CodexDesktopRefresher({
     enabled: config.refreshEnabled,
     debounceMs: config.refreshDebounceMs,
     refreshCommand: config.refreshCommand,
     bundleId: config.codexBundleId,
     appPath: config.codexAppPath,
-    refreshThreadState: refreshDesktopThreadState,
   });
   const workspaceRuntime = createWorkspaceRuntime({
     config,
@@ -273,6 +267,7 @@ function startBridge({
     }
 
     logConnectionStatus("connecting");
+    hasSeenInboundRelayTraffic = false;
     const nextSocket = new WebSocket(relaySessionUrl, {
       headers: {
         "x-role": "mac",
@@ -308,6 +303,7 @@ function startBridge({
     });
 
     nextSocket.on("message", (data) => {
+      hasSeenInboundRelayTraffic = true;
       markRelayActivity();
       const message = typeof data === "string" ? data : data.toString("utf8");
       if (secureTransport.handleIncomingWireMessage(message, {
@@ -324,13 +320,21 @@ function startBridge({
       }
     });
 
-    nextSocket.on("pong", markRelayActivity);
+    nextSocket.on("pong", () => {
+      hasSeenInboundRelayTraffic = true;
+      markRelayActivity();
+    });
+    nextSocket.on("ping", () => {
+      hasSeenInboundRelayTraffic = true;
+      markRelayActivity();
+    });
     nextSocket.on("close", (code) => {
       clearRelayWatchdog();
       logConnectionStatus("disconnected");
       if (socket === nextSocket) {
         socket = null;
       }
+      hasSeenInboundRelayTraffic = false;
       clearCachedBridgeHandshakeState();
       supportsNativeTokenUsageUpdates = false;
       stopContextUsageWatcher({ clearHint: false });
@@ -795,16 +799,24 @@ function startBridge({
     markRelayActivity();
 
     relayWatchdogTimer = setInterval(() => {
-      if (isShuttingDown || socket !== trackedSocket) {
+      const watchdogAction = getRelayWatchdogAction({
+        isShuttingDown,
+        activeSocket: socket,
+        trackedSocket,
+        hasSeenInboundRelayTraffic,
+        lastRelayActivityAt,
+      });
+
+      if (watchdogAction === "clear") {
         clearRelayWatchdog();
         return;
       }
 
-      if (trackedSocket.readyState !== WebSocket.OPEN) {
+      if (watchdogAction === "wait") {
         return;
       }
 
-      if (hasRelayConnectionGoneStale(lastRelayActivityAt)) {
+      if (watchdogAction === "terminate") {
         console.warn("[androdex] relay heartbeat stalled; forcing reconnect");
         publishBridgeStatus({
           state: "running",
@@ -824,10 +836,6 @@ function startBridge({
       }
     }, RELAY_WATCHDOG_PING_INTERVAL_MS);
     relayWatchdogTimer.unref?.();
-  }
-
-  function hasRelayConnectionGoneStale(activityAt) {
-    return activityAt > 0 && (Date.now() - activityAt) >= RELAY_WATCHDOG_STALE_AFTER_MS;
   }
 
   function logConnectionStatus(status) {
@@ -925,6 +933,37 @@ function startBridge({
   }
 }
 
+function getRelayWatchdogAction({
+  isShuttingDown,
+  activeSocket,
+  trackedSocket,
+  hasSeenInboundRelayTraffic,
+  lastRelayActivityAt,
+  now = Date.now(),
+}) {
+  if (isShuttingDown || activeSocket !== trackedSocket) {
+    return "clear";
+  }
+
+  if (trackedSocket?.readyState !== WebSocket.OPEN) {
+    return "wait";
+  }
+
+  if (!hasSeenInboundRelayTraffic) {
+    return "wait";
+  }
+
+  if (hasRelayConnectionGoneStale(lastRelayActivityAt, now)) {
+    return "terminate";
+  }
+
+  return "ping";
+}
+
+function hasRelayConnectionGoneStale(activityAt, now = Date.now()) {
+  return activityAt > 0 && (now - activityAt) >= RELAY_WATCHDOG_STALE_AFTER_MS;
+}
+
 function safeParseJSON(value) {
   try {
     return JSON.parse(value);
@@ -988,6 +1027,7 @@ function buildMacRegistration(deviceState) {
 }
 
 module.exports = {
+  getRelayWatchdogAction,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,
 };

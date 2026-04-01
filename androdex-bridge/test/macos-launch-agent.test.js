@@ -27,11 +27,14 @@ test("buildLaunchAgentPlist points launchd at run-service with Androdex state pa
     stderrLogPath: "/Users/tester/.androdex/logs/bridge.stderr.log",
     nodePath: "/usr/local/bin/node",
     cliPath: "/tmp/androdex/bin/androdex.js",
+    refreshEnabled: true,
   });
 
   assert.match(plist, /<string>io\.androdex\.bridge<\/string>/);
   assert.match(plist, /<string>run-service<\/string>/);
   assert.match(plist, /<key>ANDRODEX_DEVICE_STATE_DIR<\/key>/);
+  assert.match(plist, /<key>ANDRODEX_REFRESH_ENABLED<\/key>/);
+  assert.match(plist, /<string>true<\/string>/);
 });
 
 test("resolveLaunchAgentPlistPath writes into the user's LaunchAgents folder", () => {
@@ -112,6 +115,10 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
       expiresAt: Date.now() + 60_000,
     });
     writeBridgeStatus({ state: "running", connectionStatus: "connected", pid: 55 });
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({ refreshEnabled: true }, null, 2)
+    );
 
     const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
     fs.mkdirSync(path.dirname(plistPath), { recursive: true });
@@ -139,6 +146,7 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     assert.equal(status.bridgeStatus?.connectionStatus, "connected");
     assert.equal(status.pairingSession?.pairingPayload?.sessionId, "session-2");
     assert.equal(status.pairingFreshness, "fresh");
+    assert.equal(status.refreshEnabled, true);
   });
 });
 
@@ -154,6 +162,10 @@ test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicat
       pid: 55,
       lastError: "Relay heartbeat stalled; reconnect pending.",
     });
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({ refreshEnabled: false }, null, 2)
+    );
 
     const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
     fs.mkdirSync(path.dirname(plistPath), { recursive: true });
@@ -177,6 +189,7 @@ test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicat
     });
 
     assert.equal(status.pairingFreshness, "expired");
+    assert.equal(status.refreshEnabled, false);
     assert.equal(status.duplicateBridgeProcesses.length, 1);
     assert.equal(status.duplicateBridgeProcesses[0].pid, 77);
   });

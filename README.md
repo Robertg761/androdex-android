@@ -225,13 +225,13 @@ Tails the rollout log for a thread in real time.
 [codex app-server]
 ```
 
-The desktop Codex app can still read persisted sessions from `~/.codex/sessions` when available.
+The desktop Codex app can still read persisted sessions from `~/.codex/sessions` when available, but it is not a true live subscriber to phone-authored runs.
 
-On macOS, Androdex now follows a simpler Codex desktop handoff path:
+On macOS, Androdex uses an optional desktop refresh workaround:
 
-- phone-authored mid-run activity opens the concrete `codex://threads/<id>` target directly instead of bouncing through Settings
-- completion refreshes can relaunch Codex onto the concrete thread when a plain deep link is not enough
-- rollout watcher refreshes stay quiet on macOS so the desktop does not flicker back and forth while a run is still growing
+- when `ANDRODEX_REFRESH_ENABLED=true`, the bridge forces a route remount with `codex://settings` followed by `codex://threads/<id>`
+- rollout watcher refreshes are throttled during long runs so the desktop can catch up without relaunching the whole app
+- this is a workaround for Codex desktop remounting, not true phone-to-desktop live GUI sync
 
 On Windows, the bridge also includes a desktop refresh workaround for phone-authored activity. It targets the installed Codex desktop executable directly instead of falling back to the raw `codex://...` protocol handler, because a misregistered protocol handler can open the wrong Codex build and break live thread sync.
 
@@ -363,7 +363,7 @@ For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/
 No. The host bridge is macOS-only right now.
 
 **How does desktop sync work on macOS?**  
-The bridge opens the target `codex://threads/<id>` route directly for live phone activity and only escalates to a Codex relaunch on completion when the desktop needs a stronger remount. It intentionally avoids the older Settings-page bounce so macOS does not flicker away from the active thread during phone-authored runs.
+The desktop app reads persisted session data, but it does not live-reload external `app-server` writes on its own. When desktop refresh is enabled, the bridge uses a debounced Settings-bounce remount (`codex://settings` then `codex://threads/<id>`) plus throttled rollout refreshes so phone-authored thread activity becomes visible in `Codex.app`.
 
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.

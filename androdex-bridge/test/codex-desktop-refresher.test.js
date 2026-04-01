@@ -31,13 +31,13 @@ test("readBridgeConfig keeps the public relay default and disables refresh unles
   assert.equal(enabledConfig.codexEndpoint, "ws://127.0.0.1:8080");
 });
 
-test("macOS refresh AppleScript opens thread deep links directly", () => {
+test("macOS refresh AppleScript bounces through Settings before reopening the thread", () => {
   const script = fs.readFileSync(MAC_REFRESH_SCRIPT_PATH, "utf8");
-  assert.match(script, /open location targetUrl/);
-  assert.doesNotMatch(script, /codex:\/\/settings/);
+  assert.match(script, /codex:\/\/settings/);
+  assert.match(script, /openCodexUrl\(bundleId, appPath, bounceUrl\)/);
 });
 
-test("thread/start falls back once to the new-thread route when a concrete thread id is still unknown", async () => {
+test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
   const refreshCalls = [];
   const refresher = new CodexDesktopRefresher({
     enabled: true,
@@ -59,12 +59,120 @@ test("thread/start falls back once to the new-thread route when a concrete threa
   refresher.handleTransportReset();
 });
 
-test("turn/completed stops the active watcher after the completion refresh", async () => {
+test("thread/started cancels the fallback and refreshes the concrete thread route", async () => {
   const refreshCalls = [];
+  const watchedThreads = [];
   let stopCount = 0;
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
+    fallbackNewThreadMs: 40,
+    refreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: ({ threadId }) => {
+      watchedThreads.push(threadId);
+      return {
+        stop() {
+          stopCount += 1;
+        },
+      };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "thread/start",
+    params: {},
+  }));
+  await wait(10);
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "thread/started",
+    params: {
+      thread: {
+        id: "thread-123",
+      },
+    },
+  }));
+
+  await wait(25);
+
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-123"]);
+  assert.deepEqual(watchedThreads, ["thread-123"]);
+
+  await wait(30);
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-123"]);
+
+  refresher.handleTransportReset();
+  assert.equal(stopCount, 1);
+});
+
+test("rollout growth refreshes are throttled during long runs", async () => {
+  const refreshCalls = [];
+  let watcherHooks = null;
+  let currentTime = 0;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    midRunRefreshThrottleMs: 3_000,
+    now: () => currentTime,
+    refreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: (hooks) => {
+      watcherHooks = hooks;
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-456",
+    },
+  }));
+  await wait(10);
+  refreshCalls.length = 0;
+
+  currentTime = 1_000;
+  watcherHooks.onEvent({
+    reason: "growth",
+    threadId: "thread-456",
+    size: 10,
+  });
+  await wait(10);
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
+
+  refreshCalls.length = 0;
+  currentTime = 2_000;
+  watcherHooks.onEvent({
+    reason: "growth",
+    threadId: "thread-456",
+    size: 15,
+  });
+  await wait(10);
+  assert.deepEqual(refreshCalls, []);
+
+  currentTime = 4_500;
+  watcherHooks.onEvent({
+    reason: "growth",
+    threadId: "thread-456",
+    size: 20,
+  });
+  await wait(10);
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
+});
+
+test("turn/completed bypasses duplicate-target dedupe and still stops the watcher", async () => {
+  const refreshCalls = [];
+  let stopCount = 0;
+  let currentTime = 3_000;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    now: () => currentTime,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -78,50 +186,36 @@ test("turn/completed stops the active watcher after the completion refresh", asy
   refresher.handleInbound(JSON.stringify({
     method: "turn/start",
     params: {
-      threadId: "thread-complete",
+      threadId: "thread-789",
     },
   }));
   await wait(10);
-  refreshCalls.length = 0;
 
+  currentTime = 4_500;
   refresher.handleOutbound(JSON.stringify({
     method: "turn/completed",
     params: {
-      threadId: "thread-complete",
-      turnId: "turn-complete",
+      threadId: "thread-789",
+      turnId: "turn-789",
     },
   }));
   await wait(10);
 
-  assert.deepEqual(refreshCalls, ["codex://threads/thread-complete"]);
-  assert.equal(stopCount, 1);
-});
-
-test("thread-targeted refresh syncs thread state before nudging the desktop UI", async () => {
-  const callOrder = [];
-  const refresher = new CodexDesktopRefresher({
-    enabled: true,
-    debounceMs: 0,
-    refreshThreadState: async ({ threadId }) => {
-      callOrder.push(`thread:${threadId}`);
-    },
-    refreshExecutor: async ({ targetUrl }) => {
-      callOrder.push(`refresh:${targetUrl}`);
-    },
-  });
-
-  refresher.handleInbound(JSON.stringify({
-    method: "turn/start",
+  currentTime = 4_700;
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
     params: {
-      threadId: "thread-sync",
+      threadId: "thread-789",
+      turnId: "turn-789",
     },
   }));
   await wait(10);
 
-  assert.deepEqual(callOrder, [
-    "thread:thread-sync",
-    "refresh:codex://threads/thread-sync",
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-789",
+    "codex://threads/thread-789",
   ]);
+  assert.equal(stopCount, 1);
 });
 
 test("completion refresh is retried after a slow in-flight refresh finishes", async () => {
@@ -162,7 +256,7 @@ test("completion refresh is retried after a slow in-flight refresh finishes", as
   assert.equal(refreshCalls.length, 1);
 
   releaseSlowRefresh?.();
-  await wait(25);
+  await wait(20);
 
   assert.deepEqual(refreshCalls, [
     "codex://threads/thread-slow",
@@ -170,8 +264,123 @@ test("completion refresh is retried after a slow in-flight refresh finishes", as
   ]);
 });
 
+test("completion refresh keeps its own thread target even if another thread queues behind it", async () => {
+  const refreshCalls = [];
+  let stopCount = 0;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 1_200,
+    refreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: ({ threadId }) => ({
+      stop() {
+        if (threadId === "thread-a") {
+          stopCount += 1;
+        }
+      },
+    }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: { threadId: "thread-a" },
+  }));
+  await wait(10);
+  refreshCalls.length = 0;
+  refresher.clearRefreshTimer();
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-a",
+      turnId: "turn-a",
+    },
+  }));
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: { threadId: "thread-b" },
+  }));
+  refresher.clearRefreshTimer();
+  await refresher.runPendingRefresh();
+  await refresher.runPendingRefresh();
+
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-a",
+    "codex://threads/thread-b",
+  ]);
+  assert.equal(stopCount, 1);
+});
+
+test("handleTransportReset cancels pending refreshes and clears watcher state", async () => {
+  const refreshCalls = [];
+  let stopCount = 0;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 30,
+    refreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: () => ({
+      stop() {
+        stopCount += 1;
+      },
+    }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-reset",
+    },
+  }));
+  refresher.handleTransportReset();
+  await wait(50);
+
+  assert.deepEqual(refreshCalls, []);
+  assert.equal(stopCount, 1);
+});
+
+test("handleTransportReset clears duplicate-target memory so the next refresh can run", async () => {
+  const refreshCalls = [];
+  let currentTime = 5_000;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 1_200,
+    now: () => currentTime,
+    refreshExecutor: async ({ targetUrl }) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: { threadId: "thread-reset-dedupe" },
+  }));
+  await wait(10);
+
+  refresher.handleTransportReset();
+
+  currentTime = 5_100;
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: { threadId: "thread-reset-dedupe" },
+  }));
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, [
+    "codex://threads/thread-reset-dedupe",
+    "codex://threads/thread-reset-dedupe",
+  ]);
+});
+
 test("desktop refresh disables itself after a desktop-unavailable AppleScript failure", async () => {
   let attempts = 0;
+  let stopCount = 0;
 
   const refresher = new CodexDesktopRefresher({
     enabled: true,
@@ -181,6 +390,11 @@ test("desktop refresh disables itself after a desktop-unavailable AppleScript fa
       attempts += 1;
       throw new Error("Unable to find application named Codex");
     },
+    watchThreadRolloutFactory: () => ({
+      stop() {
+        stopCount += 1;
+      },
+    }),
   });
 
   refresher.handleInbound(JSON.stringify({
@@ -200,5 +414,32 @@ test("desktop refresh disables itself after a desktop-unavailable AppleScript fa
   await wait(10);
 
   assert.equal(attempts, 1);
+  assert.equal(stopCount, 1);
+  assert.equal(refresher.runtimeRefreshAvailable, false);
+});
+
+test("custom refresh commands only disable after repeated failures", async () => {
+  let attempts = 0;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    refreshBackend: "command",
+    customRefreshFailureThreshold: 3,
+    refreshExecutor: async () => {
+      attempts += 1;
+      throw new Error("command failed");
+    },
+  });
+
+  for (const threadId of ["thread-cmd-1", "thread-cmd-2", "thread-cmd-3", "thread-cmd-4"]) {
+    refresher.handleInbound(JSON.stringify({
+      method: "turn/start",
+      params: { threadId },
+    }));
+    await wait(10);
+  }
+
+  assert.equal(attempts, 3);
   assert.equal(refresher.runtimeRefreshAvailable, false);
 });

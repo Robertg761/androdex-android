@@ -2,10 +2,9 @@
 // Purpose: Debounced Mac desktop refresh controller for Codex.app after phone-authored conversation changes.
 // Layer: CLI helper
 // Exports: CodexDesktopRefresher, readBridgeConfig
-// Depends on: child_process, fs, path, ./rollout-watch
+// Depends on: child_process, path, ./rollout-watch
 
 const { execFile } = require("child_process");
-const fs = require("fs");
 const path = require("path");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 
@@ -36,7 +35,6 @@ class CodexDesktopRefresher {
     now = () => Date.now(),
     refreshExecutor = null,
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
-    refreshThreadState = null,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
   } = {}) {
@@ -53,7 +51,6 @@ class CodexDesktopRefresher {
     this.now = now;
     this.refreshExecutor = refreshExecutor;
     this.watchThreadRolloutFactory = watchThreadRolloutFactory;
-    this.refreshThreadState = refreshThreadState;
     this.refreshBackend = refreshBackend
       || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
@@ -211,9 +208,23 @@ class CodexDesktopRefresher {
   }
 
   scheduleNewThreadFallback() {
-    this.clearFallbackTimer();
+    if (!this.canRefresh()) {
+      return;
+    }
+
+    if (this.fallbackTimer) {
+      return;
+    }
+
     this.fallbackTimer = setTimeout(() => {
-      this.queueRefresh("phone", { threadId: null, url: NEW_THREAD_DEEP_LINK }, "new-thread fallback");
+      this.fallbackTimer = null;
+      if (!this.pendingNewThread || this.pendingTargetThreadId) {
+        return;
+      }
+
+      this.noteRefreshTarget({ threadId: null, url: NEW_THREAD_DEEP_LINK });
+      this.pendingRefreshKinds.add("phone");
+      this.scheduleRefresh("fallback thread/start");
     }, this.fallbackNewThreadMs);
   }
 
@@ -227,7 +238,11 @@ class CodexDesktopRefresher {
   }
 
   ensureWatcher(threadId) {
-    if (!threadId || this.activeWatchedThreadId === threadId) {
+    if (!this.canRefresh() || !threadId) {
+      return;
+    }
+
+    if (this.activeWatchedThreadId === threadId && this.activeWatcher) {
       return;
     }
 
@@ -235,40 +250,43 @@ class CodexDesktopRefresher {
     this.activeWatchedThreadId = threadId;
     this.watchStartAt = this.now();
     this.lastRolloutSize = null;
+    this.mode = "watching_thread";
     this.activeWatcher = this.watchThreadRolloutFactory({
       threadId,
-      timeoutMs: this.rolloutLookupTimeoutMs,
+      lookupTimeoutMs: this.rolloutLookupTimeoutMs,
       idleTimeoutMs: this.rolloutIdleTimeoutMs,
-      onActivity: ({ size }) => {
-        if (size === this.lastRolloutSize) {
-          return;
-        }
-
-        this.lastRolloutSize = size;
-        const target = { threadId, url: buildThreadDeepLink(threadId) };
-        this.queueRefresh("phone", target, "rollout activity");
-      },
+      onEvent: (event) => this.handleWatcherEvent(event),
       onIdle: () => {
-        if (this.stopWatcherAfterRefreshThreadId === threadId) {
-          this.stopWatcher();
-        }
+        this.log(`rollout watcher idle thread=${threadId}`);
+        this.stopWatcher();
+        this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
       },
       onTimeout: () => {
+        this.log(`rollout watcher timeout thread=${threadId}`);
         this.stopWatcher();
+        this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
       },
-      onError: () => {
+      onError: (error) => {
+        this.log(`rollout watcher failed thread=${threadId}: ${error.message}`);
         this.stopWatcher();
+        this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
       },
     });
   }
 
   stopWatcher() {
-    this.activeWatcher?.stop?.();
+    if (!this.activeWatcher) {
+      this.activeWatchedThreadId = null;
+      this.watchStartAt = 0;
+      this.lastRolloutSize = null;
+      return;
+    }
+
+    this.activeWatcher.stop();
     this.activeWatcher = null;
     this.activeWatchedThreadId = null;
     this.watchStartAt = 0;
     this.lastRolloutSize = null;
-    this.stopWatcherAfterRefreshThreadId = null;
   }
 
   scheduleRefresh(reason) {
@@ -276,11 +294,18 @@ class CodexDesktopRefresher {
       return;
     }
 
-    this.clearRefreshTimer();
+    if (this.refreshTimer) {
+      this.log(`refresh already pending: ${reason}`);
+      return;
+    }
+
+    const elapsedSinceLastRefresh = this.now() - this.lastRefreshAt;
+    const waitMs = Math.max(0, this.debounceMs - elapsedSinceLastRefresh);
+    this.log(`refresh scheduled: ${reason}`);
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
-      void this.executeRefresh(reason);
-    }, this.debounceMs);
+      void this.runPendingRefresh();
+    }, waitMs);
   }
 
   clearRefreshTimer() {
@@ -292,114 +317,178 @@ class CodexDesktopRefresher {
     this.refreshTimer = null;
   }
 
-  async executeRefresh(reason) {
-    if (this.refreshRunning || !this.canRefresh() || !this.hasPendingRefreshWork()) {
+  async runPendingRefresh() {
+    if (!this.canRefresh()) {
+      this.clearPendingState();
       return;
+    }
+
+    if (!this.hasPendingRefreshWork()) {
+      return;
+    }
+
+    if (this.refreshRunning) {
+      this.log("refresh skipped (debounced): another refresh is already running");
+      return;
+    }
+
+    const isCompletionRun = this.pendingCompletionRefresh;
+    const pendingRefreshKinds = isCompletionRun
+      ? new Set(["completion"])
+      : new Set(this.pendingRefreshKinds);
+    const completionTurnId = this.pendingCompletionTurnId;
+    const targetUrl = isCompletionRun ? this.pendingCompletionTargetUrl : this.pendingTargetUrl;
+    const targetThreadId = isCompletionRun
+      ? this.pendingCompletionTargetThreadId
+      : this.pendingTargetThreadId;
+    const stopWatcherAfterRefreshThreadId = isCompletionRun
+      ? this.stopWatcherAfterRefreshThreadId
+      : null;
+    const shouldForceCompletionRefresh = isCompletionRun;
+
+    if (isCompletionRun) {
+      this.pendingCompletionRefresh = false;
+      this.pendingCompletionTurnId = null;
+      this.clearPendingCompletionTarget();
+      this.stopWatcherAfterRefreshThreadId = null;
+    } else {
+      this.pendingRefreshKinds.clear();
+      this.clearPendingTarget();
     }
 
     this.refreshRunning = true;
+    this.log(
+      `refresh running: ${Array.from(pendingRefreshKinds).join("+")}${targetThreadId ? ` thread=${targetThreadId}` : ""}`
+    );
+
+    let didRefresh = false;
     try {
-      const completionTargetUrl = this.pendingCompletionTargetUrl;
-      const completionTurnId = this.pendingCompletionTurnId;
-      const completionThreadId = this.pendingCompletionTargetThreadId;
-      const watcherThreadIdToStop = this.stopWatcherAfterRefreshThreadId;
-      const targetUrl = this.pendingTargetUrl;
-      const targetThreadId = this.pendingTargetThreadId;
-      const refreshKinds = new Set(this.pendingRefreshKinds);
-
-      this.clearPendingState();
-
-      if (completionTargetUrl) {
-        await this.syncThreadStateBeforeRefresh(completionThreadId);
-        await this.runRefresh(completionTargetUrl, {
-          reason,
-          refreshKinds,
-          isCompletionRun: true,
-        });
-        this.lastTurnIdRefreshed = completionTurnId || null;
-        if (completionThreadId && watcherThreadIdToStop === completionThreadId) {
-          this.stopWatcher();
-        }
-        return;
+      const refreshSignature = `${targetUrl || "app"}|${targetThreadId || "no-thread"}`;
+      if (
+        !shouldForceCompletionRefresh
+        && refreshSignature === this.lastRefreshSignature
+        && this.now() - this.lastRefreshAt < this.debounceMs
+      ) {
+        this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
+      } else {
+        await this.executeRefresh(targetUrl);
+        this.lastRefreshAt = this.now();
+        this.lastRefreshSignature = refreshSignature;
+        this.consecutiveRefreshFailures = 0;
+        didRefresh = true;
       }
-
-      if (targetUrl) {
-        await this.syncThreadStateBeforeRefresh(targetThreadId || null);
-        await this.runRefresh(targetUrl, {
-          reason,
-          refreshKinds,
-          isCompletionRun: false,
-        });
+      if (completionTurnId && didRefresh) {
+        this.lastTurnIdRefreshed = completionTurnId;
       }
     } catch (error) {
-      this.consecutiveRefreshFailures += 1;
-      const message = extractErrorMessage(error);
-      this.log(`refresh failed (${reason}): ${message}`);
-      if (this.consecutiveRefreshFailures >= this.customRefreshFailureThreshold || isDesktopUnavailableError(message)) {
-        this.disableRuntimeRefresh(message);
-      }
+      this.handleRefreshFailure(error);
     } finally {
       this.refreshRunning = false;
+      if (
+        didRefresh
+        && stopWatcherAfterRefreshThreadId
+        && stopWatcherAfterRefreshThreadId === this.activeWatchedThreadId
+      ) {
+        this.stopWatcher();
+        this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
+      }
+      // A completion refresh can queue while another refresh is still running,
+      // so retry whenever either queue still has work.
       if (this.hasPendingRefreshWork()) {
-        this.scheduleRefresh("follow-up refresh");
+        this.scheduleRefresh("pending follow-up refresh");
       }
     }
   }
 
-  async syncThreadStateBeforeRefresh(threadId) {
-    if (!threadId || typeof this.refreshThreadState !== "function") {
-      return;
-    }
-
-    try {
-      await this.refreshThreadState({ threadId });
-    } catch (error) {
-      this.log(`thread state refresh failed for ${threadId}: ${extractErrorMessage(error)}`);
-    }
-  }
-
-  async runRefresh(targetUrl, { reason, refreshKinds = new Set(), isCompletionRun = false } = {}) {
-    const signature = `${targetUrl}|${isCompletionRun ? "completion" : "activity"}`;
-    if (
-      !isCompletionRun
-      && signature === this.lastRefreshSignature
-      && (this.now() - this.lastRefreshAt) < this.midRunRefreshThrottleMs
-    ) {
-      return;
-    }
-
-    this.lastRefreshSignature = signature;
-    this.lastRefreshAt = this.now();
-    this.consecutiveRefreshFailures = 0;
-    this.log(`refreshing desktop (${reason}) -> ${targetUrl}`);
-
+  executeRefresh(targetUrl) {
     if (typeof this.refreshExecutor === "function") {
-      await this.refreshExecutor({
+      return this.refreshExecutor({
         targetUrl,
         bundleId: this.bundleId,
         appPath: this.appPath,
       });
-      return;
     }
 
     if (this.refreshBackend === "command") {
-      await execFilePromise("sh", ["-lc", this.refreshCommand]);
+      return execFilePromise("sh", ["-lc", this.refreshCommand]);
+    }
+
+    return execFilePromise("osascript", [
+      REFRESH_SCRIPT_PATH,
+      this.bundleId,
+      this.appPath,
+      targetUrl || "",
+    ]);
+  }
+
+  clearPendingCompletionTarget() {
+    this.pendingCompletionTargetUrl = "";
+    this.pendingCompletionTargetThreadId = "";
+  }
+
+  handleWatcherEvent(event) {
+    if (!event?.threadId || event.threadId !== this.activeWatchedThreadId) {
       return;
     }
 
-    if (this.refreshBackend === "applescript") {
-      await execFilePromise("osascript", [
-        REFRESH_SCRIPT_PATH,
-        this.bundleId,
-        this.appPath,
-        targetUrl,
-      ]);
+    const previousSize = this.lastRolloutSize;
+    this.lastRolloutSize = event.size;
+    this.noteRefreshTarget({
+      threadId: event.threadId,
+      url: buildThreadDeepLink(event.threadId),
+    });
+
+    if (event.reason === "materialized") {
+      this.queueRefresh("rollout_materialized", {
+        threadId: event.threadId,
+        url: buildThreadDeepLink(event.threadId),
+      }, `rollout ${event.reason}`);
       return;
     }
+
+    if (event.reason !== "growth") {
+      return;
+    }
+
+    if (previousSize == null) {
+      this.queueRefresh("rollout_growth", {
+        threadId: event.threadId,
+        url: buildThreadDeepLink(event.threadId),
+      }, "rollout first-growth");
+      this.lastMidRunRefreshAt = this.now();
+      return;
+    }
+
+    if (this.now() - this.lastMidRunRefreshAt < this.midRunRefreshThrottleMs) {
+      return;
+    }
+
+    this.lastMidRunRefreshAt = this.now();
+    this.queueRefresh("rollout_growth", {
+      threadId: event.threadId,
+      url: buildThreadDeepLink(event.threadId),
+    }, "rollout mid-run");
   }
 
   log(message) {
     console.log(`${this.logPrefix} ${message}`);
+  }
+
+  handleRefreshFailure(error) {
+    const message = extractErrorMessage(error);
+    console.error(`${this.logPrefix} refresh failed: ${message}`);
+
+    if (this.refreshBackend === "applescript" && isDesktopUnavailableError(message)) {
+      this.disableRuntimeRefresh("desktop refresh unavailable on this Mac");
+      return;
+    }
+
+    if (this.refreshBackend === "command") {
+      this.consecutiveRefreshFailures += 1;
+      if (this.consecutiveRefreshFailures >= this.customRefreshFailureThreshold) {
+        this.disableRuntimeRefresh("custom refresh command kept failing");
+      }
+    }
   }
 
   disableRuntimeRefresh(reason) {

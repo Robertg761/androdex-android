@@ -6,7 +6,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const WebSocket = require("ws");
 const {
+  getRelayWatchdogAction,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
 
@@ -67,5 +69,40 @@ test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchange
   assert.equal(
     sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"),
     rawMessage
+  );
+});
+
+test("getRelayWatchdogAction waits for inbound relay traffic before checking staleness", () => {
+  const trackedSocket = {
+    readyState: WebSocket.OPEN,
+  };
+
+  assert.equal(
+    getRelayWatchdogAction({
+      isShuttingDown: false,
+      activeSocket: trackedSocket,
+      trackedSocket,
+      hasSeenInboundRelayTraffic: false,
+      lastRelayActivityAt: 0,
+    }),
+    "wait"
+  );
+});
+
+test("getRelayWatchdogAction terminates stale relay connections after inbound traffic arrives", () => {
+  const trackedSocket = {
+    readyState: WebSocket.OPEN,
+  };
+
+  assert.equal(
+    getRelayWatchdogAction({
+      isShuttingDown: false,
+      activeSocket: trackedSocket,
+      trackedSocket,
+      hasSeenInboundRelayTraffic: true,
+      lastRelayActivityAt: 10_000,
+      now: 36_000,
+    }),
+    "terminate"
   );
 });

@@ -99,6 +99,7 @@ async function startMacOSBridgeService({
     osImpl,
     nodePath,
     cliPath,
+    refreshEnabled: Boolean(nextConfig.refreshEnabled),
   });
   restartLaunchAgent({
     env,
@@ -172,6 +173,7 @@ function getMacOSBridgeServiceStatus({
   const pairingFreshness = classifyPairingPayloadFreshness(pairingSession);
   const duplicateBridgeProcesses = listDuplicateBridgeProcesses({ execFileSyncImpl, launchdPid: launchd.pid });
   const deviceState = runCatchingLoadBridgeDeviceState(loadBridgeDeviceStateImpl);
+  const daemonConfig = readDaemonConfig({ env, fsImpl });
   return {
     label: SERVICE_LABEL,
     platform: "darwin",
@@ -182,6 +184,7 @@ function getMacOSBridgeServiceStatus({
     pairingSession,
     pairingFreshness,
     hasTrustedPhone: hasTrustedPhones(deviceState),
+    refreshEnabled: Boolean(daemonConfig?.refreshEnabled),
     duplicateBridgeProcesses,
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
@@ -200,6 +203,7 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[androdex] Bridge state: ${bridgeState}`);
   console.log(`[androdex] Connection: ${connectionStatus}`);
   console.log(`[androdex] Trusted phone: ${status.hasTrustedPhone ? "yes" : "no"}`);
+  console.log(`[androdex] Desktop refresh: ${status.refreshEnabled ? "enabled" : "disabled"}`);
   console.log(`[androdex] Pairing payload: ${pairingCreatedAt} (${status.pairingFreshness})`);
   if (status.duplicateBridgeProcesses.length > 0) {
     console.log(`[androdex] Duplicate bridge processes: ${status.duplicateBridgeProcesses.length}`);
@@ -227,6 +231,7 @@ function writeLaunchAgentPlist({
   osImpl = os,
   nodePath = process.execPath,
   cliPath = path.resolve(__dirname, "..", "bin", "androdex.js"),
+  refreshEnabled = false,
 } = {}) {
   const plistPath = resolveLaunchAgentPlistPath({ env, osImpl });
   const stateDir = resolveAndrodexStateDir({ env, osImpl });
@@ -241,6 +246,7 @@ function writeLaunchAgentPlist({
     stderrLogPath,
     nodePath,
     cliPath,
+    refreshEnabled,
   });
 
   fsImpl.mkdirSync(path.dirname(plistPath), { recursive: true });
@@ -256,6 +262,7 @@ function buildLaunchAgentPlist({
   stderrLogPath,
   nodePath,
   cliPath,
+  refreshEnabled = false,
 }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -286,6 +293,8 @@ function buildLaunchAgentPlist({
     <string>${escapeXml(pathEnv)}</string>
     <key>ANDRODEX_DEVICE_STATE_DIR</key>
     <string>${escapeXml(stateDir)}</string>
+    <key>ANDRODEX_REFRESH_ENABLED</key>
+    <string>${escapeXml(refreshEnabled ? "true" : "false")}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>${escapeXml(stdoutLogPath)}</string>

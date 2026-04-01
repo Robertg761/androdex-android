@@ -1336,8 +1336,9 @@ class AndrodexClient(
 
     private suspend fun performSecureHandshake(pairing: PairingPayload) {
         val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
-        val handshakeMode = if (trustedMac != null) handshakeModeTrustedReconnect else handshakeModeQrBootstrap
-        val expectedMacIdentityPublicKey = trustedMac?.macIdentityPublicKey ?: pairing.macIdentityPublicKey
+        val handshakePlan = resolveSecureHandshakePlan(pairing, trustedMac)
+        val handshakeMode = handshakePlan.handshakeMode
+        val expectedMacIdentityPublicKey = handshakePlan.expectedMacIdentityPublicKey
         val routingId = pairing.routingId
 
         val phoneEphemeralPrivateKey = generateX25519PrivateKey()
@@ -2984,6 +2985,29 @@ internal fun connectionUpdateForSocketClose(
 
 internal fun shouldClearSavedRelaySessionForSocketClose(code: Int): Boolean {
     return code in setOf(4000, 4001, 4003)
+}
+
+internal data class SecureHandshakePlan(
+    val handshakeMode: String,
+    val expectedMacIdentityPublicKey: String,
+)
+
+internal fun resolveSecureHandshakePlan(
+    pairing: PairingPayload,
+    trustedMac: TrustedMacRecord?,
+): SecureHandshakePlan {
+    val shouldUseFreshQrBootstrap = !pairing.bootstrapToken.isNullOrBlank() || pairing.expiresAt > 0L
+    return if (shouldUseFreshQrBootstrap || trustedMac == null) {
+        SecureHandshakePlan(
+            handshakeMode = handshakeModeQrBootstrap,
+            expectedMacIdentityPublicKey = pairing.macIdentityPublicKey,
+        )
+    } else {
+        SecureHandshakePlan(
+            handshakeMode = handshakeModeTrustedReconnect,
+            expectedMacIdentityPublicKey = trustedMac.macIdentityPublicKey,
+        )
+    }
 }
 
 internal fun trustedSessionResolveUrl(relayUrl: String): String? {

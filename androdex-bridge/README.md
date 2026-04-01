@@ -127,7 +127,7 @@ If your npm account requires write-time 2FA, rerun the publish command with `--o
 1. Run `androdex up` and confirm the Android app can pair successfully.
 2. Run `androdex up` inside a workspace and confirm the host keeps Codex bound to that local project.
 3. From Android, open an existing thread and create a new one to confirm the remote client flow still works end to end.
-4. If desktop refresh is enabled, verify phone-authored thread activity updates the host Codex desktop as expected without a Settings bounce.
+4. If desktop refresh is enabled, verify phone-authored thread activity updates the host Codex desktop via the Settings-bounce remount workaround.
 5. Restart the launchd service or reconnect the phone and confirm the saved pairing and active workspace recover without losing host-local state.
 
 ## Project status

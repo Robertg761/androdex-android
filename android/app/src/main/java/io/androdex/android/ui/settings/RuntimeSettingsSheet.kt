@@ -39,6 +39,7 @@ internal fun RuntimeSettingsSheet(
     state: RuntimeSettingsUiState,
     onDismiss: () -> Unit,
     onReload: () -> Unit,
+    onOpenPairingSetup: () -> Unit,
     onSelectModel: (String?) -> Unit,
     onSelectReasoning: (String?) -> Unit,
     onSelectServiceTier: (String?) -> Unit,
@@ -85,6 +86,25 @@ internal fun RuntimeSettingsSheet(
         }
 
         BridgeStatusCard(state = state.bridgeStatus)
+
+        SettingsSection(
+            title = "Pairing",
+            summary = "Set up this phone with a different host without clearing the rest of the app.",
+        ) {
+            Text(
+                text = "This disconnects the current session and opens the pairing flow so you can scan a fresh QR or paste a new pairing payload.",
+                style = MaterialTheme.typography.bodySmall,
+                color = RemodexTheme.colors.textSecondary,
+            )
+            Spacer(modifier = Modifier.height(geometry.spacing12))
+            RemodexButton(
+                onClick = onOpenPairingSetup,
+                modifier = Modifier.fillMaxWidth(),
+                style = RemodexButtonStyle.Secondary,
+            ) {
+                Text("Set Up Another Host")
+            }
+        }
 
         SettingsSection(
             title = "Runtime defaults",

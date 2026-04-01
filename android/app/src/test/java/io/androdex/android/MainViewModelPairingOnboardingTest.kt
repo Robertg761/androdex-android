@@ -177,6 +177,24 @@ class MainViewModelPairingOnboardingTest {
         assertTrue(viewModel.uiState.value.errorMessage?.contains("payload") == true)
     }
 
+    @Test
+    fun openManualPairingSetup_disconnectsWithoutClearingSavedPairingAndClosesThread() = runTest(dispatcher) {
+        val repository = PairingOnboardingRepository(hasSavedPairing = true)
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.createThread()
+        dispatcher.scheduler.runCurrent()
+        assertEquals("thread-created", viewModel.uiState.value.selectedThreadId)
+
+        viewModel.openManualPairingSetup()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(1, repository.disconnectCalls)
+        assertFalse(repository.lastDisconnectClearedSavedPairing)
+        assertEquals(null, viewModel.uiState.value.selectedThreadId)
+    }
+
     private companion object {
         val VALID_PAIRING_PAYLOAD = """
             {
@@ -201,6 +219,7 @@ private class PairingOnboardingRepository(
     var connectedPayload: String? = null
     var reconnectSavedCalls = 0
     var disconnectCalls = 0
+    var lastDisconnectClearedSavedPairing = false
     var connectError: Throwable? = null
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
@@ -224,6 +243,7 @@ private class PairingOnboardingRepository(
 
     override suspend fun disconnect(clearSavedPairing: Boolean) {
         disconnectCalls += 1
+        lastDisconnectClearedSavedPairing = clearSavedPairing
     }
 
     override suspend fun refreshThreads(): List<ThreadSummary> = emptyList()

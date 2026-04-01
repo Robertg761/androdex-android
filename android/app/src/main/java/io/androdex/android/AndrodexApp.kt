@@ -211,6 +211,10 @@ fun AndrodexApp(viewModel: MainViewModel) {
             state = appState.settings,
             onDismiss = { settingsOpen = false },
             onReload = viewModel::loadRuntimeConfig,
+            onOpenPairingSetup = {
+                settingsOpen = false
+                viewModel.openManualPairingSetup()
+            },
             onSelectModel = viewModel::selectModel,
             onSelectReasoning = viewModel::selectReasoningEffort,
             onSelectServiceTier = { wireValue ->

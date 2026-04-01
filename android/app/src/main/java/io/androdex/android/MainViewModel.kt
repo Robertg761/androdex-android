@@ -1184,6 +1184,24 @@ class MainViewModel(
         }
     }
 
+    fun openManualPairingSetup() {
+        clearComposerAutocomplete()
+        uiStateFlow.update {
+            it.copy(
+                gitCommitDialog = null,
+                gitBranchDialog = null,
+                gitWorktreeDialog = null,
+                gitAlert = null,
+                pendingGitBranchOperation = null,
+                pendingGitRemoveWorktree = null,
+            )
+        }
+        runBusyAction("Opening pairing setup...") {
+            service.closeThread()
+            service.disconnect(clearSavedPairing = false)
+        }
+    }
+
     fun reconnectSavedIfAvailable() {
         if (uiStateFlow.value.isBusy
             || uiStateFlow.value.pairingInput.isNotBlank()
