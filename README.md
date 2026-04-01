@@ -181,7 +181,7 @@ Use this after host-side changes to make sure the macOS host service and Android
 1. Run `androdex up` and confirm the phone can pair successfully.
 2. Run `androdex up` inside a workspace and confirm the host-local Codex session opens in that project.
 3. From Android, open an existing thread and create a new thread to confirm remote control is still working.
-4. If desktop refresh is enabled, verify phone-authored activity brings the host Codex desktop to the right thread.
+4. If desktop refresh is enabled, verify phone-authored activity visibly refreshes the host Codex desktop without hijacking the normal thread list or workspace context.
 5. While a run is active on Android, confirm `Stop`, plan mode, queued follow-ups, restore-to-composer, and queue pause/resume all behave correctly and that queued drafts flush in order once the run goes idle.
 6. On an idle thread with history, confirm Android thread maintenance actions can compact context, roll back the last turn, and clean background terminals when the connected host advertises support. `thread/shellCommand` is still intentionally not exposed on Android.
 7. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
@@ -229,8 +229,10 @@ The desktop Codex app can still read persisted sessions from `~/.codex/sessions`
 
 On macOS, Androdex uses an optional desktop refresh workaround:
 
-- when `ANDRODEX_REFRESH_ENABLED=true`, the bridge forces a route remount with `codex://settings` followed by `codex://threads/<id>`
-- rollout watcher refreshes are throttled during long runs so the desktop can catch up without relaunching the whole app
+- when `ANDRODEX_REFRESH_ENABLED=true`, the bridge force-relaunches `Codex.app` for phone-authored activity while preserving the current desktop thread list or workspace view by default
+- set `ANDRODEX_REFRESH_ROUTE_TO_THREAD=true` only if you explicitly want the older deep-link-to-thread behavior
+- app-only refreshes still use a lightweight `codex://settings` bounce when there is no concrete thread route yet
+- rollout watcher refreshes are throttled during long runs so the desktop can catch up without constant relaunch loops
 - this is a workaround for Codex desktop remounting, not true phone-to-desktop live GUI sync
 
 On Windows, the bridge also includes a desktop refresh workaround for phone-authored activity. It targets the installed Codex desktop executable directly instead of falling back to the raw `codex://...` protocol handler, because a misregistered protocol handler can open the wrong Codex build and break live thread sync.
@@ -274,6 +276,7 @@ The bridge reads `ANDRODEX_*` environment variables.
 | `ANDRODEX_CODEX_ENDPOINT` | Connect to an existing Codex WebSocket instead of spawning a local runtime |
 | `ANDRODEX_REFRESH_ENABLED` | Enable or disable desktop refresh explicitly |
 | `ANDRODEX_REFRESH_DEBOUNCE_MS` | Adjust refresh debounce timing |
+| `ANDRODEX_REFRESH_ROUTE_TO_THREAD` | Opt into reopening the concrete `codex://threads/<id>` route during auto refresh |
 | `ANDRODEX_CODEX_BUNDLE_ID` | Override the Codex desktop bundle ID on macOS |
 | `ANDRODEX_REFRESH_COMMAND` | Override desktop refresh with a custom command |
 | `ANDRODEX_PUSH_SERVICE_URL` | Optional Android push service endpoint for device registration and completion notifications |
@@ -363,7 +366,7 @@ For relay deployment details, see [relay/README.md](/G:/Projects/Androdex/relay/
 No. The host bridge is macOS-only right now.
 
 **How does desktop sync work on macOS?**  
-The desktop app reads persisted session data, but it does not live-reload external `app-server` writes on its own. When desktop refresh is enabled, the bridge uses a debounced Settings-bounce remount (`codex://settings` then `codex://threads/<id>`) plus throttled rollout refreshes so phone-authored thread activity becomes visible in `Codex.app`.
+The desktop app reads persisted session data, but it does not live-reload external `app-server` writes on its own. When desktop refresh is enabled, the bridge relaunches `Codex.app` for phone-authored activity while preserving the current desktop context by default, falls back to a lightweight Settings bounce when no relaunch is needed, and throttles rollout refreshes so phone-authored activity becomes visible in `Codex.app`.
 
 **Does this run Codex on the phone itself?**  
 No. Codex runs on the host machine. The phone is only a paired remote client.

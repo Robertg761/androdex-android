@@ -72,6 +72,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -107,19 +108,32 @@ private const val trustedSessionResolveTimeoutMs = 8_000L
 private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
+private const val secureSessionReadyTimeoutMs = 5_000L
 private const val logTag = "AndrodexClient"
 private const val trustedReconnectFailureThreshold = 3
+
+internal fun shouldIgnoreApplicationPayloadUntilSecureReady(
+    hasApplicationFields: Boolean,
+    secureSessionReady: Boolean,
+): Boolean = hasApplicationFields && !secureSessionReady
+
+internal fun shouldWaitForSecureSessionReady(
+    secureSessionReady: Boolean,
+    lifecycleTransitionInFlight: Boolean,
+    handshakeInProgress: Boolean,
+    socketAvailable: Boolean,
+): Boolean = !secureSessionReady && (lifecycleTransitionInFlight || handshakeInProgress || socketAvailable)
 
 private class HostTransportInterruptedException(
     message: String,
 ) : CancellationException(message)
 
-private enum class TrustedResolveFallbackPolicy {
+internal enum class TrustedResolveFallbackPolicy {
     ALLOW_SAVED_SESSION,
     REQUIRE_FRESH_LIVE_SESSION,
 }
 
-private sealed interface TrustedSessionResolveResult {
+internal sealed interface TrustedSessionResolveResult {
     data class Resolved(
         val pairing: PairingPayload,
         val displayName: String?,
@@ -203,7 +217,7 @@ class AndrodexClient(
         emitRuntimeConfig()
     }
 
-    fun hasSavedPairing(): Boolean = savedRelaySession != null
+    fun hasSavedPairing(): Boolean = savedRelaySession != null || currentTrustedMacRecord() != null
 
     fun currentFingerprint(): String? {
         val trusted = currentTrustedMacRecord()
@@ -1077,6 +1091,7 @@ class AndrodexClient(
                             try {
                                 handleIncomingWireText(text)
                             } catch (error: Throwable) {
+                                Log.e(logTag, "failed to process relay message: ${error.message}", error)
                                 updatesFlow.emit(ClientUpdate.Error(error.message ?: "Failed to process relay message."))
                             }
                         }
@@ -1121,7 +1136,6 @@ class AndrodexClient(
             updatesFlow.emit(ClientUpdate.Connection(ConnectionStatus.HANDSHAKING, "Performing secure handshake..."))
             performSecureHandshake(pairing)
             initializeSession()
-            runCatching { loadRuntimeConfig() }
             pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)?.let { persistedSession ->
                 persistence.saveSavedRelaySession(persistedSession)
                 savedRelaySession = persistedSession
@@ -1146,6 +1160,11 @@ class AndrodexClient(
     }
 
     private suspend fun resolveTrustedPairing(pairing: PairingPayload): TrustedSessionResolveResult {
+        if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId)) {
+            return TrustedSessionResolveResult.RepairRequired(
+                "Trusted reconnect data is from an older live-session format. Open a fresh pairing payload from the host to repair this phone.",
+            )
+        }
         val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
             ?: return TrustedSessionResolveResult.FallbackToSavedSession("No trusted host metadata is available yet.")
         val resolveUrl = trustedSessionResolveUrl(pairing.relay)
@@ -1193,11 +1212,18 @@ class AndrodexClient(
                         val bodyText = response.body.string()
                         val parsedBody = runCatching { JSONObject(bodyText) }.getOrNull()
                         if (!response.isSuccessful) {
-                            return@use mapTrustedSessionResolveFailure(
+                            val failure = mapTrustedSessionResolveFailure(
                                 responseCode = response.code,
                                 responseBody = parsedBody,
                                 fallbackPolicy = fallbackPolicy,
                             )
+                            val relayErrorCode = parsedBody?.optString("code")?.takeIf { it.isNotBlank() } ?: "<none>"
+                            val relayDetail = parsedBody?.optString("message")?.takeIf { it.isNotBlank() } ?: "<none>"
+                            Log.w(
+                                logTag,
+                                "trusted-session resolve failed host=${pairing.macDeviceId.take(8)} code=${response.code} error=$relayErrorCode detail=$relayDetail outcome=${failure::class.simpleName}",
+                            )
+                            return@use failure
                         }
                         parsedBody ?: JSONObject()
                     }
@@ -1226,6 +1252,10 @@ class AndrodexClient(
                         lastUsedAtEpochMs = timestamp,
                     )
                 }
+                Log.i(
+                    logTag,
+                    "trusted-session resolve succeeded host=${pairing.macDeviceId.take(8)} session=${resolvedSessionId.take(8)}",
+                )
                 TrustedSessionResolveResult.Resolved(
                     pairing = pairing.copy(
                         hostId = resolvedSessionId,
@@ -1254,36 +1284,6 @@ class AndrodexClient(
         }
     }
 
-    private fun mapTrustedSessionResolveFailure(
-        responseCode: Int,
-        responseBody: JSONObject?,
-        fallbackPolicy: TrustedResolveFallbackPolicy,
-        fallbackDetail: String? = null,
-    ): TrustedSessionResolveResult {
-        val errorCode = responseBody?.optString("code")?.trim()?.ifEmpty { null }
-            ?: responseBody?.optString("error")?.trim()?.ifEmpty { null }
-        val detail = responseBody?.optString("message")?.trim()?.ifEmpty { null }
-            ?: responseBody?.optString("error_description")?.trim()?.ifEmpty { null }
-            ?: fallbackDetail
-            ?: when (responseCode) {
-                0 -> "Trusted host is known, but the relay could not resolve a fresh live session."
-                else -> "Trusted host is known, but the relay did not provide a fresh live session."
-            }
-        return when (errorCode) {
-            "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> {
-                TrustedSessionResolveResult.RepairRequired(detail)
-            }
-            "update_required" -> TrustedSessionResolveResult.UpdateRequired(detail)
-            else -> {
-                if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION) {
-                    TrustedSessionResolveResult.FallbackToSavedSession(detail)
-                } else {
-                    TrustedSessionResolveResult.LiveSessionUnresolved(detail)
-                }
-            }
-        }
-    }
-
     private suspend fun disconnectInternal(clearSavedPairing: Boolean) {
         socketMutex.withLock {
             webSocket?.close(1000, null)
@@ -1303,9 +1303,13 @@ class AndrodexClient(
     }
 
     private suspend fun initializeSession() {
+        Log.i(logTag, "initialize session start")
         performInitializeSessionRequest { params -> sendRequest("initialize", params) }
+        Log.i(logTag, "initialize session request completed")
         sendNotification("initialized", null)
+        Log.i(logTag, "initialize session notification sent")
         refreshCollaborationModes()
+        Log.i(logTag, "initialize session collaboration modes refreshed")
     }
 
     private fun resetMaintenanceActionCapabilityDowngrades() {
@@ -1578,9 +1582,19 @@ class AndrodexClient(
             "serverHello", "secureReady", "secureError" -> bufferSecureControlMessage(payload.optString("kind"), text)
             "encryptedEnvelope" -> handleEncryptedEnvelope(payload)
             else -> {
-                if (payload.has("method") || payload.has("id")) {
-                    processIncomingApplicationText(text)
+                val hasApplicationFields = payload.has("method") || payload.has("id")
+                if (!hasApplicationFields) {
+                    return
                 }
+                if (shouldIgnoreApplicationPayloadUntilSecureReady(
+                        hasApplicationFields = hasApplicationFields,
+                        secureSessionReady = secureSession != null,
+                    )
+                ) {
+                    Log.w(logTag, "ignoring unsecured application payload before secure session is ready")
+                    return
+                }
+                processIncomingApplicationText(text)
             }
         }
     }
@@ -2026,6 +2040,7 @@ class AndrodexClient(
             withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
         } catch (error: TimeoutCancellationException) {
             pendingResponses.remove(requestId)
+            Log.w(logTag, "request timeout method=$method id=$requestId")
             throw HostTransportInterruptedException(
                 "Timed out waiting for $method response from the host."
             )
@@ -2125,7 +2140,11 @@ class AndrodexClient(
     }
 
     private suspend fun sendMessage(message: JSONObject) {
-        val secureText = secureWireText(message.toString())
+        val secureSession = awaitSecureSessionReady()
+        val secureText = secureWireText(
+            plaintext = message.toString(),
+            session = secureSession,
+        )
         sendRawText(secureText)
     }
 
@@ -2139,8 +2158,7 @@ class AndrodexClient(
         Log.d(logTag, "socket send ok payloadLength=${text.length}")
     }
 
-    private fun secureWireText(plaintext: String): String {
-        val session = secureSession ?: throw IllegalStateException("Secure session is not ready yet.")
+    private fun secureWireText(plaintext: String, session: SecureSession): String {
         val payload = JSONObject()
             .put("bridgeOutboundSeq", JSONObject.NULL)
             .put("payloadText", plaintext)
@@ -2161,6 +2179,36 @@ class AndrodexClient(
             .put("tag", encodeBase64(tag))
         session.nextOutboundCounter += 1
         return envelope.toString()
+    }
+
+    private suspend fun awaitSecureSessionReady(): SecureSession {
+        secureSession?.let { return it }
+
+        try {
+            withTimeout(secureSessionReadyTimeoutMs) {
+                while (true) {
+                    if (secureSession != null) {
+                        break
+                    }
+
+                    val shouldWait = shouldWaitForSecureSessionReady(
+                        secureSessionReady = secureSession != null,
+                        lifecycleTransitionInFlight = connectionLifecycleMutex.isLocked,
+                        handshakeInProgress = pendingHandshake != null,
+                        socketAvailable = webSocket != null || openSocketDeferred != null,
+                    )
+                    if (!shouldWait) {
+                        throw IllegalStateException(buildNotConnectedDetail())
+                    }
+
+                    delay(25)
+                }
+            }
+        } catch (_: TimeoutCancellationException) {
+            throw IllegalStateException("Secure session is not ready yet.")
+        }
+
+        return secureSession ?: throw IllegalStateException("Secure session is not ready yet.")
     }
 
     private suspend fun handleSocketClosed(closedSocket: WebSocket, code: Int) {
@@ -2243,6 +2291,20 @@ class AndrodexClient(
             val code = error.optString("code")
             val message = error.optString("message").ifBlank { "Secure handshake failed." }
             emitTerminalConnectionUpdate(secureErrorConnectionUpdate(code, message))
+            val waiters = requestMutex.withLock {
+                val pendingWaiters = pendingSecureControlWaiters.values.flatten()
+                if (pendingWaiters.isEmpty()) {
+                    bufferedSecureControlMessages.clear()
+                    bufferedSecureControlMessages.getOrPut(kind) { ArrayDeque() }.add(rawText)
+                    emptyList()
+                } else {
+                    pendingSecureControlWaiters.clear()
+                    bufferedSecureControlMessages.clear()
+                    pendingWaiters
+                }
+            }
+            waiters.forEach { it.completeExceptionally(IllegalStateException(message)) }
+            return
         }
 
         val waiter = requestMutex.withLock {
@@ -2985,6 +3047,47 @@ internal fun connectionUpdateForSocketClose(
 
 internal fun shouldClearSavedRelaySessionForSocketClose(code: Int): Boolean {
     return code in setOf(4000, 4001, 4003)
+}
+
+internal fun looksLikeLegacyRelaySessionIdentifier(value: String?): Boolean {
+    val normalized = value?.trim().orEmpty()
+    if (normalized.isEmpty()) {
+        return false
+    }
+    return runCatching { UUID.fromString(normalized) }.isSuccess
+}
+
+internal fun mapTrustedSessionResolveFailure(
+    responseCode: Int,
+    responseBody: JSONObject?,
+    fallbackPolicy: TrustedResolveFallbackPolicy,
+    fallbackDetail: String? = null,
+): TrustedSessionResolveResult {
+    val errorCode = responseBody?.optString("code")?.trim()?.ifEmpty { null }
+        ?: responseBody?.optString("error")?.trim()?.ifEmpty { null }
+    val detail = responseBody?.optString("message")?.trim()?.ifEmpty { null }
+        ?: responseBody?.optString("error_description")?.trim()?.ifEmpty { null }
+        ?: fallbackDetail
+        ?: when (responseCode) {
+            0 -> "Trusted host is known, but the relay could not resolve a fresh live session."
+            else -> "Trusted host is known, but the relay did not provide a fresh live session."
+        }
+    return when (errorCode) {
+        "phone_not_trusted", "phone_identity_changed", "phone_replacement_required", "invalid_signature", "invalid_request" -> {
+            TrustedSessionResolveResult.RepairRequired(detail)
+        }
+        "update_required" -> TrustedSessionResolveResult.UpdateRequired(detail)
+        "session_unavailable", "resolve_request_expired", "resolve_request_replayed" -> {
+            TrustedSessionResolveResult.LiveSessionUnresolved(detail)
+        }
+        else -> {
+            if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION && responseCode == 0) {
+                TrustedSessionResolveResult.FallbackToSavedSession(detail)
+            } else {
+                TrustedSessionResolveResult.LiveSessionUnresolved(detail)
+            }
+        }
+    }
 }
 
 internal data class SecureHandshakePlan(

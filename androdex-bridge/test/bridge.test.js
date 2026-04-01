@@ -9,6 +9,7 @@ const assert = require("node:assert/strict");
 const WebSocket = require("ws");
 const {
   getRelayWatchdogAction,
+  hasRelayConnectionGoneStale,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
 
@@ -89,7 +90,7 @@ test("getRelayWatchdogAction waits for inbound relay traffic before checking sta
   );
 });
 
-test("getRelayWatchdogAction terminates stale relay connections after inbound traffic arrives", () => {
+test("getRelayWatchdogAction keeps healthy quiet relay connections alive between heartbeat intervals", () => {
   const trackedSocket = {
     readyState: WebSocket.OPEN,
   };
@@ -101,8 +102,31 @@ test("getRelayWatchdogAction terminates stale relay connections after inbound tr
       trackedSocket,
       hasSeenInboundRelayTraffic: true,
       lastRelayActivityAt: 10_000,
-      now: 36_000,
+      now: 39_000,
     }),
-    "terminate"
+    "ping"
   );
+});
+
+test("getRelayWatchdogAction keeps quiet relay connections alive even after the stale window", () => {
+  const trackedSocket = {
+    readyState: WebSocket.OPEN,
+  };
+
+  assert.equal(
+    getRelayWatchdogAction({
+      isShuttingDown: false,
+      activeSocket: trackedSocket,
+      trackedSocket,
+      hasSeenInboundRelayTraffic: true,
+      lastRelayActivityAt: 10_000,
+      now: 56_000,
+    }),
+    "ping"
+  );
+});
+
+test("hasRelayConnectionGoneStale waits for the full stale timeout window", () => {
+  assert.equal(hasRelayConnectionGoneStale(10_000, 54_999), false);
+  assert.equal(hasRelayConnectionGoneStale(10_000, 55_000), true);
 });

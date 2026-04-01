@@ -17,6 +17,7 @@ const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_ROUTE_THREAD_TARGETS = false;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
 const NEW_THREAD_DEEP_LINK = "codex://threads/new";
 
@@ -37,6 +38,7 @@ class CodexDesktopRefresher {
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    routeThreadTargets = DEFAULT_ROUTE_THREAD_TARGETS,
   } = {}) {
     this.enabled = enabled;
     this.debounceMs = debounceMs;
@@ -54,6 +56,7 @@ class CodexDesktopRefresher {
     this.refreshBackend = refreshBackend
       || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.routeThreadTargets = routeThreadTargets;
 
     this.mode = "idle";
     this.pendingNewThread = false;
@@ -363,7 +366,11 @@ class CodexDesktopRefresher {
 
     let didRefresh = false;
     try {
-      const refreshSignature = `${targetUrl || "app"}|${targetThreadId || "no-thread"}`;
+      const refreshTarget = this.resolveRefreshTarget({
+        targetUrl,
+        targetThreadId,
+      });
+      const refreshSignature = `${refreshTarget.targetUrl || "app"}|${targetThreadId || "no-thread"}|${refreshTarget.refreshMode}`;
       if (
         !shouldForceCompletionRefresh
         && refreshSignature === this.lastRefreshSignature
@@ -371,11 +378,15 @@ class CodexDesktopRefresher {
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
       } else {
-        await this.executeRefresh(targetUrl);
+        const refreshResult = await this.executeRefresh(refreshTarget);
         this.lastRefreshAt = this.now();
         this.lastRefreshSignature = refreshSignature;
         this.consecutiveRefreshFailures = 0;
         didRefresh = true;
+        const summary = summarizeRefreshResult(refreshResult);
+        if (summary) {
+          this.log(`refresh completed: ${summary}`);
+        }
       }
       if (completionTurnId && didRefresh) {
         this.lastTurnIdRefreshed = completionTurnId;
@@ -400,10 +411,32 @@ class CodexDesktopRefresher {
     }
   }
 
-  executeRefresh(targetUrl) {
+  resolveRefreshTarget({ targetUrl, targetThreadId }) {
+    if (this.routeThreadTargets) {
+      return {
+        targetUrl: targetUrl || "",
+        refreshMode: "auto",
+      };
+    }
+
+    if (targetThreadId || targetUrl === NEW_THREAD_DEEP_LINK) {
+      return {
+        targetUrl: "",
+        refreshMode: "relaunch-preserve",
+      };
+    }
+
+    return {
+      targetUrl: "",
+      refreshMode: "auto",
+    };
+  }
+
+  executeRefresh({ targetUrl = "", refreshMode = "auto" } = {}) {
     if (typeof this.refreshExecutor === "function") {
       return this.refreshExecutor({
         targetUrl,
+        refreshMode,
         bundleId: this.bundleId,
         appPath: this.appPath,
       });
@@ -418,6 +451,7 @@ class CodexDesktopRefresher {
       this.bundleId,
       this.appPath,
       targetUrl || "",
+      refreshMode,
     ]);
   }
 
@@ -522,6 +556,7 @@ function readBridgeConfig({ env = process.env } = {}) {
   const codexEndpoint = readFirstDefinedEnv(["ANDRODEX_CODEX_ENDPOINT"], "", env);
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
+  const routeThreadTargets = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ROUTE_TO_THREAD"], env);
   const relayUrl = readFirstDefinedEnv(
     ["ANDRODEX_RELAY", "ANDRODEX_DEFAULT_RELAY_URL"],
     PUBLIC_DEFAULT_RELAY_URL,
@@ -542,6 +577,7 @@ function readBridgeConfig({ env = process.env } = {}) {
     refreshEnabled: explicitRefreshEnabled == null
       ? false
       : explicitRefreshEnabled,
+    refreshEnabledExplicit: explicitRefreshEnabled != null,
     refreshDebounceMs: parseIntegerEnv(
       readFirstDefinedEnv(["ANDRODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
       DEFAULT_DEBOUNCE_MS
@@ -550,6 +586,7 @@ function readBridgeConfig({ env = process.env } = {}) {
     refreshCommand,
     codexBundleId: readFirstDefinedEnv(["ANDRODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
     codexAppPath: DEFAULT_APP_PATH,
+    routeThreadTargets: routeThreadTargets == null ? DEFAULT_ROUTE_THREAD_TARGETS : routeThreadTargets,
   };
 }
 
@@ -565,6 +602,21 @@ function execFilePromise(command, args) {
       resolve({ stdout, stderr });
     });
   });
+}
+
+function summarizeRefreshResult(result) {
+  if (!result) {
+    return "";
+  }
+
+  const stdout = typeof result.stdout === "string"
+    ? result.stdout.trim()
+    : result.stdout?.toString?.("utf8")?.trim?.() || "";
+  const stderr = typeof result.stderr === "string"
+    ? result.stderr.trim()
+    : result.stderr?.toString?.("utf8")?.trim?.() || "";
+
+  return stdout || stderr || "";
 }
 
 function safeParseJSON(value) {

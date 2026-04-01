@@ -19,6 +19,7 @@ test("readBridgeConfig keeps the public relay default and disables refresh unles
   const enabledConfig = readBridgeConfig({
     env: {
       ANDRODEX_REFRESH_ENABLED: "true",
+      ANDRODEX_REFRESH_ROUTE_TO_THREAD: "true",
       ANDRODEX_RELAY: "ws://127.0.0.1:8787/relay",
       ANDRODEX_CODEX_ENDPOINT: "ws://127.0.0.1:8080",
     },
@@ -26,15 +27,51 @@ test("readBridgeConfig keeps the public relay default and disables refresh unles
 
   assert.equal(defaultConfig.relayUrl, "wss://relay.androdex.xyz/relay");
   assert.equal(defaultConfig.refreshEnabled, false);
+  assert.equal(defaultConfig.refreshEnabledExplicit, false);
+  assert.equal(defaultConfig.routeThreadTargets, false);
   assert.equal(enabledConfig.refreshEnabled, true);
+  assert.equal(enabledConfig.refreshEnabledExplicit, true);
+  assert.equal(enabledConfig.routeThreadTargets, true);
   assert.equal(enabledConfig.relayUrl, "ws://127.0.0.1:8787/relay");
   assert.equal(enabledConfig.codexEndpoint, "ws://127.0.0.1:8080");
 });
 
-test("macOS refresh AppleScript bounces through Settings before reopening the thread", () => {
+test("macOS refresh AppleScript supports preserve-context relaunches without Accessibility automation", () => {
   const script = fs.readFileSync(MAC_REFRESH_SCRIPT_PATH, "utf8");
   assert.match(script, /codex:\/\/settings/);
-  assert.match(script, /openCodexUrl\(bundleId, appPath, bounceUrl\)/);
+  assert.doesNotMatch(script, /System Events/);
+  assert.doesNotMatch(script, /tell application "Finder" to activate/);
+  assert.match(script, /refreshMode is "relaunch-preserve"/);
+  assert.match(script, /openCodexUrl\(bundleId, appPath, ""\)/);
+  assert.match(script, /ps ax -o pid=,command=/);
+  assert.match(script, /signalProcess\(appExecutablePath, "TERM"\)/);
+  assert.match(script, /signalProcess\(appExecutablePath, "KILL"\)/);
+  assert.match(script, /openCodexUrl\(bundleId, appPath, targetUrl\)/);
+});
+
+test("automatic thread refreshes preserve the current desktop context by default", async () => {
+  const refreshCalls = [];
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    refreshExecutor: async ({ targetUrl, refreshMode }) => {
+      refreshCalls.push({ targetUrl, refreshMode });
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {
+      threadId: "thread-preserve",
+    },
+  }));
+
+  await wait(10);
+
+  assert.deepEqual(refreshCalls, [{
+    targetUrl: "",
+    refreshMode: "relaunch-preserve",
+  }]);
 });
 
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
@@ -43,6 +80,7 @@ test("thread/start falls back once to the new-thread route when thread id is sti
     enabled: true,
     debounceMs: 0,
     fallbackNewThreadMs: 15,
+    routeThreadTargets: true,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -67,6 +105,7 @@ test("thread/started cancels the fallback and refreshes the concrete thread rout
     enabled: true,
     debounceMs: 0,
     fallbackNewThreadMs: 40,
+    routeThreadTargets: true,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -116,6 +155,7 @@ test("rollout growth refreshes are throttled during long runs", async () => {
     enabled: true,
     debounceMs: 0,
     midRunRefreshThrottleMs: 3_000,
+    routeThreadTargets: true,
     now: () => currentTime,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
@@ -172,6 +212,7 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
+    routeThreadTargets: true,
     now: () => currentTime,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
@@ -225,6 +266,7 @@ test("completion refresh is retried after a slow in-flight refresh finishes", as
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
+    routeThreadTargets: true,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
       if (refreshCalls.length === 1) {
@@ -271,6 +313,7 @@ test("completion refresh keeps its own thread target even if another thread queu
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 1_200,
+    routeThreadTargets: true,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -320,6 +363,7 @@ test("handleTransportReset cancels pending refreshes and clears watcher state", 
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 30,
+    routeThreadTargets: true,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
     },
@@ -350,6 +394,7 @@ test("handleTransportReset clears duplicate-target memory so the next refresh ca
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 1_200,
+    routeThreadTargets: true,
     now: () => currentTime,
     refreshExecutor: async ({ targetUrl }) => {
       refreshCalls.push(targetUrl);
@@ -386,6 +431,7 @@ test("desktop refresh disables itself after a desktop-unavailable AppleScript fa
     enabled: true,
     debounceMs: 0,
     refreshBackend: "applescript",
+    routeThreadTargets: true,
     refreshExecutor: async () => {
       attempts += 1;
       throw new Error("Unable to find application named Codex");
@@ -425,6 +471,7 @@ test("custom refresh commands only disable after repeated failures", async () =>
     enabled: true,
     debounceMs: 0,
     refreshBackend: "command",
+    routeThreadTargets: true,
     customRefreshFailureThreshold: 3,
     refreshExecutor: async () => {
       attempts += 1;

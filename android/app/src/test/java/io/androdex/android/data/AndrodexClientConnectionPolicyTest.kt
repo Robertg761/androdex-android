@@ -2,8 +2,10 @@ package io.androdex.android.data
 
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AndrodexClientConnectionPolicyTest {
@@ -16,6 +18,17 @@ class AndrodexClientConnectionPolicyTest {
 
         assertEquals(ConnectionStatus.RECONNECT_REQUIRED, update.status)
         assertEquals("Phone is no longer trusted.", update.detail)
+    }
+
+    @Test
+    fun secureError_mapsPhoneReplacementToReconnectRequired() {
+        val update = secureErrorConnectionUpdate(
+            code = "phone_replacement_required",
+            message = "Reset pairing on the host before pairing a new device.",
+        )
+
+        assertEquals(ConnectionStatus.RECONNECT_REQUIRED, update.status)
+        assertEquals("Reset pairing on the host before pairing a new device.", update.detail)
     }
 
     @Test
@@ -73,6 +86,62 @@ class AndrodexClientConnectionPolicyTest {
         val resolveUrl = trustedSessionResolveUrl("ws://localhost:8787/custom/relay")
 
         assertEquals("http://localhost:8787/custom/v1/trusted/session/resolve", resolveUrl)
+    }
+
+    @Test
+    fun trustedSessionResolveFailure_requiresFreshLiveSessionWhenRelaySaysHostIsOffline() {
+        val result = mapTrustedSessionResolveFailure(
+            responseCode = 404,
+            responseBody = JSONObject()
+                .put("code", "session_unavailable")
+                .put("message", "The trusted host is offline right now."),
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+        )
+
+        assertTrue(result is TrustedSessionResolveResult.LiveSessionUnresolved)
+        assertEquals("The trusted host is offline right now.", (result as TrustedSessionResolveResult.LiveSessionUnresolved).detail)
+    }
+
+    @Test
+    fun trustedSessionResolveFailure_marksInvalidSignatureAsRepairRequired() {
+        val result = mapTrustedSessionResolveFailure(
+            responseCode = 403,
+            responseBody = JSONObject()
+                .put("code", "invalid_signature")
+                .put("message", "The trusted-session resolve signature is invalid."),
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+        )
+
+        assertTrue(result is TrustedSessionResolveResult.RepairRequired)
+        assertEquals(
+            "The trusted-session resolve signature is invalid.",
+            (result as TrustedSessionResolveResult.RepairRequired).detail,
+        )
+    }
+
+    @Test
+    fun trustedSessionResolveFailure_onlyFallsBackToSavedSessionForTransportErrors() {
+        val result = mapTrustedSessionResolveFailure(
+            responseCode = 0,
+            responseBody = null,
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+        )
+
+        assertTrue(result is TrustedSessionResolveResult.FallbackToSavedSession)
+        assertEquals(
+            "Trusted host is known, but the relay could not resolve a fresh live session.",
+            (result as TrustedSessionResolveResult.FallbackToSavedSession).detail,
+        )
+    }
+
+    @Test
+    fun legacyRelaySessionIdentifier_detectsUuidSessionIds() {
+        assertTrue(looksLikeLegacyRelaySessionIdentifier("51b5f04f-b19d-4fa7-b0ea-df5b31adb240"))
+    }
+
+    @Test
+    fun legacyRelaySessionIdentifier_ignoresRealDeviceIds() {
+        assertEquals(false, looksLikeLegacyRelaySessionIdentifier("mac-5"))
     }
 
     @Test

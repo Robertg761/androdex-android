@@ -67,6 +67,7 @@ Useful variables:
 - `ANDRODEX_CODEX_ENDPOINT`: connect to an existing Codex WebSocket instead of spawning a local runtime
 - `ANDRODEX_REFRESH_ENABLED`: enable or disable desktop refresh explicitly
 - `ANDRODEX_REFRESH_DEBOUNCE_MS`: adjust refresh debounce timing
+- `ANDRODEX_REFRESH_ROUTE_TO_THREAD`: opt into reopening the concrete `codex://threads/<id>` route during auto refresh
 - `ANDRODEX_REFRESH_COMMAND`: override desktop refresh with a custom command
 - `ANDRODEX_CODEX_BUNDLE_ID`: override the Codex desktop bundle ID on macOS
 - `ANDRODEX_PUSH_SERVICE_URL`: optional Android push service endpoint for device registration and completion notifications
@@ -127,7 +128,7 @@ If your npm account requires write-time 2FA, rerun the publish command with `--o
 1. Run `androdex up` and confirm the Android app can pair successfully.
 2. Run `androdex up` inside a workspace and confirm the host keeps Codex bound to that local project.
 3. From Android, open an existing thread and create a new one to confirm the remote client flow still works end to end.
-4. If desktop refresh is enabled, verify phone-authored thread activity updates the host Codex desktop via the Settings-bounce remount workaround.
+4. If desktop refresh is enabled, verify phone-authored thread activity refreshes the host Codex desktop without hijacking the normal thread list or workspace context.
 5. Restart the launchd service or reconnect the phone and confirm the saved pairing and active workspace recover without losing host-local state.
 
 ## Project status

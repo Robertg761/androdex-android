@@ -9,6 +9,64 @@ import org.junit.Test
 
 class AndrodexClientSecureTransportTest {
     @Test
+    fun shouldIgnoreApplicationPayloadUntilSecureReady_blocksBareAppPayloadsBeforeHandshakeCompletes() {
+        assertTrue(
+            shouldIgnoreApplicationPayloadUntilSecureReady(
+                hasApplicationFields = true,
+                secureSessionReady = false,
+            )
+        )
+        assertFalse(
+            shouldIgnoreApplicationPayloadUntilSecureReady(
+                hasApplicationFields = true,
+                secureSessionReady = true,
+            )
+        )
+        assertFalse(
+            shouldIgnoreApplicationPayloadUntilSecureReady(
+                hasApplicationFields = false,
+                secureSessionReady = false,
+            )
+        )
+    }
+
+    @Test
+    fun shouldWaitForSecureSessionReady_keepsUserActionsWaitingDuringReconnectWindows() {
+        assertTrue(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = false,
+                lifecycleTransitionInFlight = true,
+                handshakeInProgress = false,
+                socketAvailable = true,
+            )
+        )
+        assertTrue(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = false,
+                lifecycleTransitionInFlight = false,
+                handshakeInProgress = true,
+                socketAvailable = true,
+            )
+        )
+        assertFalse(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = false,
+                lifecycleTransitionInFlight = false,
+                handshakeInProgress = false,
+                socketAvailable = false,
+            )
+        )
+        assertFalse(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = true,
+                lifecycleTransitionInFlight = true,
+                handshakeInProgress = true,
+                socketAvailable = true,
+            )
+        )
+    }
+
+    @Test
     fun shouldApplyBridgeOutboundSeq_acceptsUnsequencedAndNewerPayloads() {
         assertTrue(
             shouldApplyBridgeOutboundSeq(

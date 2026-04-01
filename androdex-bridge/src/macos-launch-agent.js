@@ -416,9 +416,14 @@ function buildNextDaemonConfig(existingConfig, bridgeConfig, activeCwd) {
     ? [normalizedActiveCwd, ...recentWorkspaces.filter((candidate) => candidate !== normalizedActiveCwd)].slice(0, 25)
     : recentWorkspaces.slice(0, 25);
 
+  const nextRefreshEnabled = bridgeConfig.refreshEnabledExplicit
+    ? bridgeConfig.refreshEnabled
+    : Boolean(existingConfig?.refreshEnabled);
+
   return {
     ...existingConfig,
     ...bridgeConfig,
+    refreshEnabled: nextRefreshEnabled,
     activeCwd: normalizedActiveCwd || normalizeNonEmptyString(existingConfig?.activeCwd),
     recentWorkspaces: nextRecentWorkspaces,
   };

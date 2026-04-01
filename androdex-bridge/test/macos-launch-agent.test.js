@@ -9,6 +9,7 @@ const {
   resetMacOSBridgePairing,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,
+  startMacOSBridgeService,
   stopMacOSBridgeService,
 } = require("../src/macos-launch-agent");
 const {
@@ -195,7 +196,41 @@ test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicat
   });
 });
 
-function withTempDaemonEnv(run) {
+test("startMacOSBridgeService preserves enabled desktop refresh when the env flag is absent", async () => {
+  await withTempDaemonEnv(async ({ rootDir }) => {
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({
+        relayUrl: "wss://relay.example/relay",
+        refreshEnabled: true,
+      }, null, 2)
+    );
+
+    await startMacOSBridgeService({
+      platform: "darwin",
+      env: {
+        HOME: rootDir,
+        ANDRODEX_DEVICE_STATE_DIR: rootDir,
+        PATH: "/usr/bin:/bin",
+        ANDRODEX_RELAY: "wss://relay.example/relay",
+      },
+      fsImpl: fs,
+      execFileSyncImpl() {},
+      waitForPairing: false,
+      nodePath: "/usr/local/bin/node",
+      cliPath: "/tmp/androdex/bin/androdex.js",
+    });
+
+    const daemonConfig = JSON.parse(fs.readFileSync(path.join(rootDir, "daemon-config.json"), "utf8"));
+    const plist = fs.readFileSync(path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist"), "utf8");
+
+    assert.equal(daemonConfig.refreshEnabled, true);
+    assert.match(plist, /<key>ANDRODEX_REFRESH_ENABLED<\/key>/);
+    assert.match(plist, /<string>true<\/string>/);
+  });
+});
+
+async function withTempDaemonEnv(run) {
   const previousDir = process.env.ANDRODEX_DEVICE_STATE_DIR;
   const previousHome = process.env.HOME;
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "androdex-launch-agent-"));
@@ -203,7 +238,7 @@ function withTempDaemonEnv(run) {
   process.env.HOME = rootDir;
 
   try {
-    return run({ rootDir });
+    return await run({ rootDir });
   } finally {
     if (previousDir === undefined) {
       delete process.env.ANDRODEX_DEVICE_STATE_DIR;

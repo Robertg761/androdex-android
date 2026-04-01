@@ -37,9 +37,10 @@ const {
 } = require("./runtime-compat");
 
 const RELAY_WATCHDOG_PING_INTERVAL_MS = 10_000;
-const RELAY_WATCHDOG_STALE_AFTER_MS = 25_000;
+// Keep the stale threshold above the relay's own heartbeat cadence so quiet but
+// healthy sessions are not torn down between server pings.
+const RELAY_WATCHDOG_STALE_AFTER_MS = 45_000;
 const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
-const STALE_RELAY_STATUS_MESSAGE = "Relay heartbeat stalled; reconnect pending.";
 
 function startBridge({
   config: explicitConfig = null,
@@ -278,6 +279,10 @@ function startBridge({
     socket = nextSocket;
 
     nextSocket.on("open", () => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       clearReconnectTimer();
       reconnectAttempt = 0;
       markRelayActivity();
@@ -303,6 +308,10 @@ function startBridge({
     });
 
     nextSocket.on("message", (data) => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       hasSeenInboundRelayTraffic = true;
       markRelayActivity();
       const message = typeof data === "string" ? data : data.toString("utf8");
@@ -321,19 +330,31 @@ function startBridge({
     });
 
     nextSocket.on("pong", () => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       hasSeenInboundRelayTraffic = true;
       markRelayActivity();
     });
     nextSocket.on("ping", () => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       hasSeenInboundRelayTraffic = true;
       markRelayActivity();
     });
-    nextSocket.on("close", (code) => {
+    nextSocket.on("close", (code, reasonBuffer) => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       clearRelayWatchdog();
       logConnectionStatus("disconnected");
-      if (socket === nextSocket) {
-        socket = null;
-      }
+      socket = null;
+      const reason = normalizeCloseReason(reasonBuffer);
+      console.warn(`[androdex] relay closed code=${code}${reason ? ` reason=${reason}` : ""}`);
       hasSeenInboundRelayTraffic = false;
       clearCachedBridgeHandshakeState();
       supportsNativeTokenUsageUpdates = false;
@@ -350,8 +371,16 @@ function startBridge({
       scheduleRelayReconnect(code);
     });
 
-    nextSocket.on("error", () => {
+    nextSocket.on("error", (error) => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       logConnectionStatus("disconnected");
+      const detail = normalizeNonEmptyString(error?.message);
+      if (detail) {
+        console.warn(`[androdex] relay socket error: ${detail}`);
+      }
     });
   }
 
@@ -621,6 +650,7 @@ function startBridge({
 
     if (method === "initialize" && parsed.id != null) {
       cacheBridgeInitialize(parsed);
+      console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
       if (!workspaceRuntime.hasActiveWorkspace()) {
         sendApplicationResponse(JSON.stringify({
           id: parsed.id,
@@ -648,6 +678,7 @@ function startBridge({
 
     if (method === "initialized") {
       cachedInitializedNotification = true;
+      console.log("[androdex] bridge-managed initialized notification received");
       if (workspaceRuntime.hasActiveWorkspace() && codexHandshakeState !== "warm") {
         primeCodexHandshake();
       }
@@ -816,19 +847,6 @@ function startBridge({
         return;
       }
 
-      if (watchdogAction === "terminate") {
-        console.warn("[androdex] relay heartbeat stalled; forcing reconnect");
-        publishBridgeStatus({
-          state: "running",
-          connectionStatus: "disconnected",
-          pid: process.pid,
-          currentCwd: workspaceRuntime.getCurrentCwd() || null,
-          lastError: STALE_RELAY_STATUS_MESSAGE,
-        });
-        trackedSocket.terminate();
-        return;
-      }
-
       try {
         trackedSocket.ping();
       } catch {
@@ -953,15 +971,23 @@ function getRelayWatchdogAction({
     return "wait";
   }
 
-  if (hasRelayConnectionGoneStale(lastRelayActivityAt, now)) {
-    return "terminate";
-  }
-
   return "ping";
 }
 
 function hasRelayConnectionGoneStale(activityAt, now = Date.now()) {
   return activityAt > 0 && (now - activityAt) >= RELAY_WATCHDOG_STALE_AFTER_MS;
+}
+
+function normalizeCloseReason(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8").trim();
+  }
+
+  return "";
 }
 
 function safeParseJSON(value) {
@@ -1028,6 +1054,7 @@ function buildMacRegistration(deviceState) {
 
 module.exports = {
   getRelayWatchdogAction,
+  hasRelayConnectionGoneStale,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,
 };
