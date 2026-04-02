@@ -13,6 +13,7 @@ const {
   rememberForwardedRequestTiming,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
+  runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
 
@@ -127,6 +128,32 @@ test("getRelayWatchdogAction keeps quiet relay connections alive even after the 
     }),
     "ping"
   );
+});
+
+test("runRelayWatchdogTick logs unexpected watchdog failures instead of throwing", () => {
+  const errors = [];
+  const trackedSocket = {
+    get readyState() {
+      throw new Error("watchdog boom");
+    },
+    ping() {},
+  };
+
+  const result = runRelayWatchdogTick({
+    isShuttingDown: false,
+    activeSocket: trackedSocket,
+    trackedSocket,
+    hasSeenInboundRelayTraffic: true,
+    lastRelayActivityAt: 10_000,
+    logError(message) {
+      errors.push(message);
+    },
+  });
+
+  assert.equal(result, "error");
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /relay watchdog failed/i);
+  assert.match(errors[0], /watchdog boom/i);
 });
 
 test("hasRelayConnectionGoneStale waits for the full stale timeout window", () => {

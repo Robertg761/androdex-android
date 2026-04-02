@@ -146,6 +146,8 @@ data class AndrodexUiState(
     val pendingGitRemoveWorktree: GitPendingRemoveWorktree? = null,
 )
 
+private const val gitLoadReasonThreadOpen = "thread_open"
+
 class MainViewModel(
     repository: AndrodexRepositoryContract,
     private val notificationCoordinator: NotificationCoordinator = NoopNotificationCoordinator,
@@ -1260,14 +1262,22 @@ class MainViewModel(
                 pendingGitRemoveWorktree = null,
             )
         }
+        ThreadOpenPerfLogger.startAttempt(threadId, stage = "MainViewModel.openThread:start")
         runBusyAction("Loading messages...") {
-            service.openThread(threadId)
-            gitWorkingDirectoryForThread(threadId, uiStateFlow.value)?.let { workingDirectory ->
-                loadGitSnapshot(
+            ThreadOpenPerfLogger.measure(threadId, stage = "MainViewModel.openThread") {
+                service.openThread(threadId)
+                gitWorkingDirectoryForThread(threadId, uiStateFlow.value)?.let { workingDirectory ->
+                    loadGitSnapshot(
+                        threadId = threadId,
+                        workingDirectory = workingDirectory,
+                        loadDiff = false,
+                        suppressErrors = true,
+                        reason = gitLoadReasonThreadOpen,
+                    )
+                } ?: ThreadOpenPerfLogger.logStage(
                     threadId = threadId,
-                    workingDirectory = workingDirectory,
-                    loadDiff = false,
-                    suppressErrors = true,
+                    stage = "MainViewModel.openThread.gitSkipped",
+                    extra = "reason=no_working_directory",
                 )
             }
         }
@@ -1794,7 +1804,17 @@ class MainViewModel(
         workingDirectory: String,
         loadDiff: Boolean,
         suppressErrors: Boolean,
+        reason: String = "general",
     ) {
+        val shouldLogPerf = reason == gitLoadReasonThreadOpen
+        if (shouldLogPerf) {
+            ThreadOpenPerfLogger.ensureAttempt(
+                threadId = threadId,
+                stage = "MainViewModel.loadGitSnapshot:start",
+                extra = "loadDiff=$loadDiff suppressErrors=$suppressErrors",
+            )
+        }
+        val loadStartedAt = System.currentTimeMillis()
         updateThreadGitState(threadId) { current ->
             current.copy(
                 isRefreshing = true,
@@ -1802,7 +1822,16 @@ class MainViewModel(
             )
         }
         try {
+            val branchStatusStartedAt = System.currentTimeMillis()
             val branchTargets = repository.gitBranchesWithStatus(workingDirectory)
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot.branchStatus",
+                    durationMs = System.currentTimeMillis() - branchStatusStartedAt,
+                    extra = "hasStatus=${branchTargets.status != null}",
+                )
+            }
             updateThreadGitState(threadId) { current ->
                 current.copy(
                     status = branchTargets.status ?: current.status,
@@ -1818,6 +1847,14 @@ class MainViewModel(
                     isLoadingBranchTargets = false,
                 )
             }
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot.statusError",
+                    durationMs = System.currentTimeMillis() - loadStartedAt,
+                    extra = "message=${error.message ?: "unknown"}",
+                )
+            }
             if (!suppressErrors) {
                 reportGitFailure(error, "Failed to load Git status.")
             }
@@ -1826,11 +1863,28 @@ class MainViewModel(
 
         if (!loadDiff) {
             updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot:complete",
+                    durationMs = System.currentTimeMillis() - loadStartedAt,
+                    extra = "loadDiff=false",
+                )
+            }
             return
         }
 
         try {
+            val diffStartedAt = System.currentTimeMillis()
             val diff = repository.gitDiff(workingDirectory)
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot.diff",
+                    durationMs = System.currentTimeMillis() - diffStartedAt,
+                    extra = "hasDiff=${diff.patch.isNotBlank()}",
+                )
+            }
             updateThreadGitState(threadId) { current ->
                 current.copy(
                     diffPatch = diff.patch.trim().ifEmpty { null },
@@ -1839,8 +1893,25 @@ class MainViewModel(
             }
         } catch (error: Throwable) {
             updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot.diffError",
+                    durationMs = System.currentTimeMillis() - loadStartedAt,
+                    extra = "message=${error.message ?: "unknown"}",
+                )
+            }
             if (!suppressErrors) {
                 reportGitFailure(error, "Failed to load the Git diff.")
+            }
+        } finally {
+            if (shouldLogPerf) {
+                ThreadOpenPerfLogger.logStage(
+                    threadId = threadId,
+                    stage = "MainViewModel.loadGitSnapshot:complete",
+                    durationMs = System.currentTimeMillis() - loadStartedAt,
+                    extra = "loadDiff=$loadDiff",
+                )
             }
         }
     }
@@ -2662,6 +2733,22 @@ private fun Uri.extractPairingPayload(): String? {
 }
 
 private fun applyServiceState(
+    current: AndrodexUiState,
+    serviceState: AndrodexServiceState,
+): AndrodexUiState {
+    val activeThreadId = serviceState.selectedThreadId ?: current.selectedThreadId
+    return ThreadOpenPerfLogger.measure(
+        threadId = activeThreadId,
+        stage = "MainViewModel.applyServiceState",
+        extra = {
+            "serviceMessages=${serviceState.messages.size} threads=${serviceState.threads.size}"
+        },
+    ) {
+        applyServiceStateSnapshot(current = current, serviceState = serviceState)
+    }
+}
+
+private fun applyServiceStateSnapshot(
     current: AndrodexUiState,
     serviceState: AndrodexServiceState,
 ): AndrodexUiState {

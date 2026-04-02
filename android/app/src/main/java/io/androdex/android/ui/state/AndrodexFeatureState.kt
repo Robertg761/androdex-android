@@ -12,6 +12,7 @@ import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
 import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
+import io.androdex.android.ThreadOpenPerfLogger
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
@@ -560,6 +561,16 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
+    return ThreadOpenPerfLogger.measure(
+        threadId = threadId,
+        stage = "AndrodexFeatureState.toThreadTimelineUiState",
+        extra = { "messages=${messages.size} gitLoaded=${gitStateByThread[threadId] != null}" },
+    ) {
+        buildThreadTimelineUiState(threadId)
+    }
+}
+
+private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): ThreadTimelineUiState {
     val selectedThread = threads.firstOrNull { it.id == threadId }
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val planModeSupported = CollaborationModeKind.PLAN in collaborationModes

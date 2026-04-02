@@ -88,6 +88,7 @@ import io.androdex.android.GitAlertState
 import io.androdex.android.GitBranchDialogState
 import io.androdex.android.GitCommitDialogState
 import io.androdex.android.GitWorktreeDialogState
+import io.androdex.android.ThreadOpenPerfLogger
 import io.androdex.android.ThreadBackAction
 import io.androdex.android.threadBackAction
 import io.androdex.android.model.ConversationKind
@@ -441,8 +442,24 @@ internal fun ThreadTimelineScreen(
             }
         }
     }
-    val bubbleContexts = remember(state.messages) { buildBubbleContexts(state.messages) }
-    val agentActivityText = remember(state.messages) { buildAgentActivityText(state.messages) }
+    val bubbleContexts = remember(state.threadId, state.messages) {
+        ThreadOpenPerfLogger.measure(
+            threadId = state.threadId,
+            stage = "ThreadTimelineScreen.buildBubbleContexts",
+            extra = { "messages=${state.messages.size}" },
+        ) {
+            buildBubbleContexts(state.messages)
+        }
+    }
+    val agentActivityText = remember(state.threadId, state.messages) {
+        ThreadOpenPerfLogger.measure(
+            threadId = state.threadId,
+            stage = "ThreadTimelineScreen.buildAgentActivityText",
+            extra = { "messages=${state.messages.size}" },
+        ) {
+            buildAgentActivityText(state.messages)
+        }
+    }
     val gitAffordance = remember(state.git) { buildGitAffordanceUiState(state.git) }
 
     Scaffold(

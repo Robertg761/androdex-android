@@ -747,28 +747,14 @@ function startBridge({
     markRelayActivity();
 
     relayWatchdogTimer = setInterval(() => {
-      const watchdogAction = getRelayWatchdogAction({
+      runRelayWatchdogTick({
         isShuttingDown,
         activeSocket: socket,
         trackedSocket,
         hasSeenInboundRelayTraffic,
         lastRelayActivityAt,
+        clearRelayWatchdog,
       });
-
-      if (watchdogAction === "clear") {
-        clearRelayWatchdog();
-        return;
-      }
-
-      if (watchdogAction === "wait") {
-        return;
-      }
-
-      try {
-        trackedSocket.ping();
-      } catch {
-        // Best effort only.
-      }
     }, RELAY_WATCHDOG_PING_INTERVAL_MS);
     relayWatchdogTimer.unref?.();
   }
@@ -890,6 +876,49 @@ function getRelayWatchdogAction({
   }
 
   return "ping";
+}
+
+function runRelayWatchdogTick({
+  isShuttingDown,
+  activeSocket,
+  trackedSocket,
+  hasSeenInboundRelayTraffic,
+  lastRelayActivityAt,
+  now = Date.now(),
+  clearRelayWatchdog = null,
+  logError = console.error,
+}) {
+  try {
+    const watchdogAction = getRelayWatchdogAction({
+      isShuttingDown,
+      activeSocket,
+      trackedSocket,
+      hasSeenInboundRelayTraffic,
+      lastRelayActivityAt,
+      now,
+    });
+
+    if (watchdogAction === "clear") {
+      clearRelayWatchdog?.();
+      return "clear";
+    }
+
+    if (watchdogAction === "wait") {
+      return "wait";
+    }
+
+    try {
+      trackedSocket?.ping?.();
+    } catch {
+      // Best effort only.
+    }
+
+    return "ping";
+  } catch (error) {
+    const details = error?.stack || error?.message || String(error);
+    logError(`[androdex] relay watchdog failed: ${details}`);
+    return "error";
+  }
 }
 
 function hasRelayConnectionGoneStale(activityAt, now = Date.now()) {
@@ -1052,6 +1081,7 @@ module.exports = {
   rememberForwardedRequestTiming,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
+  runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,
 };

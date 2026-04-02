@@ -2,6 +2,7 @@ package io.androdex.android.service
 
 import android.util.Log
 import io.androdex.android.AppEnvironment
+import io.androdex.android.ThreadOpenPerfLogger
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.FreshPairingAttemptState
 import io.androdex.android.FreshPairingStage
@@ -366,19 +367,43 @@ class AndrodexService(
     }
 
     suspend fun openThread(threadId: String) {
-        val targetThread = stateFlow.value.threads.firstOrNull { it.id == threadId }
-        stateFlow.update { current ->
-            current.copy(
-                selectedThreadId = threadId,
-                selectedThreadTitle = targetThread?.title,
-                focusedTurnId = null,
-                readyThreadIds = current.readyThreadIds - threadId,
-                failedThreadIds = current.failedThreadIds - threadId,
+        ThreadOpenPerfLogger.ensureAttempt(threadId, stage = "AndrodexService.openThread:start")
+        ThreadOpenPerfLogger.measure(threadId, stage = "AndrodexService.openThread") {
+            val targetThread = stateFlow.value.threads.firstOrNull { it.id == threadId }
+            val selectionStartedAt = System.currentTimeMillis()
+            stateFlow.update { current ->
+                current.copy(
+                    selectedThreadId = threadId,
+                    selectedThreadTitle = targetThread?.title,
+                    focusedTurnId = null,
+                    readyThreadIds = current.readyThreadIds - threadId,
+                    failedThreadIds = current.failedThreadIds - threadId,
+                )
+            }
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.openThread.selectThread",
+                durationMs = System.currentTimeMillis() - selectionStartedAt,
+                extra = "hasTarget=${targetThread != null}",
+            )
+
+            val workspaceStartedAt = System.currentTimeMillis()
+            ensureWorkspaceActivated(targetThread?.cwd)
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.openThread.ensureWorkspace",
+                durationMs = System.currentTimeMillis() - workspaceStartedAt,
+                extra = "hasCwd=${!targetThread?.cwd.isNullOrBlank()}",
+            )
+
+            val loadStartedAt = System.currentTimeMillis()
+            loadThreadIntoState(threadId)
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.openThread.loadThreadIntoState",
+                durationMs = System.currentTimeMillis() - loadStartedAt,
             )
         }
-
-        ensureWorkspaceActivated(targetThread?.cwd)
-        loadThreadIntoState(threadId)
     }
 
     fun handleNotificationOpen(threadId: String, turnId: String?) {
@@ -863,11 +888,23 @@ class AndrodexService(
     ) {
         val trackedSelectedThreadLoad = markSelectedThreadLoadStarted(threadId)
         try {
+            ThreadOpenPerfLogger.ensureAttempt(
+                threadId = threadId,
+                stage = "AndrodexService.loadThreadIntoState:start",
+                extra = "keepStreamingOverride=$keepStreamingRowsOverride",
+            )
+            val totalStartedAt = System.currentTimeMillis()
             val loadStartedAt = System.currentTimeMillis()
             val result = threadCollectionRequestMutex.withLock {
                 repository.loadThread(threadId)
             }
             val loadDurationMs = System.currentTimeMillis() - loadStartedAt
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.loadThreadIntoState.repositoryLoad",
+                durationMs = loadDurationMs,
+                extra = "incoming=${result.messages.size}",
+            )
             val turnIdToInvalidatePendingToolInputs =
                 pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
             var mergedMessageCount = 0
@@ -876,6 +913,7 @@ class AndrodexService(
                 val existingMessages = current.timelineByThread[threadId].orEmpty()
                 val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
                 val mergedMessages = mergeThreadMessages(
+                    threadId = threadId,
                     existing = existingMessages,
                     incoming = result.messages,
                     keepStreamingRows = keepStreamingRows,
@@ -899,6 +937,18 @@ class AndrodexService(
                 )
             }
             val mergeDurationMs = System.currentTimeMillis() - mergeStartedAt
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.loadThreadIntoState.stateMerge",
+                durationMs = mergeDurationMs,
+                extra = "merged=$mergedMessageCount",
+            )
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "AndrodexService.loadThreadIntoState:complete",
+                durationMs = System.currentTimeMillis() - totalStartedAt,
+                extra = "incoming=${result.messages.size} merged=$mergedMessageCount",
+            )
             if (loadDurationMs >= slowThreadLoadLogThresholdMs || mergeDurationMs >= slowThreadLoadLogThresholdMs) {
                 Log.i(
                     logTag,
@@ -1004,6 +1054,7 @@ class AndrodexService(
                 selectedThreadTitle = result.thread?.title ?: current.selectedThreadTitle,
                 timelineByThread = current.timelineByThread + (
                     threadId to mergeThreadMessages(
+                        threadId = threadId,
                         existing = current.timelineByThread[threadId].orEmpty(),
                         incoming = result.messages,
                         keepStreamingRows = isThreadConsideredRunning(threadId, current),
@@ -2411,39 +2462,48 @@ private fun upsertExecutionMessage(
 }
 
 private fun mergeThreadMessages(
+    threadId: String? = null,
     existing: List<ConversationMessage>,
     incoming: List<ConversationMessage>,
     keepStreamingRows: Boolean,
 ): List<ConversationMessage> {
-    if (incoming.isEmpty()) {
-        return existing
-    }
-
-    val merged = if (keepStreamingRows) existing.toMutableList() else mutableListOf()
-    val originalExistingCount = merged.size
-    val consumedOriginalExistingIndexes = mutableSetOf<Int>()
-    val mergeLookup = ThreadMessageMergeLookup(merged, originalExistingCount)
-    incoming.forEach { incomingMessage ->
-        val existingIndex = mergeLookup.findMatchingIndex(
-            incoming = incomingMessage,
-            merged = merged,
-            consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
-        )
-        if (existingIndex >= 0) {
-            if (existingIndex < originalExistingCount) {
-                consumedOriginalExistingIndexes += existingIndex
-            }
-            merged[existingIndex] = mergeMatchedMessage(
-                existing = merged[existingIndex],
-                incoming = incomingMessage,
-                keepStreamingRows = keepStreamingRows,
-            )
-        } else {
-            merged += incomingMessage
-            mergeLookup.recordAppendedIndex(merged.lastIndex, incomingMessage)
+    return ThreadOpenPerfLogger.measure(
+        threadId = threadId,
+        stage = "AndrodexService.mergeThreadMessages",
+        extra = {
+            "existing=${existing.size} incoming=${incoming.size} keepStreaming=$keepStreamingRows"
+        },
+    ) {
+        if (incoming.isEmpty()) {
+            return@measure existing
         }
+
+        val merged = if (keepStreamingRows) existing.toMutableList() else mutableListOf()
+        val originalExistingCount = merged.size
+        val consumedOriginalExistingIndexes = mutableSetOf<Int>()
+        val mergeLookup = ThreadMessageMergeLookup(merged, originalExistingCount)
+        incoming.forEach { incomingMessage ->
+            val existingIndex = mergeLookup.findMatchingIndex(
+                incoming = incomingMessage,
+                merged = merged,
+                consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+            )
+            if (existingIndex >= 0) {
+                if (existingIndex < originalExistingCount) {
+                    consumedOriginalExistingIndexes += existingIndex
+                }
+                merged[existingIndex] = mergeMatchedMessage(
+                    existing = merged[existingIndex],
+                    incoming = incomingMessage,
+                    keepStreamingRows = keepStreamingRows,
+                )
+            } else {
+                merged += incomingMessage
+                mergeLookup.recordAppendedIndex(merged.lastIndex, incomingMessage)
+            }
+        }
+        merged.sortedBy { it.createdAtEpochMs }
     }
-    return merged.sortedBy { it.createdAtEpochMs }
 }
 
 private class ThreadMessageMergeLookup(
