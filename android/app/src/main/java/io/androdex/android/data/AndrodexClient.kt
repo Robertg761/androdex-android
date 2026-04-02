@@ -112,6 +112,11 @@ private const val secureSessionReadyTimeoutMs = 5_000L
 private const val logTag = "AndrodexClient"
 private const val trustedReconnectFailureThreshold = 3
 
+internal enum class SecureSessionWaitPolicy {
+    RECONNECT_FRIENDLY,
+    FAIL_FAST,
+}
+
 internal fun shouldIgnoreApplicationPayloadUntilSecureReady(
     hasApplicationFields: Boolean,
     secureSessionReady: Boolean,
@@ -122,7 +127,16 @@ internal fun shouldWaitForSecureSessionReady(
     lifecycleTransitionInFlight: Boolean,
     handshakeInProgress: Boolean,
     socketAvailable: Boolean,
-): Boolean = !secureSessionReady && (lifecycleTransitionInFlight || handshakeInProgress || socketAvailable)
+    waitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+): Boolean {
+    if (secureSessionReady) {
+        return false
+    }
+    if (waitPolicy == SecureSessionWaitPolicy.FAIL_FAST) {
+        return false
+    }
+    return lifecycleTransitionInFlight || handshakeInProgress || socketAvailable
+}
 
 private class HostTransportInterruptedException(
     message: String,
@@ -381,7 +395,7 @@ class AndrodexClient(
         emitPairingAvailability()
     }
 
-    suspend fun reconnectSaved() {
+    suspend fun reconnectSaved(): Boolean {
         requirePhoneIdentityForReconnect()
         val reconnectCandidate = reconnectCandidate()
             ?: throw IllegalStateException("No saved or trusted pairing is available.")
@@ -394,16 +408,19 @@ class AndrodexClient(
                         record.copy(displayName = displayName)
                     }
                 }
+                return true
             }
             is TrustedSessionResolveResult.FallbackToSavedSession -> {
                 connect(reconnectCandidate)
                 trustedReconnectFailureCount = 0
+                return true
             }
             is TrustedSessionResolveResult.LiveSessionUnresolved -> {
                 handleTrustedReconnectFailure(
                     detail = resolved.detail,
                     clearSavedSession = savedRelaySession != null,
                 )
+                return false
             }
             is TrustedSessionResolveResult.RepairRequired -> {
                 trustedReconnectFailureCount = 0
@@ -415,6 +432,7 @@ class AndrodexClient(
                 )
                 disconnectInternal(clearSavedPairing = false)
                 updatesFlow.emit(consumePendingTerminalConnectionUpdate() ?: ClientUpdate.Connection(ConnectionStatus.RECONNECT_REQUIRED, resolved.detail))
+                return false
             }
             is TrustedSessionResolveResult.UpdateRequired -> {
                 trustedReconnectFailureCount = 0
@@ -426,6 +444,7 @@ class AndrodexClient(
                 )
                 disconnectInternal(clearSavedPairing = false)
                 updatesFlow.emit(consumePendingTerminalConnectionUpdate() ?: ClientUpdate.Connection(ConnectionStatus.UPDATE_REQUIRED, resolved.detail))
+                return false
             }
         }
     }
@@ -843,13 +862,14 @@ class AndrodexClient(
     }
 
     suspend fun loadThread(threadId: String): ThreadLoadResult {
-        resumeThread(threadId)
+        resumeThread(threadId, SecureSessionWaitPolicy.FAIL_FAST)
         return try {
             val result = sendRequest(
                 "thread/read",
                 JSONObject()
                     .put("threadId", threadId)
                     .put("includeTurns", true),
+                secureSessionWaitPolicy = SecureSessionWaitPolicy.FAIL_FAST,
             )
             val threadObject = result.optJSONObject("thread") ?: JSONObject()
             val summary = decodeThreadSummary(threadObject)
@@ -883,15 +903,7 @@ class AndrodexClient(
     }
 
     suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {
-        resumeThread(threadId)
-        val result = sendRequest(
-            "thread/read",
-            JSONObject()
-                .put("threadId", threadId)
-                .put("includeTurns", true),
-        )
-        val threadObject = result.optJSONObject("thread") ?: JSONObject()
-        return decodeThreadRunSnapshot(threadObject)
+        return readThreadRunSnapshot(threadId, SecureSessionWaitPolicy.RECONNECT_FRIENDLY)
     }
 
     suspend fun startTurn(
@@ -1401,11 +1413,41 @@ class AndrodexClient(
         }
     }
 
-    private suspend fun resumeThread(threadId: String) {
+    private suspend fun readThreadRunSnapshot(
+        threadId: String,
+        secureSessionWaitPolicy: SecureSessionWaitPolicy,
+    ): ThreadRunSnapshot {
+        resumeThread(threadId, secureSessionWaitPolicy)
+        val result = sendRequest(
+            "thread/read",
+            JSONObject()
+                .put("threadId", threadId)
+                .put("includeTurns", true),
+            secureSessionWaitPolicy = secureSessionWaitPolicy,
+        )
+        val threadObject = result.optJSONObject("thread") ?: JSONObject()
+        return decodeThreadRunSnapshot(threadObject)
+    }
+
+    private suspend fun resumeThread(
+        threadId: String,
+        secureSessionWaitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+    ) {
         val params = JSONObject().put("threadId", threadId)
         try {
-            sendRequest("thread/resume", params)
+            sendRequest("thread/resume", params, secureSessionWaitPolicy)
         } catch (_: Throwable) {
+        }
+    }
+
+    private fun resumeThreadInBackground(threadId: String) {
+        clientScope.launch {
+            val params = JSONObject().put("threadId", threadId)
+            try {
+                sendRequest("thread/resume", params)
+            } catch (error: Throwable) {
+                Log.w(logTag, "background thread/resume failed threadId=$threadId", error)
+            }
         }
     }
 
@@ -2101,6 +2143,18 @@ class AndrodexClient(
     }
 
     private suspend fun sendRequest(method: String, params: JSONObject?): JSONObject {
+        return sendRequest(
+            method = method,
+            params = params,
+            secureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+        )
+    }
+
+    private suspend fun sendRequest(
+        method: String,
+        params: JSONObject?,
+        secureSessionWaitPolicy: SecureSessionWaitPolicy,
+    ): JSONObject {
         val requestId = UUID.randomUUID().toString()
         val request = JSONObject()
             .put("id", requestId)
@@ -2111,7 +2165,12 @@ class AndrodexClient(
 
         val responseDeferred = CompletableDeferred<JSONObject>()
         pendingResponses[requestId] = responseDeferred
-        sendMessage(request)
+        try {
+            sendMessage(request, secureSessionWaitPolicy)
+        } catch (error: Throwable) {
+            pendingResponses.remove(requestId)
+            throw error
+        }
         val response = try {
             withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
         } catch (error: TimeoutCancellationException) {
@@ -2215,8 +2274,11 @@ class AndrodexClient(
         )
     }
 
-    private suspend fun sendMessage(message: JSONObject) {
-        val secureSession = awaitSecureSessionReady()
+    private suspend fun sendMessage(
+        message: JSONObject,
+        secureSessionWaitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+    ) {
+        val secureSession = awaitSecureSessionReady(secureSessionWaitPolicy)
         val secureText = secureWireText(
             plaintext = message.toString(),
             session = secureSession,
@@ -2257,7 +2319,9 @@ class AndrodexClient(
         return envelope.toString()
     }
 
-    private suspend fun awaitSecureSessionReady(): SecureSession {
+    private suspend fun awaitSecureSessionReady(
+        waitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+    ): SecureSession {
         secureSession?.let { return it }
 
         try {
@@ -2272,6 +2336,7 @@ class AndrodexClient(
                         lifecycleTransitionInFlight = connectionLifecycleMutex.isLocked,
                         handshakeInProgress = pendingHandshake != null,
                         socketAvailable = webSocket != null || openSocketDeferred != null,
+                        waitPolicy = waitPolicy,
                     )
                     if (!shouldWait) {
                         throw IllegalStateException(buildNotConnectedDetail())

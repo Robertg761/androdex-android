@@ -45,7 +45,7 @@ interface AndrodexRepositoryContract {
     fun startupConnectionStatus(): io.androdex.android.model.ConnectionStatus? = null
     fun startupConnectionDetail(): String? = null
     suspend fun connectWithPairingPayload(rawPayload: String)
-    suspend fun reconnectSaved()
+    suspend fun reconnectSaved(): Boolean
     suspend fun forgetTrustedHost() = Unit
     suspend fun disconnect(clearSavedPairing: Boolean = false)
     suspend fun refreshThreads(): List<ThreadSummary>
@@ -160,9 +160,7 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
         client.connectWithPairingPayload(rawPayload)
     }
 
-    override suspend fun reconnectSaved() {
-        client.reconnectSaved()
-    }
+    override suspend fun reconnectSaved(): Boolean = client.reconnectSaved()
 
     override suspend fun forgetTrustedHost() {
         client.forgetTrustedHost()

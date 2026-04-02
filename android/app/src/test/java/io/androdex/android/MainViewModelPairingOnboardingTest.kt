@@ -237,8 +237,9 @@ private class PairingOnboardingRepository(
         connectedPayload = rawPayload
     }
 
-    override suspend fun reconnectSaved() {
+    override suspend fun reconnectSaved(): Boolean {
         reconnectSavedCalls += 1
+        return true
     }
 
     override suspend fun disconnect(clearSavedPairing: Boolean) {

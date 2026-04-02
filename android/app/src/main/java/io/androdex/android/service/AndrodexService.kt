@@ -1,5 +1,6 @@
 package io.androdex.android.service
 
+import android.util.Log
 import io.androdex.android.AppEnvironment
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.FreshPairingAttemptState
@@ -53,12 +54,15 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.ArrayDeque
 import java.util.UUID
 import kotlin.math.abs
 
 private const val savedReconnectRetryDelayMs = 5_000L
 private const val executionReloadMergeWindowMs = 5_000L
 private const val minimumThreadListLoadingVisibleMs = 350L
+private const val slowThreadLoadLogThresholdMs = 400L
+private const val logTag = "AndrodexService"
 
 private data class SubagentIdentityEntry(
     val threadId: String?,
@@ -303,9 +307,11 @@ class AndrodexService(
         suppressSavedReconnect = false
         cancelSavedReconnectRetry()
         stateFlow.update { it.copy(freshPairingAttempt = null) }
-        repository.reconnectSaved()
-        refreshThreadsInternal()
-        loadWorkspaceState()
+        val connected = repository.reconnectSaved()
+        if (connected) {
+            refreshThreadsInternal()
+            loadWorkspaceState()
+        }
     }
 
     suspend fun forgetTrustedHost() {
@@ -809,25 +815,29 @@ class AndrodexService(
         threadId: String,
         keepStreamingRowsOverride: Boolean? = null,
     ) {
+        val loadStartedAt = System.currentTimeMillis()
         val result = repository.loadThread(threadId)
+        val loadDurationMs = System.currentTimeMillis() - loadStartedAt
         val turnIdToInvalidatePendingToolInputs =
             pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
+        var mergedMessageCount = 0
+        val mergeStartedAt = System.currentTimeMillis()
         stateFlow.update { current ->
             val existingMessages = current.timelineByThread[threadId].orEmpty()
             val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
+            val mergedMessages = mergeThreadMessages(
+                existing = existingMessages,
+                incoming = result.messages,
+                keepStreamingRows = keepStreamingRows,
+            )
+            mergedMessageCount = mergedMessages.size
             current.copy(
                 selectedThreadTitle = if (current.selectedThreadId == threadId) {
                     result.thread?.title ?: current.selectedThreadTitle
                 } else {
                     current.selectedThreadTitle
                 },
-                timelineByThread = current.timelineByThread + (
-                    threadId to mergeThreadMessages(
-                        existing = existingMessages,
-                        incoming = result.messages,
-                        keepStreamingRows = keepStreamingRows,
-                    )
-                ),
+                timelineByThread = current.timelineByThread + (threadId to mergedMessages),
                 pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
                     current.pendingToolInputsByThread.removePendingToolInputTurn(
                         threadId = threadId,
@@ -836,6 +846,13 @@ class AndrodexService(
                 } else {
                     current.pendingToolInputsByThread
                 },
+            )
+        }
+        val mergeDurationMs = System.currentTimeMillis() - mergeStartedAt
+        if (loadDurationMs >= slowThreadLoadLogThresholdMs || mergeDurationMs >= slowThreadLoadLogThresholdMs) {
+            Log.i(
+                logTag,
+                "loadThreadIntoState thread=$threadId hostLoadMs=$loadDurationMs mergeMs=$mergeDurationMs incoming=${result.messages.size} merged=$mergedMessageCount",
             )
         }
         syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
@@ -1051,6 +1068,9 @@ class AndrodexService(
                         secureFingerprint = update.fingerprint,
                         threads = if (update.hasSavedPairing) it.threads else emptyList(),
                         hasLoadedThreadList = if (update.hasSavedPairing) it.hasLoadedThreadList else false,
+                        selectedThreadId = if (update.hasSavedPairing) it.selectedThreadId else null,
+                        selectedThreadTitle = if (update.hasSavedPairing) it.selectedThreadTitle else null,
+                        focusedTurnId = if (update.hasSavedPairing) it.focusedTurnId else null,
                     )
                 }
                 if (!update.hasSavedPairing && stateFlow.value.freshPairingAttempt == null) {
@@ -1813,10 +1833,13 @@ class AndrodexService(
 
                 savedReconnectInFlight = true
                 try {
-                    repository.reconnectSaved()
-                    refreshThreadsInternal()
-                    loadWorkspaceState()
-                    break
+                    val connected = repository.reconnectSaved()
+                    if (connected) {
+                        refreshThreadsInternal()
+                        loadWorkspaceState()
+                        break
+                    }
+                    delay(savedReconnectRetryDelayMs)
                 } catch (_: Throwable) {
                     delay(savedReconnectRetryDelayMs)
                 } finally {
@@ -2344,13 +2367,13 @@ private fun mergeThreadMessages(
     val merged = if (keepStreamingRows) existing.toMutableList() else mutableListOf()
     val originalExistingCount = merged.size
     val consumedOriginalExistingIndexes = mutableSetOf<Int>()
+    val mergeLookup = ThreadMessageMergeLookup(merged, originalExistingCount)
     incoming.forEach { incomingMessage ->
-        val existingIndex = (((minOf(originalExistingCount, merged.size) - 1) downTo 0).firstOrNull { index ->
-            index !in consumedOriginalExistingIndexes
-                && timelineMessagesRepresentSameItem(merged[index], incomingMessage)
-        } ?: ((merged.size - 1) downTo originalExistingCount).firstOrNull { index ->
-            chatTimelineMessagesRepresentSameItem(merged[index], incomingMessage)
-        }) ?: -1
+        val existingIndex = mergeLookup.findMatchingIndex(
+            incoming = incomingMessage,
+            merged = merged,
+            consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+        )
         if (existingIndex >= 0) {
             if (existingIndex < originalExistingCount) {
                 consumedOriginalExistingIndexes += existingIndex
@@ -2362,9 +2385,191 @@ private fun mergeThreadMessages(
             )
         } else {
             merged += incomingMessage
+            mergeLookup.recordAppendedIndex(merged.lastIndex, incomingMessage)
         }
     }
     return merged.sortedBy { it.createdAtEpochMs }
+}
+
+private class ThreadMessageMergeLookup(
+    existing: List<ConversationMessage>,
+    originalExistingCount: Int,
+) {
+    private val originalExistingCount = originalExistingCount
+    private val originalItemIndexesById = linkedMapOf<String, ArrayDeque<Int>>()
+    private val originalTurnIndexesByKey = linkedMapOf<FastTurnLookupKey, ArrayDeque<Int>>()
+    private val originalChatIndexesByKey = linkedMapOf<FastChatLookupKey, ArrayDeque<Int>>()
+    private val appendedChatIndexesByKey = linkedMapOf<FastChatLookupKey, ArrayDeque<Int>>()
+
+    init {
+        for (index in (originalExistingCount - 1) downTo 0) {
+            recordOriginalIndex(index, existing[index])
+        }
+    }
+
+    fun findMatchingIndex(
+        incoming: ConversationMessage,
+        merged: List<ConversationMessage>,
+        consumedOriginalExistingIndexes: Set<Int>,
+    ): Int {
+        return matchOriginalByItemId(incoming, merged, consumedOriginalExistingIndexes)
+            ?: matchOriginalByTurnKey(incoming, merged, consumedOriginalExistingIndexes)
+            ?: matchOriginalByChatKey(incoming, merged, consumedOriginalExistingIndexes)
+            ?: matchAppendedChat(incoming, merged)
+            ?: findMatchingMessageIndexWithScan(
+                incoming = incoming,
+                merged = merged,
+                originalExistingCount = originalExistingCount,
+                consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+            )
+    }
+
+    fun recordAppendedIndex(index: Int, message: ConversationMessage) {
+        val chatKey = fastChatLookupKey(message) ?: return
+        appendedChatIndexesByKey.getOrPut(chatKey) { ArrayDeque() }.addFirst(index)
+    }
+
+    private fun recordOriginalIndex(index: Int, message: ConversationMessage) {
+        normalizedItemId(message)?.let { itemId ->
+            originalItemIndexesById.getOrPut(itemId) { ArrayDeque() }.addLast(index)
+        }
+        fastTurnLookupKey(message)?.let { key ->
+            originalTurnIndexesByKey.getOrPut(key) { ArrayDeque() }.addLast(index)
+        }
+        fastChatLookupKey(message)?.let { key ->
+            originalChatIndexesByKey.getOrPut(key) { ArrayDeque() }.addLast(index)
+        }
+    }
+
+    private fun matchOriginalByItemId(
+        incoming: ConversationMessage,
+        merged: List<ConversationMessage>,
+        consumedOriginalExistingIndexes: Set<Int>,
+    ): Int? {
+        val itemId = normalizedItemId(incoming) ?: return null
+        return nextUsableIndex(
+            indexes = originalItemIndexesById[itemId],
+            merged = merged,
+            consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+            matcher = { existing -> timelineMessagesRepresentSameItem(existing, incoming) },
+        )
+    }
+
+    private fun matchOriginalByTurnKey(
+        incoming: ConversationMessage,
+        merged: List<ConversationMessage>,
+        consumedOriginalExistingIndexes: Set<Int>,
+    ): Int? {
+        val key = fastTurnLookupKey(incoming) ?: return null
+        return nextUsableIndex(
+            indexes = originalTurnIndexesByKey[key],
+            merged = merged,
+            consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+            matcher = { existing -> timelineMessagesRepresentSameItem(existing, incoming) },
+        )
+    }
+
+    private fun matchOriginalByChatKey(
+        incoming: ConversationMessage,
+        merged: List<ConversationMessage>,
+        consumedOriginalExistingIndexes: Set<Int>,
+    ): Int? {
+        val key = fastChatLookupKey(incoming) ?: return null
+        return nextUsableIndex(
+            indexes = originalChatIndexesByKey[key],
+            merged = merged,
+            consumedOriginalExistingIndexes = consumedOriginalExistingIndexes,
+            matcher = { existing -> chatTimelineMessagesRepresentSameItem(existing, incoming) },
+        )
+    }
+
+    private fun matchAppendedChat(
+        incoming: ConversationMessage,
+        merged: List<ConversationMessage>,
+    ): Int? {
+        val key = fastChatLookupKey(incoming) ?: return null
+        val indexes = appendedChatIndexesByKey[key] ?: return null
+        return indexes.firstOrNull { index ->
+            index in merged.indices && chatTimelineMessagesRepresentSameItem(merged[index], incoming)
+        }
+    }
+
+    private fun nextUsableIndex(
+        indexes: ArrayDeque<Int>?,
+        merged: List<ConversationMessage>,
+        consumedOriginalExistingIndexes: Set<Int>,
+        matcher: (ConversationMessage) -> Boolean,
+    ): Int? {
+        val candidateIndexes = indexes ?: return null
+        while (candidateIndexes.isNotEmpty()) {
+            val candidateIndex = candidateIndexes.removeFirst()
+            if (candidateIndex !in merged.indices || candidateIndex in consumedOriginalExistingIndexes) {
+                continue
+            }
+            if (matcher(merged[candidateIndex])) {
+                return candidateIndex
+            }
+        }
+        return null
+    }
+}
+
+private data class FastTurnLookupKey(
+    val threadId: String,
+    val role: ConversationRole,
+    val kind: ConversationKind,
+    val turnId: String,
+)
+
+private data class FastChatLookupKey(
+    val threadId: String,
+    val role: ConversationRole,
+    val text: String,
+    val attachmentsSignature: String,
+)
+
+private fun findMatchingMessageIndexWithScan(
+    incoming: ConversationMessage,
+    merged: List<ConversationMessage>,
+    originalExistingCount: Int,
+    consumedOriginalExistingIndexes: Set<Int>,
+): Int {
+    return ((minOf(originalExistingCount, merged.size) - 1) downTo 0).firstOrNull { index ->
+        index !in consumedOriginalExistingIndexes
+            && timelineMessagesRepresentSameItem(merged[index], incoming)
+    } ?: -1
+}
+
+private fun normalizedItemId(message: ConversationMessage): String? {
+    return message.itemId?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+private fun fastTurnLookupKey(message: ConversationMessage): FastTurnLookupKey? {
+    val turnId = message.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (message.kind == ConversationKind.COMMAND
+        || message.kind == ConversationKind.EXECUTION
+        || message.kind == ConversationKind.SUBAGENT_ACTION
+    ) {
+        return null
+    }
+    return FastTurnLookupKey(
+        threadId = message.threadId,
+        role = message.role,
+        kind = message.kind,
+        turnId = turnId,
+    )
+}
+
+private fun fastChatLookupKey(message: ConversationMessage): FastChatLookupKey? {
+    if (message.kind != ConversationKind.CHAT) {
+        return null
+    }
+    return FastChatLookupKey(
+        threadId = message.threadId,
+        role = message.role,
+        text = message.text,
+        attachmentsSignature = attachmentSignature(message.attachments),
+    )
 }
 
 private fun mergeMatchedMessage(

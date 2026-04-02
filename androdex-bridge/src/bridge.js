@@ -89,11 +89,6 @@ function startBridge({
     "thread/resume",
   ]);
   const forwardedRequestMethodTTLms = 2 * 60_000;
-  let cachedInitializeParams = null;
-  let cachedLegacyInitializeParams = null;
-  let cachedInitializedNotification = false;
-  let syntheticInitializeRequest = null;
-  let syntheticInitializeCounter = 0;
   let contextUsageWatcher = null;
   let watchedContextUsageKey = null;
   let lastContextUsageHint = null;
@@ -143,7 +138,7 @@ function startBridge({
   const workspaceRuntime = createWorkspaceRuntime({
     config,
     onBeforeTransportShutdown() {
-      syntheticInitializeRequest = null;
+      forwardedInitializeRequestIds.clear();
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       supportsNativeTokenUsageUpdates = false;
@@ -152,7 +147,6 @@ function startBridge({
     },
     onBeforeTransportStart() {
       forwardedInitializeRequestIds.clear();
-      syntheticInitializeRequest = null;
       codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
       supportsNativeTokenUsageUpdates = false;
     },
@@ -172,13 +166,20 @@ function startBridge({
       });
     },
     onTransportMessage(message) {
-      if (handleSyntheticInitializeMessage(message)) {
+      const forwardedInitializeResponse = resolveForwardedInitializeResponse(
+        message,
+        forwardedInitializeRequestIds,
+      );
+      if (forwardedInitializeResponse) {
+        if (forwardedInitializeResponse.handshakeWarm) {
+          codexHandshakeState = "warm";
+        }
+        sendApplicationResponse(forwardedInitializeResponse.message);
         return;
       }
       if (codexRpcClient.handleCodexMessage(message)) {
         return;
       }
-      trackCodexHandshakeState(message);
       desktopRefresher.handleOutbound(message);
       pushNotificationTracker.handleOutbound(message);
       rememberThreadFromMessage("codex", message);
@@ -190,6 +191,7 @@ function startBridge({
     },
     onTransportClose() {
       desktopRefresher.handleTransportReset();
+      forwardedInitializeRequestIds.clear();
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       codexHandshakeState = "cold";
@@ -217,7 +219,6 @@ function startBridge({
     if (!status.workspaceActive) {
       return;
     }
-    primeCodexHandshake();
     publishBridgeStatus({
       state: "running",
       connectionStatus: lastConnectionStatus || "connecting",
@@ -356,7 +357,7 @@ function startBridge({
       const reason = normalizeCloseReason(reasonBuffer);
       console.warn(`[androdex] relay closed code=${code}${reason ? ` reason=${reason}` : ""}`);
       hasSeenInboundRelayTraffic = false;
-      clearCachedBridgeHandshakeState();
+      forwardedInitializeRequestIds.clear();
       supportsNativeTokenUsageUpdates = false;
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
@@ -386,7 +387,6 @@ function startBridge({
 
   async function activateWorkspace({ cwd = "" } = {}) {
     const status = await workspaceRuntime.activateWorkspace({ cwd });
-    primeCodexHandshake();
     publishBridgeStatus({
       state: "running",
       connectionStatus: lastConnectionStatus || "connecting",
@@ -649,7 +649,6 @@ function startBridge({
     }
 
     if (method === "initialize" && parsed.id != null) {
-      cacheBridgeInitialize(parsed);
       console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
       if (!workspaceRuntime.hasActiveWorkspace()) {
         sendApplicationResponse(JSON.stringify({
@@ -662,26 +661,29 @@ function startBridge({
         return true;
       }
 
-      if (codexHandshakeState !== "warm") {
-        primeCodexHandshake();
+      if (codexHandshakeState === "warm") {
+        sendApplicationResponse(createBridgeManagedInitializeSuccessResponse(parsed.id));
+        return true;
       }
 
-      sendApplicationResponse(JSON.stringify({
-        id: parsed.id,
-        result: {
-          bridgeManaged: true,
-          workspaceActive: true,
-        },
-      }));
+      forwardedInitializeRequestIds.add(String(parsed.id));
+      try {
+        workspaceRuntime.sendToCodex(rawMessage);
+      } catch (error) {
+        forwardedInitializeRequestIds.delete(String(parsed.id));
+        sendApplicationResponse(JSON.stringify({
+          id: parsed.id,
+          error: {
+            code: -32000,
+            message: normalizeNonEmptyString(error?.message) || "The host is not ready yet.",
+          },
+        }));
+      }
       return true;
     }
 
     if (method === "initialized") {
-      cachedInitializedNotification = true;
       console.log("[androdex] bridge-managed initialized notification received");
-      if (workspaceRuntime.hasActiveWorkspace() && codexHandshakeState !== "warm") {
-        primeCodexHandshake();
-      }
       return true;
     }
 
@@ -701,115 +703,6 @@ function startBridge({
         message: "No active workspace on the host. Choose a project from the Android app to get started.",
       },
     }));
-  }
-
-  function trackCodexHandshakeState(rawMessage) {
-    const parsed = safeParseJSON(rawMessage);
-    const responseId = parsed?.id;
-    if (responseId == null) {
-      return;
-    }
-
-    const responseKey = String(responseId);
-    if (!forwardedInitializeRequestIds.has(responseKey)) {
-      return;
-    }
-
-    forwardedInitializeRequestIds.delete(responseKey);
-    if (parsed?.result != null) {
-      codexHandshakeState = "warm";
-      return;
-    }
-
-    const errorMessage = typeof parsed?.error?.message === "string"
-      ? parsed.error.message.toLowerCase()
-      : "";
-    if (errorMessage.includes("already initialized")) {
-      codexHandshakeState = "warm";
-    }
-  }
-
-  function cacheBridgeInitialize(parsedMessage) {
-    const params = parsedMessage?.params && typeof parsedMessage.params === "object"
-      ? parsedMessage.params
-      : {};
-    cachedInitializeParams = params;
-    const clientInfo = params?.clientInfo && typeof params.clientInfo === "object"
-      ? params.clientInfo
-      : null;
-    cachedLegacyInitializeParams = clientInfo ? { clientInfo } : null;
-  }
-
-  function primeCodexHandshake() {
-    if (
-      !workspaceRuntime.hasActiveWorkspace()
-      || codexHandshakeState === "warm"
-      || !cachedInitializeParams
-      || syntheticInitializeRequest
-    ) {
-      return;
-    }
-    sendSyntheticInitialize(cachedInitializeParams, false);
-  }
-
-  function sendSyntheticInitialize(params, usingLegacyParams) {
-    if (!workspaceRuntime.hasActiveWorkspace()) {
-      return;
-    }
-    const requestId = `androdex-initialize-${++syntheticInitializeCounter}`;
-    syntheticInitializeRequest = {
-      id: requestId,
-      usingLegacyParams,
-    };
-    workspaceRuntime.sendToCodex(JSON.stringify({
-      id: requestId,
-      method: "initialize",
-      params,
-    }));
-  }
-
-  function handleSyntheticInitializeMessage(rawMessage) {
-    const pendingRequest = syntheticInitializeRequest;
-    if (!pendingRequest) {
-      return false;
-    }
-
-    const parsed = safeParseJSON(rawMessage);
-    if (!parsed || parsed.id !== pendingRequest.id) {
-      return false;
-    }
-
-    syntheticInitializeRequest = null;
-    if (parsed?.result != null || isAlreadyInitializedError(parsed?.error?.message)) {
-      codexHandshakeState = "warm";
-      if (cachedInitializedNotification && workspaceRuntime.hasActiveWorkspace()) {
-        workspaceRuntime.sendToCodex(JSON.stringify({ method: "initialized" }));
-      }
-      return true;
-    }
-
-    if (
-      !pendingRequest.usingLegacyParams
-      && cachedLegacyInitializeParams
-      && isCapabilitiesMismatchError(parsed?.error?.message)
-    ) {
-      sendSyntheticInitialize(cachedLegacyInitializeParams, true);
-      return true;
-    }
-
-    const errorMessage = parsed?.error?.message;
-    if (typeof errorMessage === "string" && errorMessage.trim()) {
-      console.error(`[androdex] Failed to initialize the active Codex workspace: ${errorMessage}`);
-    }
-    return true;
-  }
-
-  function clearCachedBridgeHandshakeState() {
-    forwardedInitializeRequestIds.clear();
-    cachedInitializeParams = null;
-    cachedLegacyInitializeParams = null;
-    cachedInitializedNotification = false;
-    syntheticInitializeRequest = null;
   }
 
   function markRelayActivity() {
@@ -939,7 +832,7 @@ function startBridge({
     clearReconnectTimer();
     clearRelayWatchdog();
     clearBridgeStatusHeartbeat();
-    clearCachedBridgeHandshakeState();
+    forwardedInitializeRequestIds.clear();
     stopContextUsageWatcher({ clearHint: false });
 
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -1006,25 +899,48 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-function isAlreadyInitializedError(message) {
-  return normalizeNonEmptyString(message).toLowerCase().includes("already initialized");
-}
-
-function isCapabilitiesMismatchError(message) {
-  const normalized = normalizeNonEmptyString(message).toLowerCase();
-  const mentionsCapabilitiesField = normalized.includes("capabilities")
-    || normalized.includes("experimentalapi");
-  if (!mentionsCapabilitiesField) {
-    return false;
+function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeRequestIds) {
+  if (!forwardedInitializeRequestIds || typeof forwardedInitializeRequestIds.has !== "function") {
+    return null;
   }
 
-  return normalized.includes("unknown field")
-    || normalized.includes("unexpected field")
-    || normalized.includes("unrecognized field")
-    || normalized.includes("invalid param")
-    || normalized.includes("invalid params")
-    || normalized.includes("failed to parse")
-    || normalized.includes("unsupported");
+  const parsed = safeParseJSON(rawMessage);
+  const responseId = parsed?.id;
+  if (responseId == null) {
+    return null;
+  }
+
+  const responseKey = String(responseId);
+  if (!forwardedInitializeRequestIds.has(responseKey)) {
+    return null;
+  }
+
+  forwardedInitializeRequestIds.delete(responseKey);
+  if (parsed?.result != null || isAlreadyInitializedError(parsed?.error?.message)) {
+    return {
+      handshakeWarm: true,
+      message: createBridgeManagedInitializeSuccessResponse(responseId),
+    };
+  }
+
+  return {
+    handshakeWarm: false,
+    message: rawMessage,
+  };
+}
+
+function createBridgeManagedInitializeSuccessResponse(requestId) {
+  return JSON.stringify({
+    id: requestId,
+    result: {
+      bridgeManaged: true,
+      workspaceActive: true,
+    },
+  });
+}
+
+function isAlreadyInitializedError(message) {
+  return normalizeNonEmptyString(message).toLowerCase().includes("already initialized");
 }
 
 function buildMacRegistrationHeaders(deviceState) {
@@ -1055,6 +971,7 @@ function buildMacRegistration(deviceState) {
 module.exports = {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  resolveForwardedInitializeResponse,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,
 };

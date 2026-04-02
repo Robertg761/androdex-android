@@ -14,6 +14,7 @@ class AndrodexAppTransitionTest {
             threadBackAction(
                 isDrawerOpen = false,
                 isImeVisible = false,
+                isConnected = true,
             ),
         )
     }
@@ -25,6 +26,7 @@ class AndrodexAppTransitionTest {
             threadBackAction(
                 isDrawerOpen = true,
                 isImeVisible = false,
+                isConnected = true,
             ),
         )
     }
@@ -36,6 +38,19 @@ class AndrodexAppTransitionTest {
             threadBackAction(
                 isDrawerOpen = false,
                 isImeVisible = true,
+                isConnected = true,
+            ),
+        )
+    }
+
+    @Test
+    fun threadBackAction_closesThreadWhenDisconnectedAndDrawerIsClosed() {
+        assertEquals(
+            ThreadBackAction.CLOSE_THREAD,
+            threadBackAction(
+                isDrawerOpen = false,
+                isImeVisible = false,
+                isConnected = false,
             ),
         )
     }

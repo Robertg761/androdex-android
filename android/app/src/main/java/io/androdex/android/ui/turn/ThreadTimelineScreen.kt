@@ -331,6 +331,7 @@ internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): 
 @Composable
 internal fun ThreadTimelineScreen(
     state: ThreadTimelineUiState,
+    isConnected: Boolean,
     isSidebarOpen: Boolean = false,
     onBack: () -> Unit,
     onOpenSidebar: () -> Unit,
@@ -388,6 +389,7 @@ internal fun ThreadTimelineScreen(
             threadBackAction(
                 isDrawerOpen = isSidebarOpen,
                 isImeVisible = isImeVisible,
+                isConnected = isConnected,
             )
         ) {
             ThreadBackAction.DISMISS_KEYBOARD -> {
@@ -395,7 +397,8 @@ internal fun ThreadTimelineScreen(
                 focusManager.clearFocus(force = true)
             }
             ThreadBackAction.OPEN_SIDEBAR,
-            ThreadBackAction.CLOSE_SIDEBAR -> onBack()
+            ThreadBackAction.CLOSE_SIDEBAR,
+            ThreadBackAction.CLOSE_THREAD -> onBack()
         }
     }
     val handleToolbarBack = {

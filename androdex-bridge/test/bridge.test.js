@@ -10,6 +10,7 @@ const WebSocket = require("ws");
 const {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  resolveForwardedInitializeResponse,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
 
@@ -129,4 +130,47 @@ test("getRelayWatchdogAction keeps quiet relay connections alive even after the 
 test("hasRelayConnectionGoneStale waits for the full stale timeout window", () => {
   assert.equal(hasRelayConnectionGoneStale(10_000, 54_999), false);
   assert.equal(hasRelayConnectionGoneStale(10_000, 55_000), true);
+});
+
+test("resolveForwardedInitializeResponse rewrites already-initialized errors into bridge-managed success", () => {
+  const forwardedInitializeRequestIds = new Set(["req-init"]);
+
+  const normalized = resolveForwardedInitializeResponse(
+    JSON.stringify({
+      id: "req-init",
+      error: {
+        message: "Already initialized",
+      },
+    }),
+    forwardedInitializeRequestIds
+  );
+
+  assert.ok(normalized);
+  assert.equal(normalized.handshakeWarm, true);
+  assert.deepEqual(JSON.parse(normalized.message), {
+    id: "req-init",
+    result: {
+      bridgeManaged: true,
+      workspaceActive: true,
+    },
+  });
+  assert.equal(forwardedInitializeRequestIds.has("req-init"), false);
+});
+
+test("resolveForwardedInitializeResponse passes through non-initialize responses unchanged", () => {
+  const forwardedInitializeRequestIds = new Set(["req-init"]);
+
+  assert.equal(
+    resolveForwardedInitializeResponse(
+      JSON.stringify({
+        id: "req-other",
+        error: {
+          message: "Already initialized",
+        },
+      }),
+      forwardedInitializeRequestIds
+    ),
+    null
+  );
+  assert.equal(forwardedInitializeRequestIds.has("req-init"), true);
 });

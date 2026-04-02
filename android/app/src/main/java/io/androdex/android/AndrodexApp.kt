@@ -67,15 +67,18 @@ internal enum class ThreadBackAction {
     DISMISS_KEYBOARD,
     OPEN_SIDEBAR,
     CLOSE_SIDEBAR,
+    CLOSE_THREAD,
 }
 
 internal fun threadBackAction(
     isDrawerOpen: Boolean,
     isImeVisible: Boolean,
+    isConnected: Boolean,
 ): ThreadBackAction = when {
     isImeVisible -> ThreadBackAction.DISMISS_KEYBOARD
     isDrawerOpen -> ThreadBackAction.CLOSE_SIDEBAR
-    else -> ThreadBackAction.OPEN_SIDEBAR
+    isConnected -> ThreadBackAction.OPEN_SIDEBAR
+    else -> ThreadBackAction.CLOSE_THREAD
 }
 
 @Composable
@@ -445,17 +448,20 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                     }
                                     ThreadTimelineScreen(
                                         state = connectedState.state,
+                                        isConnected = uiState.connectionStatus == ConnectionStatus.CONNECTED,
                                         isSidebarOpen = drawerState.isOpen,
                                         onBack = {
                                             when (
                                                 threadBackAction(
                                                     isDrawerOpen = drawerState.isOpen,
                                                     isImeVisible = false,
+                                                    isConnected = uiState.connectionStatus == ConnectionStatus.CONNECTED,
                                                 )
                                             ) {
                                                 ThreadBackAction.DISMISS_KEYBOARD -> Unit
                                                 ThreadBackAction.OPEN_SIDEBAR -> scope.launch { drawerState.open() }
                                                 ThreadBackAction.CLOSE_SIDEBAR -> scope.launch { drawerState.close() }
+                                                ThreadBackAction.CLOSE_THREAD -> viewModel.closeThread()
                                             }
                                         },
                                         onOpenSidebar = { scope.launch { drawerState.open() } },

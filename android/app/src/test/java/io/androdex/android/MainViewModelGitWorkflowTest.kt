@@ -297,7 +297,7 @@ private class GitTestRepository : AndrodexRepositoryContract {
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
 
-    override suspend fun reconnectSaved() = Unit
+    override suspend fun reconnectSaved(): Boolean = true
 
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 

@@ -38,6 +38,7 @@ class AndrodexClientSecureTransportTest {
                 lifecycleTransitionInFlight = true,
                 handshakeInProgress = false,
                 socketAvailable = true,
+                waitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
             )
         )
         assertTrue(
@@ -46,6 +47,7 @@ class AndrodexClientSecureTransportTest {
                 lifecycleTransitionInFlight = false,
                 handshakeInProgress = true,
                 socketAvailable = true,
+                waitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
             )
         )
         assertFalse(
@@ -54,6 +56,7 @@ class AndrodexClientSecureTransportTest {
                 lifecycleTransitionInFlight = false,
                 handshakeInProgress = false,
                 socketAvailable = false,
+                waitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
             )
         )
         assertFalse(
@@ -62,6 +65,29 @@ class AndrodexClientSecureTransportTest {
                 lifecycleTransitionInFlight = true,
                 handshakeInProgress = true,
                 socketAvailable = true,
+                waitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+            )
+        )
+    }
+
+    @Test
+    fun shouldWaitForSecureSessionReady_failsFastForThreadLoadRequests() {
+        assertFalse(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = false,
+                lifecycleTransitionInFlight = true,
+                handshakeInProgress = true,
+                socketAvailable = true,
+                waitPolicy = SecureSessionWaitPolicy.FAIL_FAST,
+            )
+        )
+        assertFalse(
+            shouldWaitForSecureSessionReady(
+                secureSessionReady = false,
+                lifecycleTransitionInFlight = false,
+                handshakeInProgress = false,
+                socketAvailable = false,
+                waitPolicy = SecureSessionWaitPolicy.FAIL_FAST,
             )
         )
     }

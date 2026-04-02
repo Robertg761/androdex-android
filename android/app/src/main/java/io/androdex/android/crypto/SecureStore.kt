@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import kotlin.math.min
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -13,6 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 class SecureStore(context: Context) {
     // Keep legacy storage names so the app can reuse existing paired-device state.
     private val preferences = context.getSharedPreferences("androdex.secure", Context.MODE_PRIVATE)
+    private val cryptoLock = Any()
 
     fun readString(key: String): String? {
         return readStringState(key).value
@@ -24,7 +26,11 @@ class SecureStore(context: Context) {
             wasPresent = false,
             isUnreadable = false,
         )
-        val decrypted = runCatching { decrypt(stored) }.getOrNull()
+        val decrypted = runCatching {
+            synchronized(cryptoLock) {
+                runCryptoOperationWithRetry { decrypt(stored) }
+            }
+        }.getOrNull()
         return SecureReadState(
             value = decrypted,
             wasPresent = true,
@@ -33,7 +39,10 @@ class SecureStore(context: Context) {
     }
 
     fun writeString(key: String, value: String) {
-        preferences.edit().putString(key, encrypt(value)).apply()
+        val encrypted = synchronized(cryptoLock) {
+            runCryptoOperationWithRetry { encrypt(value) }
+        }
+        preferences.edit().putString(key, encrypted).apply()
     }
 
     fun remove(key: String) {
@@ -81,9 +90,38 @@ class SecureStore(context: Context) {
         return generator.generateKey()
     }
 
+    private fun <T> runCryptoOperationWithRetry(block: () -> T): T {
+        var lastError: Throwable? = null
+        repeat(CRYPTO_OPERATION_ATTEMPTS) { attempt ->
+            try {
+                return block()
+            } catch (error: Throwable) {
+                lastError = error
+                if (!isRetryableKeystoreFailure(error) || attempt == CRYPTO_OPERATION_ATTEMPTS - 1) {
+                    throw error
+                }
+                Thread.sleep(min(CRYPTO_RETRY_DELAY_MS * (attempt + 1), CRYPTO_RETRY_MAX_DELAY_MS))
+            }
+        }
+        throw lastError ?: IllegalStateException("SecureStore crypto operation failed without an exception.")
+    }
+
+    private fun isRetryableKeystoreFailure(error: Throwable): Boolean {
+        return generateSequence(error) { it.cause }
+            .mapNotNull { throwable -> throwable.message?.lowercase() }
+            .any { message ->
+                "invalid operation handle" in message
+                    || "outcome: pruned" in message
+                    || "keystoreoperation::finish" in message
+            }
+    }
+
     private companion object {
         const val KEY_ALIAS = "androdex_android_secure_store"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
+        const val CRYPTO_OPERATION_ATTEMPTS = 3
+        const val CRYPTO_RETRY_DELAY_MS = 25L
+        const val CRYPTO_RETRY_MAX_DELAY_MS = 100L
     }
 
     data class SecureReadState(

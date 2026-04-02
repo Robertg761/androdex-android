@@ -268,6 +268,31 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun pairingAvailabilityFalse_closesSelectedThreadAndClearsThreadList() = runTest {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Conversation", null, null, null, null),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.refreshThreads()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("thread-1", service.state.value.selectedThreadId)
+        assertFalse(service.state.value.threads.isEmpty())
+
+        service.processClientUpdate(ClientUpdate.PairingAvailability(hasSavedPairing = false))
+        advanceUntilIdle()
+
+        assertNull(service.state.value.selectedThreadId)
+        assertTrue(service.state.value.threads.isEmpty())
+        assertFalse(service.state.value.hasLoadedThreadList)
+    }
+
+    @Test
     fun openThread_deduplicatesMirroredChatRowsWithinSingleHistorySnapshot() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(
@@ -335,6 +360,71 @@ class AndrodexServiceTest {
             listOf("reply%20only%20with%20alpha0330b", "alpha0330b"),
             messages.map { it.text },
         )
+    }
+
+    @Test
+    fun openThread_preservesDistinctHistoryItemsWithSharedTurnId() = runTest {
+        val now = System.currentTimeMillis()
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "First reply",
+                        createdAtEpochMs = now + 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    ),
+                    ConversationMessage(
+                        id = "history-assistant-2",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Second reply",
+                        createdAtEpochMs = now + 2_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-2",
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.AssistantCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "assistant-1",
+                text = "First reply",
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.AssistantCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = "assistant-2",
+                text = "Second reply",
+            )
+        )
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val messages = service.state.value.timelineByThread["thread-1"].orEmpty()
+        assertEquals(listOf("assistant-1", "assistant-2"), messages.map { it.itemId })
+        assertEquals(listOf("First reply", "Second reply"), messages.map { it.text })
     }
 
     @Test
@@ -2026,6 +2116,21 @@ class AndrodexServiceTest {
         assertEquals(listOf("D:\\Client\\SiteB"), repository.activatedWorkspaces)
         assertEquals(listOf("thread-1"), repository.loadedThreadIds)
     }
+
+    @Test
+    fun reconnectSaved_skipsFollowUpLoadsWhenReconnectDoesNotConnect() = runTest {
+        val repository = FakeRepository().apply {
+            reconnectSavedResult = false
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.reconnectSaved()
+        advanceUntilIdle()
+
+        assertEquals(0, repository.refreshThreadsCalls)
+        assertEquals(0, repository.listRecentWorkspacesCalls)
+    }
 }
 
 private class FakeRepository : AndrodexRepositoryContract {
@@ -2034,9 +2139,12 @@ private class FakeRepository : AndrodexRepositoryContract {
     var hasSavedPairing = false
     var recentState = WorkspaceRecentState(activeCwd = null, recentWorkspaces = emptyList())
     var startupNotice: String? = null
+    var reconnectSavedResult = true
     val activatedWorkspaces = mutableListOf<String>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
+    var refreshThreadsCalls = 0
+    var listRecentWorkspacesCalls = 0
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -2054,7 +2162,7 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
 
-    override suspend fun reconnectSaved() = Unit
+    override suspend fun reconnectSaved(): Boolean = reconnectSavedResult
 
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 
@@ -2063,6 +2171,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     var refreshThreadsDelayMs: Long = 0L
 
     override suspend fun refreshThreads(): List<ThreadSummary> {
+        refreshThreadsCalls += 1
         refreshThreadsError?.let { throw it }
         if (refreshThreadsDelayMs > 0) {
             delay(refreshThreadsDelayMs)
@@ -2227,7 +2336,10 @@ private class FakeRepository : AndrodexRepositoryContract {
         lastRejectedToolInputMessage = message
     }
 
-    override suspend fun listRecentWorkspaces(): WorkspaceRecentState = recentState
+    override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
+        listRecentWorkspacesCalls += 1
+        return recentState
+    }
 
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {
         return WorkspaceBrowseResult(
