@@ -322,6 +322,61 @@ test("qr bootstrap rejects pairing a different Android device after one phone is
   assert.equal(controlMessages[0]?.code, "phone_replacement_required");
 });
 
+test("qr bootstrap allows repairing the same Android device after its identity rotates", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const originalPhoneIdentity = createOkpKeyPair("ed25519");
+  const repairedPhoneIdentity = createOkpKeyPair("ed25519");
+  const originalPhoneEphemeral = createOkpKeyPair("x25519");
+  const repairedPhoneEphemeral = createOkpKeyPair("x25519");
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-3-repair",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "mac-3-repair",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {},
+    },
+  });
+
+  finishHandshake({
+    secureTransport,
+    sessionId: "session-3-repair",
+    macDeviceId: "mac-3-repair",
+    phoneDeviceId: "phone-3",
+    macIdentity,
+    phoneIdentity: originalPhoneIdentity,
+    phoneEphemeral: originalPhoneEphemeral,
+    handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
+    lastAppliedBridgeOutboundSeq: 0,
+  });
+
+  const controlMessages = [];
+  secureTransport.handleIncomingWireMessage(
+    JSON.stringify({
+      kind: "clientHello",
+      protocolVersion: 1,
+      sessionId: "session-3-repair",
+      handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
+      phoneDeviceId: "phone-3",
+      phoneIdentityPublicKey: repairedPhoneIdentity.publicKey,
+      phoneEphemeralPublicKey: repairedPhoneEphemeral.publicKey,
+      clientNonce: Buffer.alloc(32, 11).toString("base64"),
+    }),
+    {
+      sendControlMessage(message) {
+        controlMessages.push(message);
+      },
+      onApplicationMessage() {
+        throw new Error("repair bootstrap should not emit app payloads before secureReady");
+      },
+    }
+  );
+
+  assert.equal(controlMessages[0]?.kind, "serverHello");
+  assert.equal(controlMessages[0]?.handshakeMode, HANDSHAKE_MODE_QR_BOOTSTRAP);
+});
+
 test("qr bootstrap starts a fresh replay window instead of leaking buffered messages", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");

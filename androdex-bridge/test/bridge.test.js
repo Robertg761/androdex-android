@@ -10,6 +10,8 @@ const WebSocket = require("ws");
 const {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  rememberForwardedRequestTiming,
+  resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
@@ -173,4 +175,71 @@ test("resolveForwardedInitializeResponse passes through non-initialize responses
     null
   );
   assert.equal(forwardedInitializeRequestIds.has("req-init"), true);
+});
+
+test("rememberForwardedRequestTiming tracks thread RPCs and resolveForwardedRequestTiming reports their duration", () => {
+  const forwardedRequestTimingsById = new Map();
+
+  rememberForwardedRequestTiming(
+    JSON.stringify({
+      id: "req-thread-read",
+      method: "thread/read",
+      params: {
+        threadId: "thread-123",
+      },
+    }),
+    new Set(["thread/list", "thread/read", "thread/resume"]),
+    forwardedRequestTimingsById,
+    1_000
+  );
+
+  const resolved = resolveForwardedRequestTiming(
+    JSON.stringify({
+      id: "req-thread-read",
+      result: {
+        ok: true,
+      },
+    }),
+    forwardedRequestTimingsById,
+    4_210
+  );
+
+  assert.deepEqual(resolved, {
+    method: "thread/read",
+    threadId: "thread-123",
+    durationMs: 3_210,
+    errorMessage: "",
+  });
+  assert.equal(forwardedRequestTimingsById.size, 0);
+});
+
+test("rememberForwardedRequestTiming ignores unrelated methods", () => {
+  const forwardedRequestTimingsById = new Map();
+
+  rememberForwardedRequestTiming(
+    JSON.stringify({
+      id: "req-turn-start",
+      method: "turn/start",
+      params: {
+        threadId: "thread-123",
+      },
+    }),
+    new Set(["thread/list", "thread/read", "thread/resume"]),
+    forwardedRequestTimingsById,
+    1_000
+  );
+
+  assert.equal(
+    resolveForwardedRequestTiming(
+      JSON.stringify({
+        id: "req-turn-start",
+        result: {
+          ok: true,
+        },
+      }),
+      forwardedRequestTimingsById,
+      2_000
+    ),
+    null
+  );
 });

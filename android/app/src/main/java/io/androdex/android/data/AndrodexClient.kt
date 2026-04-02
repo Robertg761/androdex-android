@@ -143,7 +143,7 @@ private class HostTransportInterruptedException(
 ) : CancellationException(message)
 
 internal enum class TrustedResolveFallbackPolicy {
-    ALLOW_SAVED_SESSION,
+    ALLOW_EXISTING_RECONNECT_CANDIDATE,
     REQUIRE_FRESH_LIVE_SESSION,
 }
 
@@ -270,20 +270,23 @@ class AndrodexClient(
     }
 
     private fun currentTrustedMacRecord(): TrustedMacRecord? {
-        val preferredDeviceId = lastTrustedMacDeviceId?.trim()?.takeIf { it.isNotEmpty() }
-        if (preferredDeviceId != null) {
-            trustedMacRegistry.records[preferredDeviceId]?.let { return it }
-        }
-        val session = savedRelaySession
-        if (session != null) {
-            trustedMacRegistry.records[session.macDeviceId]?.let { return it }
-        }
-        return trustedMacRegistry.records.values.maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
+        return selectPreferredTrustedMacRecord(
+            records = trustedMacRegistry.records,
+            preferredDeviceId = lastTrustedMacDeviceId,
+            savedRelaySession = savedRelaySession,
+        )
     }
 
     private fun reconnectCandidate(): PairingPayload? {
-        savedRelaySession?.let { return it.toPairingPayload() }
         val trusted = currentTrustedMacRecord() ?: return null
+        val session = savedRelaySession
+        if (session != null && !looksLikeLegacyRelaySessionIdentifier(session.macDeviceId)) {
+            return session.toPairingPayload()
+        }
+        if (session != null && trusted.macDeviceId != session.macDeviceId) {
+            clearSavedRelaySession()
+            emitPairingAvailability()
+        }
         val relayUrl = trusted.relayUrl ?: return null
         val hostId = trusted.lastResolvedHostId ?: trusted.macDeviceId
         return PairingPayload(
@@ -1252,8 +1255,11 @@ class AndrodexClient(
             ?: return TrustedSessionResolveResult.FallbackToSavedSession("No trusted host metadata is available yet.")
         val resolveUrl = trustedSessionResolveUrl(pairing.relay)
             ?: return TrustedSessionResolveResult.FallbackToSavedSession("This relay does not support trusted-session resolve.")
-        val fallbackPolicy = if (savedRelaySession?.macDeviceId == pairing.macDeviceId) {
-            TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION
+        val fallbackPolicy = if (
+            savedRelaySession?.macDeviceId == pairing.macDeviceId
+            || (pairing.routingId.isNotBlank() && pairing.routingId != pairing.macDeviceId)
+        ) {
+            TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE
         } else {
             TrustedResolveFallbackPolicy.REQUIRE_FRESH_LIVE_SESSION
         }
@@ -3192,6 +3198,35 @@ internal fun looksLikeLegacyRelaySessionIdentifier(value: String?): Boolean {
     return runCatching { UUID.fromString(normalized) }.isSuccess
 }
 
+internal fun selectPreferredTrustedMacRecord(
+    records: Map<String, TrustedMacRecord>,
+    preferredDeviceId: String?,
+    savedRelaySession: SavedRelaySession?,
+): TrustedMacRecord? {
+    val normalizedPreferredDeviceId = preferredDeviceId?.trim()?.takeIf { it.isNotEmpty() }
+    if (normalizedPreferredDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(normalizedPreferredDeviceId)) {
+        records[normalizedPreferredDeviceId]?.let { return it }
+    }
+
+    val savedSessionDeviceId = savedRelaySession?.macDeviceId?.trim()?.takeIf { it.isNotEmpty() }
+    if (savedSessionDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(savedSessionDeviceId)) {
+        records[savedSessionDeviceId]?.let { return it }
+    }
+
+    records.values
+        .filterNot { looksLikeLegacyRelaySessionIdentifier(it.macDeviceId) }
+        .maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
+        ?.let { return it }
+
+    if (normalizedPreferredDeviceId != null) {
+        records[normalizedPreferredDeviceId]?.let { return it }
+    }
+    if (savedSessionDeviceId != null) {
+        records[savedSessionDeviceId]?.let { return it }
+    }
+    return records.values.maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
+}
+
 internal fun mapTrustedSessionResolveFailure(
     responseCode: Int,
     responseBody: JSONObject?,
@@ -3213,10 +3248,14 @@ internal fun mapTrustedSessionResolveFailure(
         }
         "update_required" -> TrustedSessionResolveResult.UpdateRequired(detail)
         "session_unavailable", "resolve_request_expired", "resolve_request_replayed" -> {
-            TrustedSessionResolveResult.LiveSessionUnresolved(detail)
+            if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE) {
+                TrustedSessionResolveResult.FallbackToSavedSession(detail)
+            } else {
+                TrustedSessionResolveResult.LiveSessionUnresolved(detail)
+            }
         }
         else -> {
-            if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION && responseCode == 0) {
+            if (fallbackPolicy == TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE && responseCode == 0) {
                 TrustedSessionResolveResult.FallbackToSavedSession(detail)
             } else {
                 TrustedSessionResolveResult.LiveSessionUnresolved(detail)

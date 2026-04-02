@@ -88,7 +88,13 @@ function startBridge({
     "thread/read",
     "thread/resume",
   ]);
+  const timedForwardedRequestMethods = new Set([
+    "thread/list",
+    "thread/read",
+    "thread/resume",
+  ]);
   const forwardedRequestMethodTTLms = 2 * 60_000;
+  const forwardedRequestTimingsById = new Map();
   let contextUsageWatcher = null;
   let watchedContextUsageKey = null;
   let lastContextUsageHint = null;
@@ -139,6 +145,7 @@ function startBridge({
     config,
     onBeforeTransportShutdown() {
       forwardedInitializeRequestIds.clear();
+      forwardedRequestTimingsById.clear();
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       supportsNativeTokenUsageUpdates = false;
@@ -147,6 +154,7 @@ function startBridge({
     },
     onBeforeTransportStart() {
       forwardedInitializeRequestIds.clear();
+      forwardedRequestTimingsById.clear();
       codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
       supportsNativeTokenUsageUpdates = false;
     },
@@ -166,6 +174,15 @@ function startBridge({
       });
     },
     onTransportMessage(message) {
+      const forwardedRequestTiming = resolveForwardedRequestTiming(
+        message,
+        forwardedRequestTimingsById,
+      );
+      if (forwardedRequestTiming) {
+        console.log(
+          `[androdex] rpc ${forwardedRequestTiming.method} thread=${forwardedRequestTiming.threadId || "<none>"} durationMs=${forwardedRequestTiming.durationMs}${forwardedRequestTiming.errorMessage ? ` error=${forwardedRequestTiming.errorMessage}` : ""}`,
+        );
+      }
       const forwardedInitializeResponse = resolveForwardedInitializeResponse(
         message,
         forwardedInitializeRequestIds,
@@ -192,6 +209,7 @@ function startBridge({
     onTransportClose() {
       desktopRefresher.handleTransportReset();
       forwardedInitializeRequestIds.clear();
+      forwardedRequestTimingsById.clear();
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       codexHandshakeState = "cold";
@@ -358,6 +376,7 @@ function startBridge({
       console.warn(`[androdex] relay closed code=${code}${reason ? ` reason=${reason}` : ""}`);
       hasSeenInboundRelayTraffic = false;
       forwardedInitializeRequestIds.clear();
+      forwardedRequestTimingsById.clear();
       supportsNativeTokenUsageUpdates = false;
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
@@ -430,6 +449,11 @@ function startBridge({
     desktopRefresher.handleInbound(normalizedMessage);
     rolloutLiveMirror?.observeInbound(normalizedMessage);
     rememberForwardedRequestMethod(normalizedMessage);
+    rememberForwardedRequestTiming(
+      normalizedMessage,
+      timedForwardedRequestMethods,
+      forwardedRequestTimingsById,
+    );
     rememberThreadFromMessage("android", normalizedMessage);
     workspaceRuntime.sendToCodex(normalizedMessage);
   }
@@ -833,6 +857,7 @@ function startBridge({
     clearRelayWatchdog();
     clearBridgeStatusHeartbeat();
     forwardedInitializeRequestIds.clear();
+    forwardedRequestTimingsById.clear();
     stopContextUsageWatcher({ clearHint: false });
 
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -897,6 +922,59 @@ function readString(value) {
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function rememberForwardedRequestTiming(
+  rawMessage,
+  trackedMethods,
+  forwardedRequestTimingsById,
+  now = Date.now(),
+) {
+  if (!trackedMethods || !forwardedRequestTimingsById) {
+    return;
+  }
+
+  const context = extractBridgeMessageContext(rawMessage);
+  const parsed = safeParseJSON(rawMessage);
+  const requestId = parsed?.id;
+  if (!context.method || requestId == null || !trackedMethods.has(context.method)) {
+    return;
+  }
+
+  forwardedRequestTimingsById.set(String(requestId), {
+    method: context.method,
+    threadId: context.threadId || "",
+    startedAt: now,
+  });
+}
+
+function resolveForwardedRequestTiming(
+  rawMessage,
+  forwardedRequestTimingsById,
+  now = Date.now(),
+) {
+  if (!forwardedRequestTimingsById) {
+    return null;
+  }
+
+  const parsed = safeParseJSON(rawMessage);
+  const responseId = parsed?.id;
+  if (responseId == null) {
+    return null;
+  }
+
+  const timing = forwardedRequestTimingsById.get(String(responseId));
+  if (!timing) {
+    return null;
+  }
+
+  forwardedRequestTimingsById.delete(String(responseId));
+  return {
+    method: timing.method,
+    threadId: timing.threadId,
+    durationMs: Math.max(0, now - timing.startedAt),
+    errorMessage: normalizeNonEmptyString(parsed?.error?.message),
+  };
 }
 
 function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeRequestIds) {
@@ -971,6 +1049,8 @@ function buildMacRegistration(deviceState) {
 module.exports = {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  rememberForwardedRequestTiming,
+  resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,

@@ -560,6 +560,108 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun backgroundThreadRefresh_waitsUntilSelectedThreadLoadFinishes() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Selected", null, null, null, null),
+                ThreadSummary("thread-2", "Background", null, null, null, null),
+            )
+            loadThreadDelayMs = 1_000L
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Selected", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-selected",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-1", "Selected", null, null, null, null),
+                    ThreadSummary("thread-2", "Background", null, null, null, null),
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        val openJob = backgroundScope.launch {
+            service.openThread("thread-1")
+        }
+        runCurrent()
+
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-2",
+                turnId = "turn-2",
+                terminalState = TurnTerminalState.COMPLETED,
+            )
+        )
+        runCurrent()
+
+        assertEquals(0, repository.refreshThreadsCalls)
+
+        advanceUntilIdle()
+        openJob.join()
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals(1, repository.refreshThreadsCalls)
+        assertFalse(repository.refreshThreadsObservedWhileLoadThreadInFlight)
+    }
+
+    @Test
+    fun explicitRefresh_waitsForSelectedThreadLoadInsteadOfOverlappingHostCalls() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(ThreadSummary("thread-1", "Selected", null, null, null, null))
+            loadThreadDelayMs = 1_000L
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Selected", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(listOf(ThreadSummary("thread-1", "Selected", null, null, null, null)))
+        )
+        advanceUntilIdle()
+
+        val openJob = backgroundScope.launch {
+            service.openThread("thread-1")
+        }
+        runCurrent()
+
+        val refreshJob = backgroundScope.launch {
+            service.refreshThreads()
+        }
+        runCurrent()
+
+        assertEquals(0, repository.refreshThreadsCalls)
+
+        advanceUntilIdle()
+        openJob.join()
+        refreshJob.join()
+        advanceUntilIdle()
+
+        assertEquals(1, repository.refreshThreadsCalls)
+        assertFalse(repository.refreshThreadsObservedWhileLoadThreadInFlight)
+    }
+
+    @Test
     fun planUpdates_mergeStreamingAndStructuredStateIntoSingleRow() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
@@ -2169,8 +2271,14 @@ private class FakeRepository : AndrodexRepositoryContract {
     var refreshThreadsError: Throwable? = null
     var refreshedThreads: List<ThreadSummary> = emptyList()
     var refreshThreadsDelayMs: Long = 0L
+    var loadThreadDelayMs: Long = 0L
+    var refreshThreadsObservedWhileLoadThreadInFlight = false
+    private var loadThreadInFlightCount = 0
 
     override suspend fun refreshThreads(): List<ThreadSummary> {
+        if (loadThreadInFlightCount > 0) {
+            refreshThreadsObservedWhileLoadThreadInFlight = true
+        }
         refreshThreadsCalls += 1
         refreshThreadsError?.let { throw it }
         if (refreshThreadsDelayMs > 0) {
@@ -2232,8 +2340,16 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun loadThread(threadId: String): ThreadLoadResult {
         loadedThreadIds += threadId
-        loadThreadError?.let { throw it }
-        return loadThreadResult
+        loadThreadInFlightCount += 1
+        try {
+            loadThreadError?.let { throw it }
+            if (loadThreadDelayMs > 0) {
+                delay(loadThreadDelayMs)
+            }
+            return loadThreadResult
+        } finally {
+            loadThreadInFlightCount -= 1
+        }
     }
 
     override suspend fun readThreadRunSnapshot(threadId: String): ThreadRunSnapshot {

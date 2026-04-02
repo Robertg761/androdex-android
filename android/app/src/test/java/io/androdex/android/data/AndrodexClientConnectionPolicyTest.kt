@@ -2,6 +2,8 @@ package io.androdex.android.data
 
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
+import io.androdex.android.model.SavedRelaySession
+import io.androdex.android.model.TrustedMacRecord
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -95,11 +97,28 @@ class AndrodexClientConnectionPolicyTest {
             responseBody = JSONObject()
                 .put("code", "session_unavailable")
                 .put("message", "The trusted host is offline right now."),
-            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+            fallbackPolicy = TrustedResolveFallbackPolicy.REQUIRE_FRESH_LIVE_SESSION,
         )
 
         assertTrue(result is TrustedSessionResolveResult.LiveSessionUnresolved)
         assertEquals("The trusted host is offline right now.", (result as TrustedSessionResolveResult.LiveSessionUnresolved).detail)
+    }
+
+    @Test
+    fun trustedSessionResolveFailure_fallsBackToExistingReconnectCandidateWhenRelayCannotResolve() {
+        val result = mapTrustedSessionResolveFailure(
+            responseCode = 404,
+            responseBody = JSONObject()
+                .put("code", "session_unavailable")
+                .put("message", "The trusted host is offline right now."),
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE,
+        )
+
+        assertTrue(result is TrustedSessionResolveResult.FallbackToSavedSession)
+        assertEquals(
+            "The trusted host is offline right now.",
+            (result as TrustedSessionResolveResult.FallbackToSavedSession).detail,
+        )
     }
 
     @Test
@@ -109,7 +128,7 @@ class AndrodexClientConnectionPolicyTest {
             responseBody = JSONObject()
                 .put("code", "invalid_signature")
                 .put("message", "The trusted-session resolve signature is invalid."),
-            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE,
         )
 
         assertTrue(result is TrustedSessionResolveResult.RepairRequired)
@@ -124,7 +143,7 @@ class AndrodexClientConnectionPolicyTest {
         val result = mapTrustedSessionResolveFailure(
             responseCode = 0,
             responseBody = null,
-            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_SAVED_SESSION,
+            fallbackPolicy = TrustedResolveFallbackPolicy.ALLOW_EXISTING_RECONNECT_CANDIDATE,
         )
 
         assertTrue(result is TrustedSessionResolveResult.FallbackToSavedSession)
@@ -142,6 +161,58 @@ class AndrodexClientConnectionPolicyTest {
     @Test
     fun legacyRelaySessionIdentifier_ignoresRealDeviceIds() {
         assertEquals(false, looksLikeLegacyRelaySessionIdentifier("mac-5"))
+    }
+
+    @Test
+    fun selectPreferredTrustedMacRecord_prefersStableTrustedRecordOverLegacySavedSession() {
+        val legacySession = SavedRelaySession(
+            relayUrl = "wss://relay.example/relay",
+            hostId = "host-1",
+            macDeviceId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
+            macIdentityPublicKey = "legacy-key",
+            protocolVersion = 3,
+        )
+        val legacyTrusted = TrustedMacRecord(
+            macDeviceId = legacySession.macDeviceId,
+            macIdentityPublicKey = "legacy-key",
+            lastPairedAtEpochMs = 10L,
+        )
+        val stableTrusted = TrustedMacRecord(
+            macDeviceId = "mac-5",
+            macIdentityPublicKey = "stable-key",
+            lastPairedAtEpochMs = 20L,
+            relayUrl = "wss://relay.example/relay",
+            lastResolvedHostId = "host-5",
+            lastUsedAtEpochMs = 30L,
+        )
+
+        val selected = selectPreferredTrustedMacRecord(
+            records = mapOf(
+                legacyTrusted.macDeviceId to legacyTrusted,
+                stableTrusted.macDeviceId to stableTrusted,
+            ),
+            preferredDeviceId = legacyTrusted.macDeviceId,
+            savedRelaySession = legacySession,
+        )
+
+        assertEquals("mac-5", selected?.macDeviceId)
+    }
+
+    @Test
+    fun selectPreferredTrustedMacRecord_usesLegacyRecordWhenOnlyLegacyTrustExists() {
+        val legacyTrusted = TrustedMacRecord(
+            macDeviceId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
+            macIdentityPublicKey = "legacy-key",
+            lastPairedAtEpochMs = 10L,
+        )
+
+        val selected = selectPreferredTrustedMacRecord(
+            records = mapOf(legacyTrusted.macDeviceId to legacyTrusted),
+            preferredDeviceId = legacyTrusted.macDeviceId,
+            savedRelaySession = null,
+        )
+
+        assertEquals(legacyTrusted.macDeviceId, selected?.macDeviceId)
     }
 
     @Test

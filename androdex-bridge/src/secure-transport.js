@@ -145,6 +145,14 @@ function createBridgeSecureTransport({
     ));
   }
 
+  function isSamePhoneRekeyRepair(phoneDeviceId, phoneIdentityPublicKey) {
+    const trustedPhonePublicKey = getTrustedPhonePublicKey(currentDeviceState, phoneDeviceId);
+    return Boolean(
+      trustedPhonePublicKey
+      && trustedPhonePublicKey !== phoneIdentityPublicKey
+    );
+  }
+
   function handleClientHello(message, sendControlMessage) {
     const protocolVersion = Number(message.protocolVersion);
     const incomingSessionId = normalizeNonEmptyString(message.hostId || message.sessionId);
@@ -195,7 +203,11 @@ function createBridgeSecureTransport({
     }
 
     const trustedPhonePublicKey = getTrustedPhonePublicKey(currentDeviceState, phoneDeviceId);
-    if (handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP && hasConflictingTrustedPhone(phoneDeviceId, phoneIdentityPublicKey)) {
+    if (
+      handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
+      && hasConflictingTrustedPhone(phoneDeviceId, phoneIdentityPublicKey)
+      && !isSamePhoneRekeyRepair(phoneDeviceId, phoneIdentityPublicKey)
+    ) {
       sendControlMessage(createSecureError({
         code: "phone_replacement_required",
         message: "This host is already paired with another mobile client. Reset pairing on the host before pairing a new device.",

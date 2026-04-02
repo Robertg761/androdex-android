@@ -54,6 +54,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.ArrayDeque
 import java.util.UUID
 import kotlin.math.abs
@@ -136,6 +138,9 @@ class AndrodexService(
     private var savedReconnectInFlight = false
     private var savedReconnectRetryJob: Job? = null
     private var suppressSavedReconnect = false
+    private val threadCollectionRequestMutex = Mutex()
+    private val selectedThreadLoadCounts = mutableMapOf<String, Int>()
+    private var deferredThreadListRefreshPending = false
     private val subagentIdentityByThreadId = mutableMapOf<String, SubagentIdentityEntry>()
     private val subagentIdentityByAgentId = mutableMapOf<String, SubagentIdentityEntry>()
     private val runCompletionEventsFlow = MutableSharedFlow<RunCompletionEvent>(extraBufferCapacity = 8)
@@ -770,11 +775,17 @@ class AndrodexService(
         }
     }
 
-    private suspend fun refreshThreadsInternal() {
+    private suspend fun refreshThreadsInternal(allowDuringSelectedThreadLoad: Boolean = false) {
+        if (!allowDuringSelectedThreadLoad && isSelectedThreadLoadInFlight()) {
+            deferredThreadListRefreshPending = true
+            return
+        }
         val startedAt = System.currentTimeMillis()
         stateFlow.update { it.copy(isLoadingThreadList = true) }
         try {
-            val threads = repository.refreshThreads()
+            val threads = threadCollectionRequestMutex.withLock {
+                repository.refreshThreads()
+            }
             applyLoadedThreads(threads)
         } finally {
             val elapsedMs = System.currentTimeMillis() - startedAt
@@ -811,51 +822,95 @@ class AndrodexService(
         }
     }
 
+    private fun isSelectedThreadLoadInFlight(snapshot: AndrodexServiceState = stateFlow.value): Boolean {
+        val selectedThreadId = snapshot.selectedThreadId ?: return false
+        return (selectedThreadLoadCounts[selectedThreadId] ?: 0) > 0
+    }
+
+    private fun markSelectedThreadLoadStarted(threadId: String): Boolean {
+        val selectedThreadId = stateFlow.value.selectedThreadId ?: return false
+        if (selectedThreadId != threadId) {
+            return false
+        }
+        selectedThreadLoadCounts[threadId] = (selectedThreadLoadCounts[threadId] ?: 0) + 1
+        return true
+    }
+
+    private fun markSelectedThreadLoadFinished(threadId: String) {
+        val currentCount = selectedThreadLoadCounts[threadId] ?: return
+        if (currentCount <= 1) {
+            selectedThreadLoadCounts.remove(threadId)
+        } else {
+            selectedThreadLoadCounts[threadId] = currentCount - 1
+        }
+        if (isSelectedThreadLoadInFlight()) {
+            return
+        }
+        if (!deferredThreadListRefreshPending) {
+            return
+        }
+        deferredThreadListRefreshPending = false
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatching {
+                refreshThreadsInternal(allowDuringSelectedThreadLoad = true)
+            }
+        }
+    }
+
     private suspend fun loadThreadIntoState(
         threadId: String,
         keepStreamingRowsOverride: Boolean? = null,
     ) {
-        val loadStartedAt = System.currentTimeMillis()
-        val result = repository.loadThread(threadId)
-        val loadDurationMs = System.currentTimeMillis() - loadStartedAt
-        val turnIdToInvalidatePendingToolInputs =
-            pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
-        var mergedMessageCount = 0
-        val mergeStartedAt = System.currentTimeMillis()
-        stateFlow.update { current ->
-            val existingMessages = current.timelineByThread[threadId].orEmpty()
-            val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
-            val mergedMessages = mergeThreadMessages(
-                existing = existingMessages,
-                incoming = result.messages,
-                keepStreamingRows = keepStreamingRows,
-            )
-            mergedMessageCount = mergedMessages.size
-            current.copy(
-                selectedThreadTitle = if (current.selectedThreadId == threadId) {
-                    result.thread?.title ?: current.selectedThreadTitle
-                } else {
-                    current.selectedThreadTitle
-                },
-                timelineByThread = current.timelineByThread + (threadId to mergedMessages),
-                pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
-                    current.pendingToolInputsByThread.removePendingToolInputTurn(
-                        threadId = threadId,
-                        turnId = turnIdToInvalidatePendingToolInputs,
-                    )
-                } else {
-                    current.pendingToolInputsByThread
-                },
-            )
+        val trackedSelectedThreadLoad = markSelectedThreadLoadStarted(threadId)
+        try {
+            val loadStartedAt = System.currentTimeMillis()
+            val result = threadCollectionRequestMutex.withLock {
+                repository.loadThread(threadId)
+            }
+            val loadDurationMs = System.currentTimeMillis() - loadStartedAt
+            val turnIdToInvalidatePendingToolInputs =
+                pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
+            var mergedMessageCount = 0
+            val mergeStartedAt = System.currentTimeMillis()
+            stateFlow.update { current ->
+                val existingMessages = current.timelineByThread[threadId].orEmpty()
+                val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
+                val mergedMessages = mergeThreadMessages(
+                    existing = existingMessages,
+                    incoming = result.messages,
+                    keepStreamingRows = keepStreamingRows,
+                )
+                mergedMessageCount = mergedMessages.size
+                current.copy(
+                    selectedThreadTitle = if (current.selectedThreadId == threadId) {
+                        result.thread?.title ?: current.selectedThreadTitle
+                    } else {
+                        current.selectedThreadTitle
+                    },
+                    timelineByThread = current.timelineByThread + (threadId to mergedMessages),
+                    pendingToolInputsByThread = if (turnIdToInvalidatePendingToolInputs != null) {
+                        current.pendingToolInputsByThread.removePendingToolInputTurn(
+                            threadId = threadId,
+                            turnId = turnIdToInvalidatePendingToolInputs,
+                        )
+                    } else {
+                        current.pendingToolInputsByThread
+                    },
+                )
+            }
+            val mergeDurationMs = System.currentTimeMillis() - mergeStartedAt
+            if (loadDurationMs >= slowThreadLoadLogThresholdMs || mergeDurationMs >= slowThreadLoadLogThresholdMs) {
+                Log.i(
+                    logTag,
+                    "loadThreadIntoState thread=$threadId hostLoadMs=$loadDurationMs mergeMs=$mergeDurationMs incoming=${result.messages.size} merged=$mergedMessageCount",
+                )
+            }
+            syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
+        } finally {
+            if (trackedSelectedThreadLoad) {
+                markSelectedThreadLoadFinished(threadId)
+            }
         }
-        val mergeDurationMs = System.currentTimeMillis() - mergeStartedAt
-        if (loadDurationMs >= slowThreadLoadLogThresholdMs || mergeDurationMs >= slowThreadLoadLogThresholdMs) {
-            Log.i(
-                logTag,
-                "loadThreadIntoState thread=$threadId hostLoadMs=$loadDurationMs mergeMs=$mergeDurationMs incoming=${result.messages.size} merged=$mergedMessageCount",
-            )
-        }
-        syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
     }
 
     internal suspend fun routePendingNotificationOpenIfPossible(refreshIfNeeded: Boolean = true): Boolean {
