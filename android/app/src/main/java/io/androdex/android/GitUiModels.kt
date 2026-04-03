@@ -10,6 +10,10 @@ data class ThreadGitState(
     val diffPatch: String? = null,
     val isRefreshing: Boolean = false,
     val isLoadingBranchTargets: Boolean = false,
+    val loadedWorkingDirectory: String? = null,
+    val loadedRefreshRequestId: Long = 0L,
+    val refreshWorkingDirectory: String? = null,
+    val refreshRequestId: Long = 0L,
 )
 
 enum class GitActionKind {

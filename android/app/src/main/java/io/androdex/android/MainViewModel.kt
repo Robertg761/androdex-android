@@ -18,6 +18,7 @@ import io.androdex.android.model.ConnectionStatus
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitOperationException
+import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.ImageAttachment
@@ -50,11 +51,13 @@ import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import io.androdex.android.ui.pairing.PairingPayloadValidationResult
 import io.androdex.android.ui.pairing.validatePairingPayload
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -138,6 +141,7 @@ data class AndrodexUiState(
     val submittingToolInputRequestIds: Set<String> = emptySet(),
     val gitStateByThread: Map<String, ThreadGitState> = emptyMap(),
     val runningGitActionByThread: Map<String, GitActionKind> = emptyMap(),
+    val runningGitWorkingDirectoryByThread: Map<String, String> = emptyMap(),
     val gitCommitDialog: GitCommitDialogState? = null,
     val gitBranchDialog: GitBranchDialogState? = null,
     val gitWorktreeDialog: GitWorktreeDialogState? = null,
@@ -153,6 +157,8 @@ class MainViewModel(
     private val notificationCoordinator: NotificationCoordinator = NoopNotificationCoordinator,
     private val firstPairingOnboardingStore: FirstPairingOnboardingStore = InMemoryFirstPairingOnboardingStore(),
 ) : ViewModel() {
+    private var nextGitRefreshRequestCounter: Long = 0L
+
     private val service = AndrodexService(repository, viewModelScope)
     private val repository = repository
     private var lastConnectionStatus: ConnectionStatus = service.state.value.connectionStatus
@@ -658,7 +664,10 @@ class MainViewModel(
         if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
             return
         }
-        runGitAction(threadId, GitActionKind.REFRESH) {
+        if (isGitLoadInFlight(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        runGitAction(threadId, workingDirectory, GitActionKind.REFRESH) {
             loadGitSnapshot(
                 threadId = threadId,
                 workingDirectory = workingDirectory,
@@ -675,7 +684,10 @@ class MainViewModel(
         if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
             return
         }
-        runGitAction(threadId, GitActionKind.DIFF) {
+        if (isGitLoadInFlight(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        runGitAction(threadId, workingDirectory, GitActionKind.DIFF) {
             loadGitSnapshot(
                 threadId = threadId,
                 workingDirectory = workingDirectory,
@@ -721,7 +733,7 @@ class MainViewModel(
         }
         val message = snapshot.gitCommitDialog?.message?.trim().orEmpty()
             .ifEmpty { "Changes from Androdex" }
-        runGitAction(threadId, GitActionKind.COMMIT) {
+        runGitAction(threadId, workingDirectory, GitActionKind.COMMIT) {
             try {
                 repository.gitCommit(workingDirectory, message)
                 uiStateFlow.update { it.copy(gitCommitDialog = null) }
@@ -751,48 +763,52 @@ class MainViewModel(
         if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
             return
         }
-        runGitAction(threadId, GitActionKind.PUSH) {
+        runGitAction(threadId, workingDirectory, GitActionKind.PUSH) {
             val result = repository.gitPush(workingDirectory)
-            updateThreadGitState(threadId) { current ->
-                current.copy(status = result.status ?: current.status)
-            }
+            updateThreadGitStatusIfCurrentContext(threadId, workingDirectory, result.status)
             loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
         }
     }
 
     fun requestGitPull() {
-        val snapshot = uiStateFlow.value
-        val threadId = snapshot.selectedThreadId ?: return
-        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
-        if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
-            return
-        }
-        val status = snapshot.gitStateByThread[threadId]?.status
-        if (status?.state == "diverged" || status?.state == "dirty_and_behind") {
-            val (title, message) = if (status.state == "diverged") {
-                "Branch diverged from remote" to
-                    "Local and remote history both moved. Pull with rebase to reconcile them?"
-            } else {
-                "Local changes need attention" to
-                    "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to resolve conflicts."
+        viewModelScope.launch {
+            var snapshot = uiStateFlow.value
+            val threadId = snapshot.selectedThreadId ?: return@launch
+            val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
             }
-            uiStateFlow.update {
-                it.copy(
-                    gitAlert = GitAlertState(
-                        title = title,
-                        message = message,
-                        buttons = listOf(
-                            GitAlertButton("Cancel", GitAlertAction.DISMISS),
-                            GitAlertButton("Pull & Rebase", GitAlertAction.PULL_REBASE),
+            snapshot = ensureGitBranchContextLoaded(threadId, workingDirectory) ?: return@launch
+            if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+                return@launch
+            }
+            val status = snapshot.gitStateByThread[threadId]?.status
+            if (status?.state == "diverged" || status?.state == "dirty_and_behind") {
+                val (title, message) = if (status.state == "diverged") {
+                    "Branch diverged from remote" to
+                        "Local and remote history both moved. Pull with rebase to reconcile them?"
+                } else {
+                    "Local changes need attention" to
+                        "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to resolve conflicts."
+                }
+                uiStateFlow.update {
+                    it.copy(
+                        gitAlert = GitAlertState(
+                            title = title,
+                            message = message,
+                            buttons = listOf(
+                                GitAlertButton("Cancel", GitAlertAction.DISMISS),
+                                GitAlertButton("Pull & Rebase", GitAlertAction.PULL_REBASE),
+                            ),
                         ),
-                    ),
-                    pendingGitBranchOperation = null,
-                    pendingGitRemoveWorktree = null,
-                )
+                        pendingGitBranchOperation = null,
+                        pendingGitRemoveWorktree = null,
+                    )
+                }
+                return@launch
             }
-            return
+            performGitPull(threadId, workingDirectory)
         }
-        performGitPull(threadId, workingDirectory)
     }
 
     fun openGitBranchDialog() {
@@ -800,6 +816,9 @@ class MainViewModel(
         val threadId = snapshot.selectedThreadId ?: return
         val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot) ?: return
         if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        if (isGitLoadInFlight(threadId, workingDirectory, snapshot)) {
             return
         }
         uiStateFlow.update {
@@ -914,7 +933,9 @@ class MainViewModel(
         if (!canStartGitAction(threadId, workingDirectory, snapshot)) {
             return
         }
-        val branchTargets = snapshot.gitStateByThread[threadId]?.branchTargets
+        val branchTargets = snapshot.gitStateByThread[threadId]
+            ?.takeIf { it.hasLoadedBranchContextFor(workingDirectory) }
+            ?.branchTargets
         uiStateFlow.update {
             it.copy(
                 gitWorktreeDialog = GitWorktreeDialogState(
@@ -926,7 +947,28 @@ class MainViewModel(
             )
         }
         viewModelScope.launch {
-            loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
+            val refreshedState = ensureGitBranchContextLoaded(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                suppressErrors = true,
+            ) ?: return@launch
+            val refreshedTargets = refreshedState.gitStateByThread[threadId]?.branchTargets ?: return@launch
+            val baseBranch = refreshedTargets.defaultBranch
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: refreshedTargets.currentBranch
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                ?: return@launch
+            uiStateFlow.update { current ->
+                val dialog = current.gitWorktreeDialog ?: return@update current
+                if (!isSelectedGitContext(threadId, workingDirectory, current) || dialog.baseBranch.trim().isNotEmpty()) {
+                    return@update current
+                }
+                current.copy(
+                    gitWorktreeDialog = dialog.copy(baseBranch = baseBranch),
+                )
+            }
         }
     }
 
@@ -1075,18 +1117,19 @@ class MainViewModel(
             GitAlertAction.COMMIT_AND_CONTINUE_BRANCH_OPERATION -> {
                 val operation = pendingBranchOperation ?: return
                 viewModelScope.launch {
-                    uiStateFlow.update {
-                        it.copy(runningGitActionByThread = it.runningGitActionByThread + (threadId to GitActionKind.COMMIT))
-                    }
+                    var shouldRefreshAfterFailure = false
+                    markGitActionRunning(threadId, workingDirectory, GitActionKind.COMMIT)
                     try {
                         repository.gitCommit(workingDirectory, "WIP before switching branches")
                         loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
                     } catch (error: Throwable) {
                         reportGitFailure(error, "Commit failed.")
+                        shouldRefreshAfterFailure = true
                         return@launch
                     } finally {
-                        uiStateFlow.update {
-                            it.copy(runningGitActionByThread = it.runningGitActionByThread - threadId)
+                        clearGitActionRunning(threadId)
+                        if (shouldRefreshAfterFailure) {
+                            refreshGitStateAfterActionFailure(threadId, workingDirectory)
                         }
                     }
                     continueGitBranchOperation(threadId, workingDirectory, operation)
@@ -1094,7 +1137,7 @@ class MainViewModel(
             }
             GitAlertAction.REMOVE_WORKTREE -> {
                 val request = pendingRemoveWorktree ?: return
-                runGitAction(threadId, GitActionKind.REMOVE_WORKTREE) {
+                runGitAction(threadId, workingDirectory, GitActionKind.REMOVE_WORKTREE) {
                     repository.gitRemoveWorktree(
                         workingDirectory = request.worktreePath,
                         branch = request.branch,
@@ -1266,20 +1309,8 @@ class MainViewModel(
         runBusyAction("Loading messages...") {
             ThreadOpenPerfLogger.measure(threadId, stage = "MainViewModel.openThread") {
                 service.openThread(threadId)
-                gitWorkingDirectoryForThread(threadId, uiStateFlow.value)?.let { workingDirectory ->
-                    loadGitSnapshot(
-                        threadId = threadId,
-                        workingDirectory = workingDirectory,
-                        loadDiff = false,
-                        suppressErrors = true,
-                        reason = gitLoadReasonThreadOpen,
-                    )
-                } ?: ThreadOpenPerfLogger.logStage(
-                    threadId = threadId,
-                    stage = "MainViewModel.openThread.gitSkipped",
-                    extra = "reason=no_working_directory",
-                )
             }
+            refreshGitStateAfterThreadOpen(threadId)
         }
     }
 
@@ -1799,6 +1830,49 @@ class MainViewModel(
             && !state.isInterruptingSelectedThread
     }
 
+    private fun refreshGitStateAfterThreadOpen(threadId: String) {
+        val snapshot = uiStateFlow.value
+        val workingDirectory = gitWorkingDirectoryForThread(threadId, snapshot)
+        if (workingDirectory == null) {
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "MainViewModel.openThread.gitSkipped",
+                extra = "reason=no_working_directory",
+            )
+            return
+        }
+        val gitState = snapshot.gitStateForThread(threadId)
+        val isMatchingRefreshInFlight = (gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true) &&
+            gitState.refreshWorkingDirectory == workingDirectory
+        val isMatchingGitActionInFlight = snapshot.runningGitWorkingDirectoryByThread[threadId] == workingDirectory
+        if (isMatchingRefreshInFlight || isMatchingGitActionInFlight) {
+            ThreadOpenPerfLogger.logStage(
+                threadId = threadId,
+                stage = "MainViewModel.openThread.gitSkipped",
+                extra = "reason=load_in_flight",
+            )
+            return
+        }
+        ThreadOpenPerfLogger.logStage(
+            threadId = threadId,
+            stage = "MainViewModel.openThread.gitScheduled",
+            extra = if (gitState.hasLoadedBranchContextFor(workingDirectory)) {
+                "reason=refresh_cached_state"
+            } else {
+                "reason=missing_cached_state"
+            },
+        )
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            loadGitSnapshot(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                loadDiff = false,
+                suppressErrors = true,
+                reason = gitLoadReasonThreadOpen,
+            )
+        }
+    }
+
     private suspend fun loadGitSnapshot(
         threadId: String,
         workingDirectory: String,
@@ -1806,6 +1880,10 @@ class MainViewModel(
         suppressErrors: Boolean,
         reason: String = "general",
     ) {
+        if (!isCurrentGitWorkingDirectoryForThread(threadId, workingDirectory)) {
+            return
+        }
+        val refreshRequestId = nextGitRefreshRequestId()
         val shouldLogPerf = reason == gitLoadReasonThreadOpen
         if (shouldLogPerf) {
             ThreadOpenPerfLogger.ensureAttempt(
@@ -1816,9 +1894,16 @@ class MainViewModel(
         }
         val loadStartedAt = System.currentTimeMillis()
         updateThreadGitState(threadId) { current ->
+            val isDifferentWorkingDirectory = current.loadedWorkingDirectory != null
+                && current.loadedWorkingDirectory != workingDirectory
             current.copy(
+                status = if (isDifferentWorkingDirectory) null else current.status,
+                branchTargets = if (isDifferentWorkingDirectory) null else current.branchTargets,
+                diffPatch = if (isDifferentWorkingDirectory) null else current.diffPatch,
                 isRefreshing = true,
                 isLoadingBranchTargets = true,
+                refreshWorkingDirectory = workingDirectory,
+                refreshRequestId = refreshRequestId,
             )
         }
         try {
@@ -1832,20 +1917,40 @@ class MainViewModel(
                     extra = "hasStatus=${branchTargets.status != null}",
                 )
             }
-            updateThreadGitState(threadId) { current ->
+            val didApplyBranchStatus = updateThreadGitStateIfCurrentRefreshMatches(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                refreshRequestId = refreshRequestId,
+            ) { current ->
                 current.copy(
                     status = branchTargets.status ?: current.status,
                     branchTargets = branchTargets,
                     isRefreshing = loadDiff,
                     isLoadingBranchTargets = false,
+                    loadedWorkingDirectory = workingDirectory,
+                    loadedRefreshRequestId = refreshRequestId,
+                    refreshWorkingDirectory = if (loadDiff) workingDirectory else null,
+                    refreshRequestId = if (loadDiff) refreshRequestId else 0L,
                 )
             }
+            if (!didApplyBranchStatus) {
+                return
+            }
         } catch (error: Throwable) {
-            updateThreadGitState(threadId) { current ->
+            val didApplyErrorState = updateThreadGitStateIfCurrentRefreshMatches(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                refreshRequestId = refreshRequestId,
+            ) { current ->
                 current.copy(
                     isRefreshing = false,
                     isLoadingBranchTargets = false,
+                    refreshWorkingDirectory = null,
+                    refreshRequestId = 0L,
                 )
+            }
+            if (!didApplyErrorState) {
+                return
             }
             if (shouldLogPerf) {
                 ThreadOpenPerfLogger.logStage(
@@ -1862,7 +1967,6 @@ class MainViewModel(
         }
 
         if (!loadDiff) {
-            updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
             if (shouldLogPerf) {
                 ThreadOpenPerfLogger.logStage(
                     threadId = threadId,
@@ -1885,14 +1989,33 @@ class MainViewModel(
                     extra = "hasDiff=${diff.patch.isNotBlank()}",
                 )
             }
-            updateThreadGitState(threadId) { current ->
+            updateThreadGitStateIfCurrentRefreshMatches(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                refreshRequestId = refreshRequestId,
+            ) { current ->
                 current.copy(
                     diffPatch = diff.patch.trim().ifEmpty { null },
                     isRefreshing = false,
+                    refreshWorkingDirectory = null,
+                    refreshRequestId = 0L,
                 )
             }
         } catch (error: Throwable) {
-            updateThreadGitState(threadId) { current -> current.copy(isRefreshing = false) }
+            val didApplyErrorState = updateThreadGitStateIfCurrentRefreshMatches(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                refreshRequestId = refreshRequestId,
+            ) { current ->
+                current.copy(
+                    isRefreshing = false,
+                    refreshWorkingDirectory = null,
+                    refreshRequestId = 0L,
+                )
+            }
+            if (!didApplyErrorState) {
+                return
+            }
             if (shouldLogPerf) {
                 ThreadOpenPerfLogger.logStage(
                     threadId = threadId,
@@ -1919,23 +2042,54 @@ class MainViewModel(
     private suspend fun ensureGitBranchContextLoaded(
         threadId: String,
         workingDirectory: String,
+        suppressErrors: Boolean = false,
     ): AndrodexUiState? {
         var snapshot = uiStateFlow.value
         val gitState = snapshot.gitStateByThread[threadId]
-        if (gitState.hasLoadedBranchContext() && gitState?.isLoadingBranchTargets != true) {
-            return snapshot
+        if (gitState.hasLoadedBranchContextFor(workingDirectory) && gitState?.isLoadingBranchTargets != true) {
+            return snapshot.takeIf { isSelectedGitContext(threadId, workingDirectory, it) }
         }
-        loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
+        if (gitState?.isLoadingBranchTargets == true && gitState.refreshWorkingDirectory == workingDirectory) {
+            val inFlightRefreshRequestId = gitState.refreshRequestId
+            snapshot = uiStateFlow.first { state ->
+                val refreshedState = state.gitStateByThread[threadId]
+                !isSelectedGitContext(threadId, workingDirectory, state)
+                    || refreshedState.hasLoadedBranchContextForRequest(
+                        workingDirectory = workingDirectory,
+                        refreshRequestId = inFlightRefreshRequestId,
+                    )
+                    || refreshedState?.isLoadingBranchTargets != true
+            }
+            if (!isSelectedGitContext(threadId, workingDirectory, snapshot)) {
+                return null
+            }
+            snapshot.takeIf {
+                it.gitStateByThread[threadId].hasLoadedBranchContextForRequest(
+                    workingDirectory = workingDirectory,
+                    refreshRequestId = inFlightRefreshRequestId,
+                )
+            }?.let { return it }
+        }
+        if (!isSelectedGitContext(threadId, workingDirectory, snapshot)) {
+            return null
+        }
+        loadGitSnapshot(
+            threadId = threadId,
+            workingDirectory = workingDirectory,
+            loadDiff = false,
+            suppressErrors = suppressErrors,
+        )
         snapshot = uiStateFlow.value
-        return snapshot.takeIf { it.gitStateByThread[threadId].hasLoadedBranchContext() }
+        return snapshot.takeIf {
+            isSelectedGitContext(threadId, workingDirectory, it)
+                && it.gitStateByThread[threadId].hasLoadedBranchContextFor(workingDirectory)
+        }
     }
 
     private fun performGitPull(threadId: String, workingDirectory: String) {
-        runGitAction(threadId, GitActionKind.PULL) {
+        runGitAction(threadId, workingDirectory, GitActionKind.PULL) {
             val result = repository.gitPull(workingDirectory)
-            updateThreadGitState(threadId) { current ->
-                current.copy(status = result.status ?: current.status)
-            }
+            updateThreadGitStatusIfCurrentContext(threadId, workingDirectory, result.status)
             loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = true)
         }
     }
@@ -1945,7 +2099,7 @@ class MainViewModel(
         workingDirectory: String,
         branchName: String,
     ) {
-        runGitAction(threadId, GitActionKind.CREATE_BRANCH) {
+        runGitAction(threadId, workingDirectory, GitActionKind.CREATE_BRANCH) {
             repository.gitCreateBranch(workingDirectory, branchName)
             uiStateFlow.update { it.copy(gitBranchDialog = null) }
             loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
@@ -1957,7 +2111,7 @@ class MainViewModel(
         workingDirectory: String,
         branch: String,
     ) {
-        runGitAction(threadId, GitActionKind.SWITCH_BRANCH) {
+        runGitAction(threadId, workingDirectory, GitActionKind.SWITCH_BRANCH) {
             repository.gitCheckout(workingDirectory, branch)
             uiStateFlow.update { it.copy(gitBranchDialog = null) }
             loadGitSnapshot(threadId, workingDirectory, loadDiff = false, suppressErrors = false)
@@ -1971,7 +2125,7 @@ class MainViewModel(
         baseBranch: String,
         changeTransfer: GitWorktreeChangeTransferMode,
     ) {
-        runGitAction(threadId, GitActionKind.CREATE_WORKTREE) {
+        runGitAction(threadId, workingDirectory, GitActionKind.CREATE_WORKTREE) {
             repository.gitCreateWorktree(
                 workingDirectory = workingDirectory,
                 name = branchName,
@@ -2181,22 +2335,70 @@ class MainViewModel(
 
     private fun runGitAction(
         threadId: String,
+        workingDirectory: String,
         action: GitActionKind,
         block: suspend () -> Unit,
     ) {
         viewModelScope.launch {
-            uiStateFlow.update {
-                it.copy(runningGitActionByThread = it.runningGitActionByThread + (threadId to action))
-            }
+            var shouldRefreshAfterFailure = false
+            markGitActionRunning(threadId, workingDirectory, action)
             try {
                 block()
             } catch (error: Throwable) {
                 reportGitFailure(error, "Git action failed.")
+                shouldRefreshAfterFailure = true
             } finally {
-                uiStateFlow.update {
-                    it.copy(runningGitActionByThread = it.runningGitActionByThread - threadId)
+                clearGitActionRunning(threadId)
+                if (shouldRefreshAfterFailure) {
+                    refreshGitStateAfterActionFailure(threadId, workingDirectory)
                 }
             }
+        }
+    }
+
+    private fun markGitActionRunning(
+        threadId: String,
+        workingDirectory: String,
+        action: GitActionKind,
+    ) {
+        uiStateFlow.update {
+            it.copy(
+                runningGitActionByThread = it.runningGitActionByThread + (threadId to action),
+                runningGitWorkingDirectoryByThread = it.runningGitWorkingDirectoryByThread + (threadId to workingDirectory),
+            )
+        }
+    }
+
+    private fun clearGitActionRunning(threadId: String) {
+        uiStateFlow.update {
+            it.copy(
+                runningGitActionByThread = it.runningGitActionByThread - threadId,
+                runningGitWorkingDirectoryByThread = it.runningGitWorkingDirectoryByThread - threadId,
+            )
+        }
+    }
+
+    private fun refreshGitStateAfterActionFailure(
+        threadId: String,
+        workingDirectory: String,
+    ) {
+        val snapshot = uiStateFlow.value
+        if (!isCurrentGitWorkingDirectoryForThread(threadId, workingDirectory, snapshot)) {
+            return
+        }
+        val gitState = snapshot.gitStateForThread(threadId)
+        val hasMatchingRefreshInFlight = (gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true) &&
+            gitState.refreshWorkingDirectory == workingDirectory
+        if (hasMatchingRefreshInFlight) {
+            return
+        }
+        viewModelScope.launch {
+            loadGitSnapshot(
+                threadId = threadId,
+                workingDirectory = workingDirectory,
+                loadDiff = false,
+                suppressErrors = true,
+            )
         }
     }
 
@@ -2219,6 +2421,47 @@ class MainViewModel(
         }
     }
 
+    private fun updateThreadGitStatusIfCurrentContext(
+        threadId: String,
+        workingDirectory: String,
+        status: GitRepoSyncResult?,
+    ) {
+        if (status == null) {
+            return
+        }
+        uiStateFlow.update { current ->
+            if (!isCurrentGitWorkingDirectoryForThread(threadId, workingDirectory, current)) {
+                return@update current
+            }
+            val existing = current.gitStateByThread[threadId] ?: ThreadGitState()
+            current.copy(
+                gitStateByThread = current.gitStateByThread + (
+                    threadId to existing.copy(status = status)
+                ),
+            )
+        }
+    }
+
+    private fun updateThreadGitStateIfCurrentRefreshMatches(
+        threadId: String,
+        workingDirectory: String,
+        refreshRequestId: Long,
+        transform: (ThreadGitState) -> ThreadGitState,
+    ): Boolean {
+        var updated = false
+        uiStateFlow.update { current ->
+            val existing = current.gitStateByThread[threadId] ?: ThreadGitState()
+            if (existing.refreshWorkingDirectory != workingDirectory || existing.refreshRequestId != refreshRequestId) {
+                return@update current
+            }
+            updated = true
+            current.copy(
+                gitStateByThread = current.gitStateByThread + (threadId to transform(existing)),
+            )
+        }
+        return updated
+    }
+
     private fun gitWorkingDirectoryForThread(
         threadId: String,
         state: AndrodexUiState,
@@ -2227,6 +2470,32 @@ class MainViewModel(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: state.activeWorkspacePath?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun isCurrentGitWorkingDirectoryForThread(
+        threadId: String,
+        workingDirectory: String,
+        state: AndrodexUiState = uiStateFlow.value,
+    ): Boolean {
+        return gitWorkingDirectoryForThread(threadId, state) == workingDirectory
+    }
+
+    private fun isGitLoadInFlight(
+        threadId: String,
+        workingDirectory: String,
+        state: AndrodexUiState = uiStateFlow.value,
+    ): Boolean {
+        val gitState = state.gitStateForThread(threadId)
+        return (gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true) &&
+            gitState.refreshWorkingDirectory == workingDirectory
+    }
+
+    private fun isSelectedGitContext(
+        threadId: String,
+        workingDirectory: String,
+        state: AndrodexUiState = uiStateFlow.value,
+    ): Boolean {
+        return state.selectedThreadId == threadId && gitWorkingDirectoryForThread(threadId, state) == workingDirectory
     }
 
     private fun queueFollowUpDraft(
@@ -2714,6 +2983,22 @@ class MainViewModel(
 
     private fun ThreadGitState?.hasLoadedBranchContext(): Boolean {
         return this?.status != null && this.branchTargets != null
+    }
+
+    private fun ThreadGitState?.hasLoadedBranchContextFor(workingDirectory: String): Boolean {
+        return hasLoadedBranchContext() && this?.loadedWorkingDirectory == workingDirectory
+    }
+
+    private fun ThreadGitState?.hasLoadedBranchContextForRequest(
+        workingDirectory: String,
+        refreshRequestId: Long,
+    ): Boolean {
+        return hasLoadedBranchContextFor(workingDirectory) && this?.loadedRefreshRequestId == refreshRequestId
+    }
+
+    private fun nextGitRefreshRequestId(): Long {
+        nextGitRefreshRequestCounter += 1L
+        return nextGitRefreshRequestCounter
     }
 
     private fun selectedComposerRoot(state: AndrodexUiState): String? {

@@ -667,6 +667,12 @@ class AndrodexFeatureStateTest {
             .destination as AndrodexDestinationUiState.Thread
         assertEquals("Git action in progress.", busyRoute.state.git.availabilityMessage)
 
+        val refreshingRoute = gitThreadState(gitRefreshInFlight = true)
+            .toAppUiState(isSettingsVisible = false)
+            .destination as AndrodexDestinationUiState.Thread
+        assertEquals("Refreshing Git status...", refreshingRoute.state.git.availabilityMessage)
+        assertFalse(refreshingRoute.state.git.canRunActions)
+
         val runningRoute = gitThreadState(runningThread = true)
             .toAppUiState(isSettingsVisible = false)
             .destination as AndrodexDestinationUiState.Thread
@@ -772,7 +778,9 @@ class AndrodexFeatureStateTest {
         connectionStatus: ConnectionStatus = ConnectionStatus.CONNECTED,
         runningThread: Boolean = false,
         runningGitAction: GitActionKind? = null,
+        gitRefreshInFlight: Boolean = false,
     ): AndrodexUiState {
+        val workingDirectory = "C:\\Projects\\Androdex"
         return AndrodexUiState(
             connectionStatus = connectionStatus,
             selectedThreadId = "thread-9",
@@ -782,7 +790,7 @@ class AndrodexFeatureStateTest {
                     id = "thread-9",
                     title = "Conversation",
                     preview = null,
-                    cwd = "C:\\Projects\\Androdex",
+                    cwd = workingDirectory,
                     createdAtEpochMs = null,
                     updatedAtEpochMs = null,
                 )
@@ -791,7 +799,7 @@ class AndrodexFeatureStateTest {
             gitStateByThread = mapOf(
                 "thread-9" to ThreadGitState(
                     status = GitRepoSyncResult(
-                        repoRoot = "C:\\Projects\\Androdex",
+                        repoRoot = workingDirectory,
                         currentBranch = "main",
                         trackingBranch = "origin/main",
                         isDirty = true,
@@ -803,7 +811,9 @@ class AndrodexFeatureStateTest {
                         isPublishedToRemote = true,
                         files = emptyList(),
                         repoDiffTotals = null,
-                    )
+                    ),
+                    isRefreshing = gitRefreshInFlight,
+                    refreshWorkingDirectory = if (gitRefreshInFlight) workingDirectory else null,
                 )
             ),
             runningGitActionByThread = runningGitAction?.let { mapOf("thread-9" to it) } ?: emptyMap(),

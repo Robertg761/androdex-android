@@ -34,10 +34,13 @@ import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.WorkspaceRecentState
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -99,6 +102,1084 @@ class MainViewModelWorkspaceTest {
 
         assertEquals(listOf("D:\\Client\\SiteB"), repository.activatedWorkspaces)
         assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun openThread_keepsUiResponsiveWhileGitRefreshContinuesInBackground() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(
+            ClientUpdate.Connection(ConnectionStatus.CONNECTED)
+        )
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "C:\\Projects\\AppA",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals("thread-1", viewModel.uiState.value.selectedThreadId)
+        assertFalse(viewModel.uiState.value.isBusy)
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.gitBranchesWithStatusRequests)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isRefreshing == true)
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.gitStateByThread["thread-1"]?.isRefreshing == true)
+    }
+
+    @Test
+    fun openThread_refreshesCachedGitStateOnReopen() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true),
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "C:\\Projects\\AppA",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.gitBranchesWithStatusRequests)
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitCurrentBranch = "release"
+        repository.gitDefaultBranch = "release"
+        repository.gitBranchesWithStatusGate = CompletableDeferred()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+
+        dispatcher.scheduler.runCurrent()
+        assertFalse(viewModel.uiState.value.isBusy)
+        assertEquals(
+            listOf("C:\\Projects\\AppA", "C:\\Projects\\AppA"),
+            repository.gitBranchesWithStatusRequests,
+        )
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+    }
+
+    @Test
+    fun requestGitPull_waitsForFreshBranchStatusWhenReopenUsesCachedState() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("up_to_date", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.state)
+
+        repository.gitStatusState = "diverged"
+        repository.gitBranchesWithStatusGate = CompletableDeferred()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals(null, viewModel.uiState.value.gitAlert)
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals("Branch diverged from remote", viewModel.uiState.value.gitAlert?.title)
+    }
+
+    @Test
+    fun refreshSelectedThreadGitState_ignoresManualRefreshWhileOlderLoadIsInFlight() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        val olderRefreshGate = CompletableDeferred<Unit>()
+        repository.enqueueGitBranchesWithStatus(
+            workspace,
+            QueuedGitBranchesWithStatusResponse(
+                gate = olderRefreshGate,
+                currentBranch = "main",
+                defaultBranch = "main",
+            ),
+        )
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.refreshSelectedThreadGitState()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            listOf(workspace, workspace),
+            repository.gitBranchesWithStatusRequests,
+        )
+
+        olderRefreshGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+    }
+
+    @Test
+    fun openThread_doesNotStartDuplicateGitRefreshWhileLoadInFlight() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "C:\\Projects\\AppA",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("C:\\Projects\\AppA"), repository.gitBranchesWithStatusRequests)
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+    }
+
+    @Test
+    fun requestGitPull_waitsForBranchStatusBeforeShowingDivergedWarning() = runTest(dispatcher) {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "C:\\Projects\\AppA",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("C:\\Projects\\AppA", "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+            gitStatusState = "diverged"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "C:\\Projects\\AppA",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals(null, viewModel.uiState.value.gitAlert)
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals("Branch diverged from remote", viewModel.uiState.value.gitAlert?.title)
+    }
+
+    @Test
+    fun requestGitPull_doesNotExposeStaleStatusAfterWorkspaceSwitch() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitPullGateByWorkingDirectory[workspaceA] = CompletableDeferred()
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA), repository.gitPullRequests)
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitPullGateByWorkingDirectory.getValue(workspaceA).complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(null, viewModel.uiState.value.gitStateByThread["thread-1"]?.status)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isLoadingBranchTargets == true)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceB).complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+    }
+
+    @Test
+    fun requestGitPull_abortsIfThreadStartsRunningWhileBranchContextLoads() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals(null, viewModel.uiState.value.gitAlert)
+    }
+
+    @Test
+    fun requestGitPull_abortsIfThreadIsClosedWhileBranchContextLoads() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals(null, viewModel.uiState.value.gitAlert)
+    }
+
+    @Test
+    fun requestGitPull_retriesFailedBackgroundRefreshAndShowsError() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+            gitBranchesWithStatusError = IllegalStateException("Git status unavailable")
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf(workspace, workspace), repository.gitBranchesWithStatusRequests)
+        assertTrue(repository.gitPullRequests.isEmpty())
+        assertEquals("Git status unavailable", viewModel.uiState.value.errorMessage)
+    }
+
+    @Test
+    fun requestGitPull_usesLoadedContextWhenBridgeReturnsCanonicalCheckoutPath() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val canonicalWorkspace = "\\\\?\\C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+            gitLocalCheckoutPathByWorkingDirectory[workspace] = canonicalWorkspace
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+
+        viewModel.requestGitPull()
+        advanceUntilIdle()
+
+        assertEquals(listOf(workspace), repository.gitPullRequests)
+    }
+
+    @Test
+    fun openThread_reloadsGitStateAfterSkippedPullFailure() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitPullGateByWorkingDirectory[workspace] = CompletableDeferred()
+        repository.gitPullError = IllegalStateException("Pull failed")
+
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspace), repository.gitPullRequests)
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf(workspace), repository.gitBranchesWithStatusRequests)
+
+        repository.gitCurrentBranch = "release"
+        repository.gitDefaultBranch = "release"
+        repository.gitPullGateByWorkingDirectory.getValue(workspace).complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf(workspace, workspace), repository.gitBranchesWithStatusRequests)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+        assertEquals("Pull failed", viewModel.uiState.value.errorMessage)
+    }
+
+    @Test
+    fun pushGitChanges_doesNotExposeStaleStatusAfterWorkspaceSwitch() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitPushGateByWorkingDirectory[workspaceA] = CompletableDeferred()
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+
+        viewModel.pushGitChanges()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA), repository.gitPushRequests)
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitPushGateByWorkingDirectory.getValue(workspaceA).complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(null, viewModel.uiState.value.gitStateByThread["thread-1"]?.status)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isLoadingBranchTargets == true)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceB).complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+    }
+
+    @Test
+    fun openThread_reloadsFallbackWorkspaceWhenWorkspaceChangesMidRefresh() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitBranchesWithStatusGateByWorkingDirectory[workspaceA] = CompletableDeferred()
+            gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA), repository.gitBranchesWithStatusRequests)
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA, workspaceB), repository.gitBranchesWithStatusRequests)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceA).complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(null, viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isLoadingBranchTargets == true)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceB).complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+    }
+
+    @Test
+    fun openThread_clearsStaleGitStateWhileLoadingDifferentFallbackWorkspace() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(null, viewModel.uiState.value.gitStateByThread["thread-1"]?.status)
+        assertEquals(null, viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isLoadingBranchTargets == true)
+    }
+
+    @Test
+    fun openThread_doesNotExposeIdleStateWithStaleFallbackGitContext() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+
+        val snapshots = mutableListOf<AndrodexUiState>()
+        val collectJob = backgroundScope.launch {
+            viewModel.uiState.collect { snapshots += it }
+        }
+        dispatcher.scheduler.runCurrent()
+        snapshots.clear()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(
+            snapshots.any { state ->
+                state.activeWorkspacePath == workspaceB &&
+                    state.selectedThreadId == "thread-1" &&
+                    !state.isBusy &&
+                    state.gitStateByThread["thread-1"]?.status?.currentBranch == "main"
+            }
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun openThread_refreshesNewFallbackWorkspaceWhilePreviousRepoActionFinishes() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals(listOf(workspaceA), repository.gitBranchesWithStatusRequests)
+
+        repository.gitPullGateByWorkingDirectory[workspaceA] = CompletableDeferred()
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceA] = CompletableDeferred()
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+
+        viewModel.requestGitPull()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA), repository.gitPullRequests)
+
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA, workspaceB), repository.gitBranchesWithStatusRequests)
+        assertTrue(viewModel.uiState.value.gitStateByThread["thread-1"]?.isLoadingBranchTargets == true)
+
+        repository.gitPullGateByWorkingDirectory.getValue(workspaceA).complete(Unit)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(workspaceA, workspaceB), repository.gitBranchesWithStatusRequests)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceB).complete(Unit)
+        advanceUntilIdle()
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceA).complete(Unit)
+        advanceUntilIdle()
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.status?.currentBranch)
+        assertEquals("release", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+    }
+
+    @Test
+    fun openGitWorktreeDialog_backfillsMatchingBaseBranchAfterAsyncRefresh() = runTest(dispatcher) {
+        val workspaceA = "C:\\Projects\\AppA"
+        val workspaceB = "D:\\Client\\SiteB"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspaceA,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspaceA, "AppA", true),
+                    WorkspacePathSummary(workspaceB, "SiteB", false),
+                )
+            )
+            gitCurrentBranchByWorkingDirectory[workspaceA] = "main"
+            gitDefaultBranchByWorkingDirectory[workspaceA] = "main"
+            gitCurrentBranchByWorkingDirectory[workspaceB] = "release"
+            gitDefaultBranchByWorkingDirectory[workspaceB] = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+        viewModel.loadRecentWorkspaces()
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        advanceUntilIdle()
+        assertEquals("main", viewModel.uiState.value.gitStateByThread["thread-1"]?.branchTargets?.defaultBranch)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory[workspaceB] = CompletableDeferred()
+        viewModel.closeThread()
+        dispatcher.scheduler.runCurrent()
+        viewModel.activateWorkspace(workspaceB)
+        advanceUntilIdle()
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openGitWorktreeDialog()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals("", viewModel.uiState.value.gitWorktreeDialog?.baseBranch)
+
+        repository.gitBranchesWithStatusGateByWorkingDirectory.getValue(workspaceB).complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("release", viewModel.uiState.value.gitWorktreeDialog?.baseBranch)
+    }
+
+    @Test
+    fun openGitWorktreeDialog_keepsTypedBaseBranchWhenAsyncRefreshCompletes() = runTest(dispatcher) {
+        val workspace = "C:\\Projects\\AppA"
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = workspace,
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary(workspace, "AppA", true),
+                )
+            )
+            gitBranchesWithStatusGate = CompletableDeferred()
+            gitCurrentBranch = "release"
+            gitDefaultBranch = "release"
+        }
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        repository.emit(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        repository.emit(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = workspace,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openThread("thread-1")
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.openGitWorktreeDialog()
+        dispatcher.scheduler.runCurrent()
+        viewModel.updateGitWorktreeBaseBranch("custom-base")
+        dispatcher.scheduler.runCurrent()
+
+        repository.gitBranchesWithStatusGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("custom-base", viewModel.uiState.value.gitWorktreeDialog?.baseBranch)
     }
 
     @Test
@@ -620,6 +1701,14 @@ class MainViewModelWorkspaceTest {
     }
 }
 
+private data class QueuedGitBranchesWithStatusResponse(
+    val gate: CompletableDeferred<Unit>? = null,
+    val currentBranch: String? = null,
+    val defaultBranch: String? = null,
+    val statusState: String? = null,
+    val error: Throwable? = null,
+)
+
 private class FakeRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>()
 
@@ -633,10 +1722,30 @@ private class FakeRepository : AndrodexRepositoryContract {
     val readThreadRunSnapshotIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
     val gitBranchesWithStatusRequests = mutableListOf<String>()
+    val gitPushRequests = mutableListOf<String>()
+    val gitPullRequests = mutableListOf<String>()
     val startedTurns = mutableListOf<String>()
     val startedTurnModes = mutableListOf<CollaborationModeKind?>()
     val startTurnFailures = mutableListOf<Throwable>()
+    var gitBranchesWithStatusGate: CompletableDeferred<Unit>? = null
+    val gitBranchesWithStatusGateByWorkingDirectory = mutableMapOf<String, CompletableDeferred<Unit>>()
+    var gitPushGate: CompletableDeferred<Unit>? = null
+    val gitPushGateByWorkingDirectory = mutableMapOf<String, CompletableDeferred<Unit>>()
+    var gitPullGate: CompletableDeferred<Unit>? = null
+    val gitPullGateByWorkingDirectory = mutableMapOf<String, CompletableDeferred<Unit>>()
     var gitBranchesWithStatusError: Throwable? = null
+    var gitPushError: Throwable? = null
+    var gitPullError: Throwable? = null
+    var gitCurrentBranch: String = "main"
+    var gitDefaultBranch: String = "main"
+    var gitLocalCheckoutPath: String? = null
+    var gitStatusState: String = "up_to_date"
+    val gitCurrentBranchByWorkingDirectory = mutableMapOf<String, String>()
+    val gitDefaultBranchByWorkingDirectory = mutableMapOf<String, String>()
+    val gitLocalCheckoutPathByWorkingDirectory = mutableMapOf<String, String>()
+    val gitStatusStateByWorkingDirectory = mutableMapOf<String, String>()
+    val queuedGitBranchesWithStatusByWorkingDirectory =
+        mutableMapOf<String, MutableList<QueuedGitBranchesWithStatusResponse>>()
     var runSnapshot = ThreadRunSnapshot(
         interruptibleTurnId = null,
         hasInterruptibleTurnWithoutId = false,
@@ -649,6 +1758,15 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     suspend fun emit(update: ClientUpdate) {
         updatesFlow.emit(update)
+    }
+
+    fun enqueueGitBranchesWithStatus(
+        workingDirectory: String,
+        response: QueuedGitBranchesWithStatusResponse,
+    ) {
+        queuedGitBranchesWithStatusByWorkingDirectory
+            .getOrPut(workingDirectory) { mutableListOf() }
+            .add(response)
     }
 
     override fun hasSavedPairing(): Boolean = hasSavedPairing
@@ -788,15 +1906,28 @@ private class FakeRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun gitStatus(workingDirectory: String): GitRepoSyncResult {
+        val currentBranch = gitCurrentBranchByWorkingDirectory[workingDirectory] ?: gitCurrentBranch
+        return buildGitStatus(
+            workingDirectory = workingDirectory,
+            currentBranch = currentBranch,
+            statusState = gitStatusStateByWorkingDirectory[workingDirectory] ?: gitStatusState,
+        )
+    }
+
+    private fun buildGitStatus(
+        workingDirectory: String,
+        currentBranch: String,
+        statusState: String,
+    ): GitRepoSyncResult {
         return GitRepoSyncResult(
             repoRoot = workingDirectory,
-            currentBranch = "main",
-            trackingBranch = "origin/main",
+            currentBranch = currentBranch,
+            trackingBranch = "origin/$currentBranch",
             isDirty = false,
             aheadCount = 0,
             behindCount = 0,
             localOnlyCommitCount = 0,
-            state = "up_to_date",
+            state = statusState,
             canPush = false,
             isPublishedToRemote = true,
             files = emptyList(),
@@ -811,24 +1942,57 @@ private class FakeRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun gitPush(workingDirectory: String): GitPushResult {
+        gitPushRequests += workingDirectory
+        gitPushGateByWorkingDirectory[workingDirectory]?.await()
+        gitPushGate?.await()
+        gitPushError?.let { throw it }
         return GitPushResult("main", "origin", gitStatus(workingDirectory))
     }
 
     override suspend fun gitPull(workingDirectory: String): GitPullResult {
+        gitPullRequests += workingDirectory
+        gitPullGateByWorkingDirectory[workingDirectory]?.await()
+        gitPullGate?.await()
+        gitPullError?.let { throw it }
         return GitPullResult(success = true, status = gitStatus(workingDirectory))
     }
 
     override suspend fun gitBranchesWithStatus(workingDirectory: String): GitBranchesWithStatusResult {
         gitBranchesWithStatusRequests += workingDirectory
+        val queuedResponse = queuedGitBranchesWithStatusByWorkingDirectory[workingDirectory]
+            ?.takeIf { it.isNotEmpty() }
+            ?.removeAt(0)
+        queuedResponse?.gate?.await()
+        if (queuedResponse == null) {
+            gitBranchesWithStatusGateByWorkingDirectory[workingDirectory]?.await()
+            gitBranchesWithStatusGate?.await()
+        }
+        queuedResponse?.error?.let { throw it }
         gitBranchesWithStatusError?.let { throw it }
+        val currentBranch = queuedResponse?.currentBranch
+            ?: gitCurrentBranchByWorkingDirectory[workingDirectory]
+            ?: gitCurrentBranch
+        val defaultBranch = queuedResponse?.defaultBranch
+            ?: gitDefaultBranchByWorkingDirectory[workingDirectory]
+            ?: gitDefaultBranch
+        val localCheckoutPath = gitLocalCheckoutPathByWorkingDirectory[workingDirectory]
+            ?: gitLocalCheckoutPath
+            ?: workingDirectory
+        val statusState = queuedResponse?.statusState
+            ?: gitStatusStateByWorkingDirectory[workingDirectory]
+            ?: gitStatusState
         return GitBranchesWithStatusResult(
-            branches = listOf("main"),
+            branches = listOf(currentBranch),
             branchesCheckedOutElsewhere = emptySet(),
             worktreePathByBranch = emptyMap(),
-            localCheckoutPath = workingDirectory,
-            currentBranch = "main",
-            defaultBranch = "main",
-            status = gitStatus(workingDirectory),
+            localCheckoutPath = localCheckoutPath,
+            currentBranch = currentBranch,
+            defaultBranch = defaultBranch,
+            status = buildGitStatus(
+                workingDirectory = workingDirectory,
+                currentBranch = currentBranch,
+                statusState = statusState,
+            ),
         )
     }
 

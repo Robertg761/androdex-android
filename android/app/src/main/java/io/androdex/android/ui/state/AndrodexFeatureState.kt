@@ -675,6 +675,8 @@ private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): Thread
     val runningGitAction = runningGitActionByThread[threadId]
     val hasGitBranchContext = gitState?.status != null && gitState.branchTargets != null
     val isGitBranchContextLoading = gitState?.isLoadingBranchTargets == true
+    val isGitRefreshInFlight = (gitState?.isRefreshing == true || gitState?.isLoadingBranchTargets == true) &&
+        gitState.refreshWorkingDirectory == workingDirectory
     return ThreadTimelineUiState(
         threadId = threadId,
         title = selectedThreadTitle ?: "Conversation",
@@ -691,6 +693,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): Thread
                 workingDirectory == null -> "Bind this thread to a local checkout to use Git actions."
                 connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to use Git actions."
                 isThreadRunning -> "Git actions pause while this thread is running."
+                isGitRefreshInFlight -> "Refreshing Git status..."
                 runningGitAction != null -> "Git action in progress."
                 else -> null
             },
@@ -704,6 +707,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): Thread
             canRunActions = workingDirectory != null
                 && connectionStatus == ConnectionStatus.CONNECTED
                 && !isThreadRunning
+                && !isGitRefreshInFlight
                 && runningGitAction == null
                 && !isBusy
                 && !isSendingMessage
