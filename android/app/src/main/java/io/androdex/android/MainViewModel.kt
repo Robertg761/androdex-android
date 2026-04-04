@@ -1293,7 +1293,10 @@ class MainViewModel(
         }
     }
 
-    fun openThread(threadId: String) {
+    fun openThread(
+        threadId: String,
+        forceRefresh: Boolean = false,
+    ) {
         clearComposerAutocomplete()
         uiStateFlow.update {
             it.copy(
@@ -1308,7 +1311,7 @@ class MainViewModel(
         ThreadOpenPerfLogger.startAttempt(threadId, stage = "MainViewModel.openThread:start")
         runBusyAction("Loading messages...") {
             ThreadOpenPerfLogger.measure(threadId, stage = "MainViewModel.openThread") {
-                service.openThread(threadId)
+                service.openThread(threadId, forceRefresh = forceRefresh)
             }
             refreshGitStateAfterThreadOpen(threadId)
         }

@@ -55,6 +55,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.ArrayDeque
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AndrodexServiceTest {
@@ -290,6 +291,8 @@ class AndrodexServiceTest {
         assertNull(service.state.value.selectedThreadId)
         assertTrue(service.state.value.threads.isEmpty())
         assertFalse(service.state.value.hasLoadedThreadList)
+        assertTrue(service.state.value.timelineByThread.isEmpty())
+        assertTrue(service.state.value.hydratedThreadIds.isEmpty())
     }
 
     @Test
@@ -425,6 +428,1920 @@ class AndrodexServiceTest {
         val messages = service.state.value.timelineByThread["thread-1"].orEmpty()
         assertEquals(listOf("assistant-1", "assistant-2"), messages.map { it.itemId })
         assertEquals(listOf("First reply", "Second reply"), messages.map { it.text })
+    }
+
+    @Test
+    fun openThread_reselectingVisibleHydratedThreadSkipsSecondHistoryLoad() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertTrue("thread-1" in service.state.value.hydratedThreadIds)
+        assertEquals(listOf("Cached reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_reloadsHydratedThreadAfterReconnect() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Conversation", null, null, null, null),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, null, null))
+            )
+        )
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-2",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.RECONNECT_REQUIRED))
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun createThread_reopeningClosedThreadReloadsHistory() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.createThread()
+        advanceUntilIdle()
+        service.closeThread()
+
+        service.openThread("thread-created")
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.timelineByThread["thread-created"].orEmpty().isEmpty())
+        assertTrue("thread-created" in service.state.value.hydratedThreadIds)
+        assertEquals(listOf("thread-created"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun activateWorkspace_clearsHydratedTimelineBeforeReopeningSameThreadId() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null),
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-fresh",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.activateWorkspace("/tmp/project-b")
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.timelineByThread.isEmpty())
+        assertTrue(service.state.value.hydratedThreadIds.isEmpty())
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsThreadScopedStateBeforeReusingThreadId() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-fresh",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Fresh reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-2",
+                        itemId = "assistant-2",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-2",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadLoaded(
+                thread = ThreadSummary("thread-1", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null))
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("/tmp/project-b"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+        assertEquals(emptyMap<String, Map<String, ToolUserInputRequest>>(), service.state.value.pendingToolInputsByThread)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsRunningStateForReusedThreadId() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadDelayMs = 1_000L
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null))
+            )
+        )
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-stale"))
+        advanceUntilIdle()
+
+        val openJob = backgroundScope.launch { service.openThread("thread-1") }
+        runCurrent()
+
+        val interruptFailure = runCatching { service.interruptThread("thread-1") }.exceptionOrNull()
+        advanceUntilIdle()
+        openJob.join()
+
+        assertEquals("No active run is available to stop.", interruptFailure?.message)
+        assertTrue(repository.interruptedTurns.isEmpty())
+        assertEquals(listOf("thread-1"), repository.readThreadRunSnapshotIds)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsPendingToolInputsForReusedThreadId() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Workspace B", null, "/tmp/project-b", null, null))
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputRequested(
+                ToolUserInputRequest(
+                    idValue = "request-1",
+                    method = "item/tool/requestUserInput",
+                    threadId = "thread-1",
+                    turnId = "turn-a",
+                    itemId = "item-a",
+                    title = "Pick a branch",
+                    message = "Select which branch should be inspected.",
+                    questions = listOf(
+                        ToolUserInputQuestion(
+                            id = "branch",
+                            header = "Branch",
+                            question = "Which branch should we inspect?",
+                            options = emptyList(),
+                        )
+                    ),
+                    rawPayload = "{}",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.respondToToolUserInput("thread-1", "request-1", mapOf("branch" to "main"))
+
+        assertTrue(service.state.value.pendingToolInputsByThread["thread-1"].isNullOrEmpty())
+        assertNull(repository.lastToolInputRequest)
+        assertNull(repository.lastToolInputResponse)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchLoadFailureRestoresPreviousSelection() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        repository.loadThreadError = IllegalStateException("temporary load failure")
+
+        val error = runCatching { service.openThread("thread-b") }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals("temporary load failure", error?.message)
+        assertEquals(listOf("/tmp/project-b", "/tmp/project-a"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-a", service.state.value.activeWorkspacePath)
+        assertEquals("thread-a", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Existing reply"),
+            service.state.value.timelineByThread["thread-a"].orEmpty().map { it.text },
+        )
+        assertTrue(service.state.value.timelineByThread["thread-b"].isNullOrEmpty())
+    }
+
+    @Test
+    fun openThread_workspaceActivationFailureRestoresPreviousSelection() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        repository.activateWorkspaceErrorsByPath["/tmp/project-b"] = IllegalStateException("workspace offline")
+
+        val error = runCatching { service.openThread("thread-b") }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals("workspace offline", error?.message)
+        assertEquals(listOf("/tmp/project-b"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-a", service.state.value.activeWorkspacePath)
+        assertEquals("thread-a", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Existing reply"),
+            service.state.value.timelineByThread["thread-a"].orEmpty().map { it.text },
+        )
+        assertEquals(listOf("thread-a"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchRollbackFailureClearsSelectionInsteadOfRestoringOldWorkspaceState() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        repository.activateWorkspaceErrorsByPath["/tmp/project-a"] = IllegalStateException("rollback failed")
+        repository.loadThreadError = IllegalStateException("temporary load failure")
+
+        val error = runCatching { service.openThread("thread-b") }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals("temporary load failure", error?.message)
+        assertEquals(listOf("/tmp/project-b", "/tmp/project-a"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-b", service.state.value.activeWorkspacePath)
+        assertNull(service.state.value.selectedThreadId)
+        assertTrue(service.state.value.timelineByThread.isEmpty())
+    }
+
+    @Test
+    fun openThread_workspaceSwitchLoadFailureRehydratesPreviousThreadWhenLoadWasInterrupted() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadDelayMs = 1_000L
+            loadThreadResultsByThreadId["thread-a"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            loadThreadErrorsByThreadId["thread-b"] = IllegalStateException("temporary load failure")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+
+        val initialOpen = backgroundScope.launch { service.openThread("thread-a") }
+        runCurrent()
+
+        val error = runCatching { service.openThread("thread-b") }.exceptionOrNull()
+        advanceUntilIdle()
+        initialOpen.join()
+
+        assertEquals("temporary load failure", error?.message)
+        assertEquals(listOf("/tmp/project-b", "/tmp/project-a"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-a", "thread-b", "thread-a"), repository.loadedThreadIds)
+        assertEquals("thread-a", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Existing reply"),
+            service.state.value.timelineByThread["thread-a"].orEmpty().map { it.text },
+        )
+        assertTrue("thread-a" in service.state.value.hydratedThreadIds)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchFailureDoesNotRollbackSupersedingSelection() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val newestMessage = ConversationMessage(
+            id = "history-assistant-newest",
+            threadId = "thread-c",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Newest reply",
+            createdAtEpochMs = 2_000L,
+            turnId = "turn-c",
+            itemId = "assistant-c",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                    WorkspacePathSummary("/tmp/project-c", "Project C", false),
+                )
+            )
+            loadThreadDelayMs = 1_000L
+            loadThreadResultsByThreadId["thread-a"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            loadThreadErrorsByThreadId["thread-b"] = IllegalStateException("temporary load failure")
+            loadThreadResultsByThreadId["thread-c"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-c", "Workspace C", null, "/tmp/project-c", null, null),
+                messages = listOf(newestMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-c",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                    ThreadSummary("thread-c", "Workspace C", null, "/tmp/project-c", null, null),
+                )
+            )
+        )
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        var failingOpenError: Throwable? = null
+        val failingOpen = backgroundScope.launch {
+            failingOpenError = runCatching { service.openThread("thread-b") }.exceptionOrNull()
+        }
+        runCurrent()
+
+        var supersedingOpenError: Throwable? = null
+        val supersedingOpen = backgroundScope.launch {
+            supersedingOpenError = runCatching { service.openThread("thread-c") }.exceptionOrNull()
+        }
+        runCurrent()
+
+        advanceUntilIdle()
+        failingOpen.join()
+        supersedingOpen.join()
+
+        assertEquals("temporary load failure", failingOpenError?.message)
+        assertNull(supersedingOpenError)
+        assertEquals("/tmp/project-c", repository.activatedWorkspaces.last())
+        assertEquals("/tmp/project-c", service.state.value.activeWorkspacePath)
+        assertEquals("thread-c", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Newest reply"),
+            service.state.value.timelineByThread["thread-c"].orEmpty().map { it.text },
+        )
+        assertTrue(service.state.value.timelineByThread["thread-a"].isNullOrEmpty())
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsStaleSubagentIdentityCache() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-b",
+                        title = "Workspace B",
+                        preview = null,
+                        cwd = "/tmp/project-b",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    ),
+                    ThreadSummary(
+                        id = "thread-child",
+                        title = "Scout",
+                        preview = null,
+                        cwd = "/tmp/project-a",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        parentThreadId = "thread-a",
+                        agentNickname = "Scout",
+                        agentRole = "explorer",
+                    )
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                itemId = null,
+                action = SubagentAction(
+                    tool = "spawnAgent",
+                    status = "completed",
+                    prompt = "Inspect Android tests",
+                    model = "gpt-5.4-mini",
+                    receiverThreadIds = listOf("thread-child"),
+                ),
+                isStreaming = false,
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(
+            "Scout",
+            service.state.value.timelineByThread["thread-a"]
+                .orEmpty()
+                .single()
+                .subagentAction
+                ?.agentRows
+                ?.single()
+                ?.nickname,
+        )
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.SubagentActionUpdate(
+                threadId = "thread-b",
+                turnId = "turn-b",
+                itemId = null,
+                action = SubagentAction(
+                    tool = "spawnAgent",
+                    status = "completed",
+                    prompt = "Inspect Android tests",
+                    model = "gpt-5.4-mini",
+                    receiverThreadIds = listOf("thread-child"),
+                ),
+                isStreaming = false,
+            )
+        )
+        advanceUntilIdle()
+
+        val reusedAgent = service.state.value.timelineByThread["thread-b"]
+            .orEmpty()
+            .single { it.kind == ConversationKind.SUBAGENT_ACTION }
+            .subagentAction
+            ?.agentRows
+            ?.single()
+        assertNull(reusedAgent?.nickname)
+        assertNull(reusedAgent?.role)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsBackgroundRunFallbackForPreviousThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-a", null))
+        advanceUntilIdle()
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        assertFalse("thread-a" in service.state.value.runningThreadIds)
+        assertFalse("thread-a" in service.state.value.protectedRunningFallbackThreadIds)
+
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = null,
+                turnId = null,
+                terminalState = TurnTerminalState.COMPLETED,
+            )
+        )
+        advanceUntilIdle()
+
+        assertFalse("thread-a" in service.state.value.runningThreadIds)
+        assertFalse("thread-a" in service.state.value.protectedRunningFallbackThreadIds)
+        assertFalse("thread-a" in service.state.value.readyThreadIds)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchClearsReadyAndFailedBadgesForReusedThreadIds() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                    ThreadSummary("thread-c", "Workspace A Failure", null, "/tmp/project-a", null, null),
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                terminalState = TurnTerminalState.COMPLETED,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-c",
+                turnId = "turn-c",
+                terminalState = TurnTerminalState.FAILED,
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace B Ready", null, "/tmp/project-b", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                    ThreadSummary("thread-c", "Workspace B Failed", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        assertFalse("thread-a" in service.state.value.readyThreadIds)
+        assertFalse("thread-c" in service.state.value.failedThreadIds)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchIgnoresLateDeltaForPreviousWorkspaceThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                terminalState = TurnTerminalState.COMPLETED,
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ReasoningDelta(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                itemId = "reasoning-a",
+                delta = "Late reasoning chunk",
+            )
+        )
+
+        val messages = service.state.value.timelineByThread["thread-a"].orEmpty()
+        assertTrue(messages.none { it.kind == ConversationKind.THINKING })
+        assertFalse("thread-a" in service.state.value.runningThreadIds)
+        assertFalse("thread-a" in service.state.value.protectedRunningFallbackThreadIds)
+    }
+
+    @Test
+    fun activeWorkspace_acceptsNewThreadUpdatesBeforeThreadListRefresh() = runTest {
+        val existingThread = ThreadSummary("thread-existing", "Existing", null, "/tmp/project-a", null, null)
+        val newThread = ThreadSummary("thread-new", "New", null, "/tmp/project-a", null, null)
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                )
+            )
+            refreshedThreads = listOf(existingThread, newThread)
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(ClientUpdate.ThreadsLoaded(listOf(existingThread)))
+        advanceUntilIdle()
+
+        val request = ToolUserInputRequest(
+            idValue = "request-new",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-new",
+            turnId = "turn-new",
+            itemId = "item-new",
+            title = "Choose a branch",
+            message = "Select a branch for the new thread.",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch should we inspect?",
+                    options = emptyList(),
+                )
+            ),
+            rawPayload = "{}",
+        )
+
+        service.processClientUpdate(ClientUpdate.ToolUserInputRequested(request))
+        service.processClientUpdate(ClientUpdate.AssistantDelta("thread-new", "turn-new", "item-new", "Hello"))
+
+        assertEquals(
+            listOf("request-new"),
+            service.state.value.pendingToolInputsByThread["thread-new"]?.keys?.toList(),
+        )
+        assertEquals(listOf("Hello"), service.state.value.timelineByThread["thread-new"].orEmpty().map { it.text })
+        assertTrue("thread-new" in service.state.value.runningThreadIds)
+        assertNull(repository.lastRejectedToolInputRequest)
+    }
+
+    @Test
+    fun openThread_workspaceSwitchIgnoresLateTokenUsageForPreviousWorkspaceThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.TokenUsageUpdated(
+                threadId = "thread-a",
+                usage = io.androdex.android.model.ThreadTokenUsage(
+                    tokensUsed = 1200,
+                    tokenLimit = 32000,
+                ),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.AssistantDelta(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                itemId = "item-a",
+                delta = "Late assistant chunk",
+            )
+        )
+
+        assertNull(service.state.value.tokenUsageByThread["thread-a"])
+        assertTrue(service.state.value.timelineByThread["thread-a"].isNullOrEmpty())
+    }
+
+    @Test
+    fun activateWorkspace_ignoresLateExplicitUpdateForPreviousWorkspaceThread() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            refreshedThreads = listOf(
+                ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.activateWorkspace("/tmp/project-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.AssistantDelta(
+                threadId = "thread-a",
+                turnId = "turn-a",
+                itemId = "assistant-a",
+                delta = "Late assistant chunk",
+            )
+        )
+
+        assertTrue(service.state.value.timelineByThread["thread-a"].isNullOrEmpty())
+        assertFalse("thread-a" in service.state.value.runningThreadIds)
+        assertFalse("thread-a" in service.state.value.protectedRunningFallbackThreadIds)
+    }
+
+    @Test
+    fun toolUserInputRequests_forPreviousWorkspaceAreRejectedAfterSwitch() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputRequested(
+                ToolUserInputRequest(
+                    idValue = "request-1",
+                    method = "item/tool/requestUserInput",
+                    threadId = "thread-a",
+                    turnId = "turn-a",
+                    itemId = "item-a",
+                    title = "Pick a branch",
+                    message = "Select which branch should be inspected.",
+                    questions = listOf(
+                        ToolUserInputQuestion(
+                            id = "branch",
+                            header = "Branch",
+                            question = "Which branch should we inspect?",
+                            options = emptyList(),
+                        )
+                    ),
+                    rawPayload = "{}",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.pendingToolInputsByThread.isEmpty())
+        assertEquals(
+            "Structured tool input no longer matches the active workspace. Reopen the relevant thread and retry from the host.",
+            service.state.value.errorMessage,
+        )
+        assertEquals("request-1", repository.lastRejectedToolInputRequest?.requestId)
+        assertEquals(
+            "Structured tool input thread id does not belong to the active workspace context.",
+            repository.lastRejectedToolInputMessage,
+        )
+    }
+
+    @Test
+    fun connectWithPairingPayload_clearsHydratedTimelineBeforeReopeningSameThreadId() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Old host", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-1", "New host", null, null, null, null),
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "New host", null, null, null, null),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-fresh",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.connectWithPairingPayload("fresh-payload")
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.timelineByThread.isEmpty())
+        assertTrue(service.state.value.hydratedThreadIds.isEmpty())
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun connectWithPairingPayload_preservesPendingNotificationTargetUntilReconnectCompletes() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-pending", "Pending thread", null, null, null, null),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-pending", "Pending thread", null, null, null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-pending", "turn-7")
+        advanceUntilIdle()
+
+        assertEquals("thread-pending", service.state.value.pendingNotificationOpenThreadId)
+
+        service.connectWithPairingPayload("fresh-payload")
+        advanceUntilIdle()
+
+        assertNull(service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("thread-pending", service.state.value.selectedThreadId)
+        assertEquals("turn-7", service.state.value.focusedTurnId)
+        assertEquals(listOf("thread-pending"), repository.loadedThreadIds)
+
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        assertNull(service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("thread-pending", service.state.value.selectedThreadId)
+        assertEquals("turn-7", service.state.value.focusedTurnId)
+        assertEquals(listOf("thread-pending"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun openThread_reconnectWhileLoadInFlightDoesNotReuseStaleHydration() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+            )
+            loadThreadDelayMs = 1_000L
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-fresh",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Fresh reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-2",
+                        itemId = "assistant-2",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-2",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L))
+            )
+        )
+
+        val initialOpen = backgroundScope.launch { service.openThread("thread-1") }
+        runCurrent()
+        service.closeThread()
+
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.RECONNECT_REQUIRED))
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+        initialOpen.join()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_reloadsHydratedRunningThreadToCatchUp() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Latest reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertTrue("thread-1" in service.state.value.runningThreadIds)
+    }
+
+    @Test
+    fun openThread_deduplicatesConcurrentHydrationForSameThread() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadDelayMs = 1_000L
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Hydrated once",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val firstOpen = backgroundScope.launch { service.openThread("thread-1") }
+        val secondOpen = backgroundScope.launch { service.openThread("thread-1") }
+        runCurrent()
+        advanceUntilIdle()
+        firstOpen.join()
+        secondOpen.join()
+
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Hydrated once"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_forceRefreshWhileLoadInFlightPerformsFollowUpRead() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadDelayMs = 1_000L
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-fresh",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Fresh reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-2",
+                        itemId = "assistant-2",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-2",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val firstOpen = backgroundScope.launch { service.openThread("thread-1") }
+        runCurrent()
+
+        val forcedRefresh = backgroundScope.launch { service.openThread("thread-1", forceRefresh = true) }
+        advanceUntilIdle()
+        firstOpen.join()
+        forcedRefresh.join()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_forceRefreshRetriesAfterInheritedLoadFailure() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadDelayMs = 1_000L
+            queuedLoadThreadErrors += IllegalStateException("connection dropped")
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-fresh",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Fresh reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-2",
+                        itemId = "assistant-2",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-2",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        var initialOpenError: Throwable? = null
+        val initialOpen = backgroundScope.launch {
+            initialOpenError = runCatching { service.openThread("thread-1") }.exceptionOrNull()
+        }
+        runCurrent()
+
+        val refreshError = runCatching { service.openThread("thread-1", forceRefresh = true) }.exceptionOrNull()
+        advanceUntilIdle()
+        initialOpen.join()
+
+        assertEquals("connection dropped", initialOpenError?.message)
+        assertNull(refreshError)
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun refreshThreads_invalidatesHydrationWhenSummaryUpdatedAtAdvances() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-fresh",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        assertFalse("thread-1" in service.state.value.hydratedThreadIds)
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun refreshThreads_invalidatesHydrationWhenSummaryHasNoVersion() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-1", "Conversation", null, null, null, null),
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-fresh",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        assertFalse("thread-1" in service.state.value.hydratedThreadIds)
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun refreshThreads_invalidatesHydrationWhenSummaryHasOnlyCreatedAt() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.closeThread()
+
+        repository.refreshedThreads = listOf(
+            ThreadSummary("thread-1", "Conversation", null, null, 1_000L, null),
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, null),
+            messages = listOf(
+                ConversationMessage(
+                    id = "history-assistant-fresh",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Fresh reply",
+                    createdAtEpochMs = 2_000L,
+                    turnId = "turn-2",
+                    itemId = "assistant-2",
+                )
+            ),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = null,
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-2",
+                latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        assertFalse("thread-1" in service.state.value.hydratedThreadIds)
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
+    fun openThread_secondForceRefreshWhileForceLoadInFlightPerformsAdditionalRead() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadDelayMs = 1_000L
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-latest",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Latest reply",
+                        createdAtEpochMs = 3_000L,
+                        turnId = "turn-3",
+                        itemId = "assistant-3",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-3",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val firstRefresh = backgroundScope.launch { service.openThread("thread-1", forceRefresh = true) }
+        runCurrent()
+
+        val secondRefresh = backgroundScope.launch { service.openThread("thread-1", forceRefresh = true) }
+        advanceUntilIdle()
+        firstRefresh.join()
+        secondRefresh.join()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("Latest reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
     }
 
     @Test
@@ -1266,6 +3183,71 @@ class AndrodexServiceTest {
         assertEquals("thread-1", service.state.value.pendingNotificationOpenThreadId)
         assertNull(service.state.value.missingNotificationThreadPrompt)
         assertEquals(listOf("C:\\Projects\\AppA"), repository.activatedWorkspaces)
+    }
+
+    @Test
+    fun notificationOpen_workspaceSwitchLoadFailureRestoresPreviousSelection() = runTest {
+        val existingMessage = ConversationMessage(
+            id = "history-assistant-existing",
+            threadId = "thread-a",
+            role = ConversationRole.ASSISTANT,
+            kind = ConversationKind.CHAT,
+            text = "Existing reply",
+            createdAtEpochMs = 1_000L,
+            turnId = "turn-a",
+            itemId = "assistant-a",
+        )
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "Project A", true),
+                    WorkspacePathSummary("/tmp/project-b", "Project B", false),
+                )
+            )
+            loadThreadResultsByThreadId["thread-a"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                messages = listOf(existingMessage),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            loadThreadErrorsByThreadId["thread-b"] = IllegalStateException("temporary load failure")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.loadWorkspaceState()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Workspace A", null, "/tmp/project-a", null, null),
+                    ThreadSummary("thread-b", "Workspace B", null, "/tmp/project-b", null, null),
+                )
+            )
+        )
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-b", "turn-b")
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        advanceUntilIdle()
+
+        assertEquals(listOf("/tmp/project-b", "/tmp/project-a"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-a", service.state.value.activeWorkspacePath)
+        assertEquals("thread-a", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Existing reply"),
+            service.state.value.timelineByThread["thread-a"].orEmpty().map { it.text },
+        )
+        assertEquals("thread-b", service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("turn-b", service.state.value.pendingNotificationOpenTurnId)
+        assertNull(service.state.value.missingNotificationThreadPrompt)
     }
 
     @Test
@@ -2243,6 +4225,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     var startupNotice: String? = null
     var reconnectSavedResult = true
     val activatedWorkspaces = mutableListOf<String>()
+    val activateWorkspaceErrorsByPath = mutableMapOf<String, Throwable>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
     var refreshThreadsCalls = 0
@@ -2274,6 +4257,10 @@ private class FakeRepository : AndrodexRepositoryContract {
     var loadThreadDelayMs: Long = 0L
     var refreshThreadsObservedWhileLoadThreadInFlight = false
     private var loadThreadInFlightCount = 0
+    val queuedLoadThreadErrors = ArrayDeque<Throwable>()
+    val queuedLoadThreadResults = ArrayDeque<ThreadLoadResult>()
+    val loadThreadErrorsByThreadId = mutableMapOf<String, Throwable>()
+    val loadThreadResultsByThreadId = mutableMapOf<String, ThreadLoadResult>()
 
     override suspend fun refreshThreads(): List<ThreadSummary> {
         if (loadThreadInFlightCount > 0) {
@@ -2342,11 +4329,21 @@ private class FakeRepository : AndrodexRepositoryContract {
         loadedThreadIds += threadId
         loadThreadInFlightCount += 1
         try {
+            if (queuedLoadThreadErrors.isNotEmpty()) {
+                throw queuedLoadThreadErrors.removeFirst()
+            }
+            loadThreadErrorsByThreadId.remove(threadId)?.let { throw it }
             loadThreadError?.let { throw it }
             if (loadThreadDelayMs > 0) {
                 delay(loadThreadDelayMs)
             }
-            return loadThreadResult
+            return if (queuedLoadThreadResults.isNotEmpty()) {
+                queuedLoadThreadResults.removeFirst()
+            } else if (threadId in loadThreadResultsByThreadId) {
+                requireNotNull(loadThreadResultsByThreadId[threadId])
+            } else {
+                loadThreadResult
+            }
         } finally {
             loadThreadInFlightCount -= 1
         }
@@ -2470,6 +4467,7 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun activateWorkspace(cwd: String): WorkspaceActivationStatus {
         activatedWorkspaces += cwd
+        activateWorkspaceErrorsByPath.remove(cwd)?.let { throw it }
         recentState = recentState.copy(activeCwd = cwd)
         return WorkspaceActivationStatus(
             hostId = null,

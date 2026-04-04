@@ -465,7 +465,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                             }
                                         },
                                         onOpenSidebar = { scope.launch { drawerState.open() } },
-                                        onRefresh = { viewModel.openThread(connectedState.state.threadId) },
+                                        onRefresh = { viewModel.openThread(connectedState.state.threadId, forceRefresh = true) },
                                         onConsumeFocusTurn = viewModel::consumeFocusedTurnId,
                                         onComposerChanged = viewModel::updateComposerText,
                                         onPlanModeChanged = viewModel::updateComposerPlanMode,
