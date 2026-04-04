@@ -53,6 +53,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.ArrayDeque
@@ -105,6 +106,62 @@ class AndrodexServiceTest {
         assertEquals("Hello world", messages.single().text)
         assertEquals("turn-1", service.state.value.activeTurnIdByThread["thread-1"])
         assertEquals(setOf("thread-1"), service.state.value.runningThreadIds)
+    }
+
+    @Test
+    fun assistantStreamingDelta_reusesUnchangedRenderRowsForTextOnlyUpdates() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "user-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.USER,
+                        kind = ConversationKind.CHAT,
+                        text = "Prompt",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "user-item",
+                    ),
+                    ConversationMessage(
+                        id = "assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Hel",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-item",
+                        isStreaming = true,
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val beforeSnapshot = service.state.value.timelineRenderSnapshotsByThread.getValue("thread-1")
+        val beforeUserRow = beforeSnapshot.items.first()
+
+        service.processClientUpdate(
+            ClientUpdate.AssistantDelta("thread-1", "turn-1", "assistant-item", "lo")
+        )
+
+        val afterSnapshot = service.state.value.timelineRenderSnapshotsByThread.getValue("thread-1")
+        assertSame(beforeUserRow, afterSnapshot.items.first())
+        assertEquals("Hello", afterSnapshot.items.last().message.text)
+        assertTrue(afterSnapshot.items.last().message.isStreaming)
     }
 
     @Test

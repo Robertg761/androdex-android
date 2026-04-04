@@ -14,10 +14,14 @@ import io.androdex.android.timeline.buildThreadAgentActivityText
 import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.buildThreadTimelineRenderItems
 import io.androdex.android.timeline.timelineScrollTargetIndex
+import io.androdex.android.timeline.updateThreadTimelineRenderSnapshotForAssistantTextChange
 import io.androdex.android.ui.state.ToolUserInputOptionUiState
 import io.androdex.android.ui.state.ToolUserInputQuestionUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -160,6 +164,77 @@ class ThreadTimelineFormattingTest {
         assertEquals(
             buildThreadTimelineAutoScrollState(firstSnapshot, null),
             buildThreadTimelineAutoScrollState(streamedSnapshot, null),
+        )
+    }
+
+    @Test
+    fun updateThreadTimelineRenderSnapshotForAssistantTextChange_reusesUnchangedRows() {
+        val previousMessages = listOf(
+            chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+            chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 2_000L)
+                .copy(turnId = "turn-1", itemId = "assistant-1", text = "Hel", isStreaming = true),
+        )
+        val previousSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 3L,
+            messages = previousMessages,
+        )
+
+        val updatedSnapshot = updateThreadTimelineRenderSnapshotForAssistantTextChange(
+            previousSnapshot = previousSnapshot,
+            previousMessages = previousMessages,
+            nextMessages = previousMessages.toMutableList().also { messages ->
+                messages[1] = messages[1].copy(text = "Hello", isStreaming = true)
+            },
+            nextMessageRevision = 4L,
+        )
+
+        assertNotNull(updatedSnapshot)
+        updatedSnapshot ?: return
+        assertEquals(4L, updatedSnapshot.messageRevision)
+        assertSame(previousSnapshot.items[0], updatedSnapshot.items[0])
+        assertSame(previousSnapshot.firstMessageIndexByTurnId, updatedSnapshot.firstMessageIndexByTurnId)
+        assertEquals("Hello", updatedSnapshot.items[1].message.text)
+        assertTrue(updatedSnapshot.items[1].message.isStreaming)
+    }
+
+    @Test
+    fun updateThreadTimelineRenderSnapshotForAssistantTextChange_rejectsStructuralChanges() {
+        val previousMessages = listOf(
+            chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+            chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 2_000L)
+                .copy(turnId = "turn-1", itemId = "assistant-1", text = "Hel", isStreaming = true),
+        )
+        val previousSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 3L,
+            messages = previousMessages,
+        )
+
+        val turnIdChanged = previousMessages.toMutableList().also { messages ->
+            messages[1] = messages[1].copy(text = "Hello", turnId = "turn-2", isStreaming = false)
+        }
+        val appendedMessage = previousMessages + chatMessage(
+            id = "assistant-2",
+            role = ConversationRole.ASSISTANT,
+            createdAt = 3_000L,
+        ).copy(turnId = "turn-1", itemId = "assistant-2", text = "More")
+
+        assertNull(
+            updateThreadTimelineRenderSnapshotForAssistantTextChange(
+                previousSnapshot = previousSnapshot,
+                previousMessages = previousMessages,
+                nextMessages = turnIdChanged,
+                nextMessageRevision = 4L,
+            )
+        )
+        assertNull(
+            updateThreadTimelineRenderSnapshotForAssistantTextChange(
+                previousSnapshot = previousSnapshot,
+                previousMessages = previousMessages,
+                nextMessages = appendedMessage,
+                nextMessageRevision = 4L,
+            )
         )
     }
 

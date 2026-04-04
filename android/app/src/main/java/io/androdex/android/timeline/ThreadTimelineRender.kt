@@ -59,6 +59,34 @@ internal fun buildThreadTimelineRenderSnapshot(
     )
 }
 
+internal fun updateThreadTimelineRenderSnapshotForAssistantTextChange(
+    previousSnapshot: ThreadTimelineRenderSnapshot,
+    previousMessages: List<ConversationMessage>,
+    nextMessages: List<ConversationMessage>,
+    nextMessageRevision: Long,
+): ThreadTimelineRenderSnapshot? {
+    if (previousMessages.size != nextMessages.size || previousSnapshot.items.size != previousMessages.size) {
+        return null
+    }
+
+    val changedIndex = findSingleChangedMessageIndex(previousMessages, nextMessages) ?: return null
+    val previousMessage = previousMessages[changedIndex]
+    val nextMessage = nextMessages[changedIndex]
+    val previousRenderItem = previousSnapshot.items.getOrNull(changedIndex) ?: return null
+
+    if (previousRenderItem.message != previousMessage || !isSafeAssistantTextOnlyUpdate(previousMessage, nextMessage)) {
+        return null
+    }
+
+    val nextItems = previousSnapshot.items.toMutableList()
+    nextItems[changedIndex] = previousRenderItem.copy(message = nextMessage)
+    return previousSnapshot.copy(
+        messageRevision = nextMessageRevision,
+        items = nextItems,
+        agentActivityText = buildThreadAgentActivityText(nextMessages),
+    )
+}
+
 internal fun buildThreadTimelineRenderItems(messages: List<ConversationMessage>): List<ThreadTimelineRenderItem> {
     if (messages.isEmpty()) return emptyList()
     val result = mutableListOf<ThreadTimelineRenderItem>()
@@ -163,4 +191,42 @@ internal fun timelineScrollTargetIndex(
         ),
         focusedTurnId = focusedTurnId,
     )
+}
+
+private fun findSingleChangedMessageIndex(
+    previousMessages: List<ConversationMessage>,
+    nextMessages: List<ConversationMessage>,
+): Int? {
+    if (previousMessages.size != nextMessages.size) {
+        return null
+    }
+
+    val firstChangedIndex = previousMessages.indices.firstOrNull { index ->
+        previousMessages[index] != nextMessages[index]
+    } ?: return null
+
+    for (index in previousMessages.lastIndex downTo (firstChangedIndex + 1)) {
+        if (previousMessages[index] != nextMessages[index]) {
+            return null
+        }
+    }
+    return firstChangedIndex
+}
+
+private fun isSafeAssistantTextOnlyUpdate(
+    previousMessage: ConversationMessage,
+    nextMessage: ConversationMessage,
+): Boolean {
+    if (previousMessage.role != ConversationRole.ASSISTANT
+        || nextMessage.role != ConversationRole.ASSISTANT
+        || previousMessage.kind != ConversationKind.CHAT
+        || nextMessage.kind != ConversationKind.CHAT
+    ) {
+        return false
+    }
+
+    return nextMessage.copy(
+        text = previousMessage.text,
+        isStreaming = previousMessage.isStreaming,
+    ) == previousMessage
 }

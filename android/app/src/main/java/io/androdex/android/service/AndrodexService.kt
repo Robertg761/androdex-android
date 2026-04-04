@@ -44,6 +44,7 @@ import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.reviewRequestText
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
+import io.androdex.android.timeline.updateThreadTimelineRenderSnapshotForAssistantTextChange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CompletableDeferred
@@ -2860,15 +2861,42 @@ private fun ThreadTimelineState?.withRawMessages(
         return existingState
     }
     val nextRevision = (existingState?.messageRevision ?: 0L) + 1L
+    val fastPathSnapshot = existingState?.let { state ->
+        updateThreadTimelineRenderSnapshotForAssistantTextChange(
+            previousSnapshot = state.renderSnapshot,
+            previousMessages = state.rawMessages,
+            nextMessages = rawMessages,
+            nextMessageRevision = nextRevision,
+        )
+    }
+    if (fastPathSnapshot != null) {
+        ThreadOpenPerfLogger.logStage(
+            threadId = normalizedThreadId,
+            stage = "AndrodexService.renderSnapshotFastPath",
+            extra = "messages=${rawMessages.size} revision=$nextRevision",
+        )
+        return ThreadTimelineState(
+            threadId = normalizedThreadId,
+            rawMessages = rawMessages,
+            messageRevision = nextRevision,
+            renderSnapshot = fastPathSnapshot,
+        )
+    }
     return ThreadTimelineState(
         threadId = normalizedThreadId,
         rawMessages = rawMessages,
         messageRevision = nextRevision,
-        renderSnapshot = buildThreadTimelineRenderSnapshot(
+        renderSnapshot = ThreadOpenPerfLogger.measure(
             threadId = normalizedThreadId,
-            messageRevision = nextRevision,
-            messages = rawMessages,
-        ),
+            stage = "AndrodexService.renderSnapshotRebuild",
+            extra = { "messages=${rawMessages.size} revision=$nextRevision" },
+        ) {
+            buildThreadTimelineRenderSnapshot(
+                threadId = normalizedThreadId,
+                messageRevision = nextRevision,
+                messages = rawMessages,
+            )
+        },
     )
 }
 
