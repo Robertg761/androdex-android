@@ -166,6 +166,67 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun openThread_hostHydrationReconcilesPersistedTimelineWithoutDuplicates() = runTest {
+        val cachedMessages = listOf(
+            ConversationMessage(
+                id = "cached-user",
+                threadId = "thread-1",
+                role = ConversationRole.USER,
+                kind = ConversationKind.CHAT,
+                text = "Cached prompt",
+                createdAtEpochMs = 1_000L,
+                turnId = "turn-1",
+                itemId = "user-item",
+            ),
+            ConversationMessage(
+                id = "cached-assistant",
+                threadId = "thread-1",
+                role = ConversationRole.ASSISTANT,
+                kind = ConversationKind.CHAT,
+                text = "Cached reply",
+                createdAtEpochMs = 2_000L,
+                turnId = "turn-1",
+                itemId = "assistant-item",
+            ),
+        )
+        val repository = FakeRepository().apply {
+            persistedThreadTimelines = linkedMapOf("thread-1" to cachedMessages)
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, 5_000L),
+                messages = cachedMessages + ConversationMessage(
+                    id = "fresh-thinking",
+                    threadId = "thread-1",
+                    role = ConversationRole.SYSTEM,
+                    kind = ConversationKind.THINKING,
+                    text = "Fresh host state",
+                    createdAtEpochMs = 3_000L,
+                    turnId = "turn-1",
+                    itemId = "thinking-item",
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("Cached prompt", "Cached reply", "Fresh host state"),
+            service.state.value.messages.map { it.text },
+        )
+        assertEquals(1, service.state.value.messages.count { it.id == "cached-user" })
+        assertEquals(1, service.state.value.messages.count { it.id == "cached-assistant" })
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"

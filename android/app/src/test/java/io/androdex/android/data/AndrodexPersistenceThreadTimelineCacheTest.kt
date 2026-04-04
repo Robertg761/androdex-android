@@ -41,4 +41,41 @@ class AndrodexPersistenceThreadTimelineCacheTest {
 
         assertNull(decoded)
     }
+
+    @Test
+    fun decodePersistedThreadTimeline_skipsMalformedItemsAndKeepsValidMessages() {
+        val decoded = decodePersistedThreadTimelineMessagesSpec(
+            """
+            {
+              "v": 1,
+              "messages": [
+                {
+                  "id": "bad-message",
+                  "threadId": "thread-1",
+                  "role": "not-a-role",
+                  "kind": "CHAT",
+                  "text": "broken",
+                  "createdAtEpochMs": 10
+                },
+                {
+                  "id": "assistant-1",
+                  "threadId": "thread-1",
+                  "role": "ASSISTANT",
+                  "kind": "CHAT",
+                  "text": "Recovered",
+                  "createdAtEpochMs": 20,
+                  "isStreaming": true
+                }
+              ]
+            }
+            """.trimIndent(),
+            fallbackThreadId = "thread-1",
+        )
+
+        requireNotNull(decoded)
+        assertEquals(1, decoded.size)
+        assertEquals("assistant-1", decoded.single().id)
+        assertEquals("Recovered", decoded.single().text)
+        assertFalse(decoded.single().isStreaming)
+    }
 }
