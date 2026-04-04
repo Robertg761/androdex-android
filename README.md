@@ -239,6 +239,8 @@ On Windows, the bridge also includes a desktop refresh workaround for phone-auth
 
 ## Project Structure
 
+For a detailed ownership map of the whole repository, see [Docs/repo-map.md](Docs/repo-map.md).
+
 ```text
 androdex/
 |-- androdex-bridge/              # CLI bridge package
@@ -247,6 +249,8 @@ androdex/
 |-- android/                      # Android Studio project
 |   `-- app/                      # Kotlin + Compose Android client
 |-- relay/                        # Relay implementation
+|-- Docs/                         # Architecture, parity, and release/support docs
+|-- site/                         # Static site and privacy page
 `-- assets/                       # Public graphics
 ```
 
