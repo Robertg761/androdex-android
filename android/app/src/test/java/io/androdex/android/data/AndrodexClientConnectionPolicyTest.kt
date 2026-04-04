@@ -91,6 +91,20 @@ class AndrodexClientConnectionPolicyTest {
     }
 
     @Test
+    fun trustedSessionRecoverUrl_rewritesRelaySocketPathToHttpsEndpoint() {
+        val recoverUrl = trustedSessionRecoverUrl("wss://relay.androdex.xyz/relay")
+
+        assertEquals("https://relay.androdex.xyz/v1/trusted/session/recover", recoverUrl)
+    }
+
+    @Test
+    fun trustedSessionRecoverUrl_preservesBasePathBeforeRelaySegment() {
+        val recoverUrl = trustedSessionRecoverUrl("ws://localhost:8787/custom/relay")
+
+        assertEquals("http://localhost:8787/custom/v1/trusted/session/recover", recoverUrl)
+    }
+
+    @Test
     fun trustedSessionResolveFailure_requiresFreshLiveSessionWhenRelaySaysHostIsOffline() {
         val result = mapTrustedSessionResolveFailure(
             responseCode = 404,

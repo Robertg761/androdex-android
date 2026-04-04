@@ -468,6 +468,52 @@ test("trusted rekey accepts the prior recovery credential and preserves it as fa
   });
 });
 
+test("qr bootstrap stores a phone-owned recovery credential without bridge provisioning", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const phoneIdentity = createOkpKeyPair("ed25519");
+  const phoneEphemeral = createOkpKeyPair("x25519");
+  const phoneOwnedRecoveryIdentity = createOkpKeyPair("ed25519");
+  const wireMessages = [];
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-3-bootstrap-recovery",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "mac-3-bootstrap-recovery",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {},
+    },
+  });
+  secureTransport.bindLiveSendWireMessage((message) => {
+    wireMessages.push(message);
+    return true;
+  });
+
+  finishHandshake({
+    secureTransport,
+    sessionId: "session-3-bootstrap-recovery",
+    macDeviceId: "mac-3-bootstrap-recovery",
+    phoneDeviceId: "phone-3-bootstrap-recovery",
+    macIdentity,
+    phoneIdentity,
+    phoneEphemeral,
+    handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
+    lastAppliedBridgeOutboundSeq: 0,
+    nextRecoveryIdentityPublicKey: phoneOwnedRecoveryIdentity.publicKey,
+  });
+
+  assert.equal(wireMessages.length, 0);
+  assert.deepEqual(
+    secureTransport.getCurrentDeviceState().trustedPhoneRecoveryIdentities["phone-3-bootstrap-recovery"],
+    {
+      current: {
+        recoveryIdentityPublicKey: phoneOwnedRecoveryIdentity.publicKey,
+      },
+      previous: null,
+    }
+  );
+});
+
 test("qr bootstrap allows repairing the same Android device after its identity rotates", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const originalPhoneIdentity = createOkpKeyPair("ed25519");
@@ -651,6 +697,7 @@ function finishHandshake({
   phoneEphemeral,
   handshakeMode,
   lastAppliedBridgeOutboundSeq,
+  nextRecoveryIdentityPublicKey = "",
 }) {
   const controlMessages = [];
   const applicationMessages = [];
@@ -666,6 +713,9 @@ function finishHandshake({
       phoneIdentityPublicKey: phoneIdentity.publicKey,
       phoneEphemeralPublicKey: phoneEphemeral.publicKey,
       clientNonce: clientNonce.toString("base64"),
+      ...(nextRecoveryIdentityPublicKey
+        ? { nextRecoveryIdentityPublicKey }
+        : {}),
     }),
     {
       sendControlMessage(message) {
@@ -686,9 +736,12 @@ function finishHandshake({
     handshakeMode,
     keyEpoch: serverHello.keyEpoch,
     macDeviceId,
+    trustedPhoneDeviceId: "",
     phoneDeviceId,
     macIdentityPublicKey: macIdentity.publicKey,
+    trustedRecoveryPublicKey: "",
     phoneIdentityPublicKey: phoneIdentity.publicKey,
+    nextRecoveryIdentityPublicKey,
     macEphemeralPublicKey: serverHello.macEphemeralPublicKey,
     phoneEphemeralPublicKey: phoneEphemeral.publicKey,
     clientNonce,

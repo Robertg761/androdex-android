@@ -499,7 +499,7 @@ function createBridgeSecureTransport({
           : null
       );
       const nextTrustedRecoveryIdentity = existingTrustedRecoveryIdentity || (
-        pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY
+        pendingHandshake.nextRecoveryIdentityPublicKey
           ? {
             recoveryIdentityPublicKey: pendingHandshake.nextRecoveryIdentityPublicKey,
           }
@@ -531,6 +531,7 @@ function createBridgeSecureTransport({
       }
       if (
         pendingHandshake.handshakeMode !== HANDSHAKE_MODE_TRUSTED_REKEY
+        && nextTrustedRecoveryIdentity.recoveryIdentityPrivateKey
         && (
           pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
           || trustedRecoveryChanged

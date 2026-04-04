@@ -241,6 +241,8 @@ class AndrodexClient(
     private var supportsBackgroundTerminalCleanup = true
     private var supportsThreadFork = true
     private var pendingTrustedRecovery: PendingTrustedRecovery? = null
+    private var pendingBootstrapRecoveryPayload: RecoveryPayload? = null
+    private var pendingBootstrapRecoveryAcceptedByBridge: Boolean = false
 
     val updates: SharedFlow<ClientUpdate> = updatesFlow.asSharedFlow()
 
@@ -408,17 +410,33 @@ class AndrodexClient(
 
     suspend fun connectWithPairingPayload(rawPayload: String) {
         val pairing = parsePairingPayload(rawPayload)
-        ensurePhoneIdentityForFreshPairing()
+        val phoneIdentity = ensurePhoneIdentityForFreshPairing()
+        val nextRecoveryPayload = generateRecoveryPayload(
+            relay = pairing.relay,
+            macDeviceId = pairing.macDeviceId,
+            macIdentityPublicKey = pairing.macIdentityPublicKey,
+            phoneDeviceId = phoneIdentity.phoneDeviceId,
+        )
         resetBridgeOutboundReplayCursor()
         pendingTrustedRecovery = null
-        connect(pairing)
-        val savedSession = pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)
-            ?: throw IllegalStateException("Failed to save the paired relay session.")
-        persistence.saveSavedRelaySession(savedSession)
-        savedRelaySession = savedSession
-        clearDurableTrustBlockedState()
-        rememberLastTrustedMacDeviceId(pairing.macDeviceId)
-        emitPairingAvailability()
+        pendingBootstrapRecoveryPayload = nextRecoveryPayload
+        pendingBootstrapRecoveryAcceptedByBridge = false
+        try {
+            connect(pairing)
+            if (pendingBootstrapRecoveryAcceptedByBridge) {
+                saveRecoveryPayload(nextRecoveryPayload)
+            }
+            val savedSession = pairing.toSavedRelaySession(lastAppliedBridgeOutboundSeq)
+                ?: throw IllegalStateException("Failed to save the paired relay session.")
+            persistence.saveSavedRelaySession(savedSession)
+            savedRelaySession = savedSession
+            clearDurableTrustBlockedState()
+            rememberLastTrustedMacDeviceId(pairing.macDeviceId)
+            emitPairingAvailability()
+        } finally {
+            pendingBootstrapRecoveryPayload = null
+            pendingBootstrapRecoveryAcceptedByBridge = false
+        }
     }
 
     suspend fun connectWithRecoveryPayload(rawPayload: String) {
@@ -1497,6 +1515,8 @@ class AndrodexClient(
             secureSession = null
             pendingHandshake = null
             pendingTrustedRecovery = null
+            pendingBootstrapRecoveryPayload = null
+            pendingBootstrapRecoveryAcceptedByBridge = false
             lastSocketCloseDetail = null
             lastSocketFailureDetail = null
             pendingTerminalConnectionUpdate = null
@@ -1579,6 +1599,7 @@ class AndrodexClient(
             ?: throw IllegalStateException("A phone identity is required before starting secure pairing.")
         val trustedMac = trustedMacRegistry.records[pairing.macDeviceId]
         val trustedRecovery = pendingTrustedRecovery
+        val bootstrapRecoveryPayload = if (trustedRecovery == null) pendingBootstrapRecoveryPayload else null
         val handshakePlan = if (trustedRecovery == null) {
             resolveSecureHandshakePlan(pairing, trustedMac)
         } else {
@@ -1611,6 +1632,9 @@ class AndrodexClient(
                 .put("trustedRecoveryPublicKey", trustedRecovery.trustedRecoveryPayload.recoveryIdentityPublicKey)
                 .put("nextRecoveryIdentityPublicKey", trustedRecovery.nextRecoveryPayload.recoveryIdentityPublicKey)
         }
+        if (handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null) {
+            clientHello.put("nextRecoveryIdentityPublicKey", bootstrapRecoveryPayload.recoveryIdentityPublicKey)
+        }
         if (handshakeMode == handshakeModeQrBootstrap && !pairing.bootstrapToken.isNullOrBlank()) {
             clientHello.put("bootstrapToken", pairing.bootstrapToken)
         }
@@ -1638,31 +1662,51 @@ class AndrodexClient(
             throw IllegalStateException("This bridge uses a different secure transport version.")
         }
 
-        val transcriptBytes = buildTranscriptBytes(
-            sessionId = routingId,
-            protocolVersion = protocolVersion,
-            handshakeMode = serverHello.optString("handshakeMode"),
-            keyEpoch = serverHello.optInt("keyEpoch"),
-            macDeviceId = pairing.macDeviceId,
-            trustedPhoneDeviceId = trustedRecovery?.trustedPhoneDeviceId.orEmpty(),
-            phoneDeviceId = phoneIdentity.phoneDeviceId,
-            macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
-            trustedRecoveryPublicKey = trustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
-            phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
-            nextRecoveryIdentityPublicKey = trustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
-            macEphemeralPublicKey = serverHello.optString("macEphemeralPublicKey"),
-            phoneEphemeralPublicKey = phoneEphemeralPublicKey,
-            clientNonce = clientNonce,
-            serverNonce = decodeBase64(serverHello.optString("serverNonce")),
-            expiresAtForTranscript = serverHello.optLong("expiresAtForTranscript"),
-        )
+        fun buildHandshakeTranscript(nextRecoveryIdentityPublicKey: String): ByteArray {
+            return buildTranscriptBytes(
+                sessionId = routingId,
+                protocolVersion = protocolVersion,
+                handshakeMode = serverHello.optString("handshakeMode"),
+                keyEpoch = serverHello.optInt("keyEpoch"),
+                macDeviceId = pairing.macDeviceId,
+                trustedPhoneDeviceId = trustedRecovery?.trustedPhoneDeviceId.orEmpty(),
+                phoneDeviceId = phoneIdentity.phoneDeviceId,
+                macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
+                trustedRecoveryPublicKey = trustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
+                phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
+                nextRecoveryIdentityPublicKey = nextRecoveryIdentityPublicKey,
+                macEphemeralPublicKey = serverHello.optString("macEphemeralPublicKey"),
+                phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+                clientNonce = clientNonce,
+                serverNonce = decodeBase64(serverHello.optString("serverNonce")),
+                expiresAtForTranscript = serverHello.optLong("expiresAtForTranscript"),
+            )
+        }
+        val requestedNextRecoveryIdentityPublicKey = trustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
+            ?: bootstrapRecoveryPayload?.recoveryIdentityPublicKey
+            ?: ""
+        var transcriptBytes = buildHandshakeTranscript(requestedNextRecoveryIdentityPublicKey)
 
         val macSignature = decodeBase64(serverHello.optString("macSignature"))
-        val signatureValid = verifyEd25519(
+        var signatureValid = verifyEd25519(
             publicKeyBase64 = serverHello.optString("macIdentityPublicKey"),
             payload = transcriptBytes,
             signature = macSignature,
         )
+        if (!signatureValid && handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null) {
+            val legacyTranscriptBytes = buildHandshakeTranscript("")
+            signatureValid = verifyEd25519(
+                publicKeyBase64 = serverHello.optString("macIdentityPublicKey"),
+                payload = legacyTranscriptBytes,
+                signature = macSignature,
+            )
+            if (signatureValid) {
+                transcriptBytes = legacyTranscriptBytes
+                pendingBootstrapRecoveryAcceptedByBridge = false
+            }
+        } else if (signatureValid && handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null) {
+            pendingBootstrapRecoveryAcceptedByBridge = true
+        }
         if (!signatureValid) {
             emitTerminalConnectionUpdate(
                 ClientUpdate.Connection(
@@ -1804,7 +1848,9 @@ class AndrodexClient(
                     macIdentityPublicKey = hello.optString("macIdentityPublicKey"),
                     trustedRecoveryPublicKey = pendingTrustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
                     phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
-                    nextRecoveryIdentityPublicKey = pendingTrustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
+                    nextRecoveryIdentityPublicKey = pendingTrustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
+                        ?: pendingBootstrapRecoveryPayload?.recoveryIdentityPublicKey
+                        ?: "",
                     macEphemeralPublicKey = hello.optString("macEphemeralPublicKey"),
                     phoneEphemeralPublicKey = phoneEphemeralPublicKey,
                     clientNonce = clientNonce,
@@ -1815,7 +1861,31 @@ class AndrodexClient(
                     publicKeyBase64 = hello.optString("macIdentityPublicKey"),
                     payload = transcript,
                     signature = decodeBase64(hello.optString("macSignature")),
-                )
+                ) || (
+                    pendingBootstrapRecoveryPayload != null
+                        && verifyEd25519(
+                            publicKeyBase64 = hello.optString("macIdentityPublicKey"),
+                            payload = buildTranscriptBytes(
+                                sessionId = expectedSessionId,
+                                protocolVersion = hello.optInt("protocolVersion"),
+                                handshakeMode = hello.optString("handshakeMode"),
+                                keyEpoch = hello.optInt("keyEpoch"),
+                                macDeviceId = hello.optString("macDeviceId"),
+                                trustedPhoneDeviceId = pendingTrustedRecovery?.trustedPhoneDeviceId.orEmpty(),
+                                phoneDeviceId = phoneIdentity.phoneDeviceId,
+                                macIdentityPublicKey = hello.optString("macIdentityPublicKey"),
+                                trustedRecoveryPublicKey = pendingTrustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
+                                phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
+                                nextRecoveryIdentityPublicKey = "",
+                                macEphemeralPublicKey = hello.optString("macEphemeralPublicKey"),
+                                phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+                                clientNonce = clientNonce,
+                                serverNonce = decodeBase64(hello.optString("serverNonce")),
+                                expiresAtForTranscript = hello.optLong("expiresAtForTranscript"),
+                            ),
+                            signature = decodeBase64(hello.optString("macSignature")),
+                        )
+                    )
             } else {
                 true
             }
