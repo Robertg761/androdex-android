@@ -8,10 +8,21 @@ internal object ThreadOpenPerfLogger {
     private const val sessionTtlMs = 30_000L
     private val nextAttemptId = AtomicLong(1L)
     private val sessions = linkedMapOf<String, Session>()
+    @Volatile
+    private var logObserver: ((Entry) -> Unit)? = null
 
     private data class Session(
         val attemptId: Long,
         val startedAtMs: Long,
+    )
+
+    internal data class Entry(
+        val attemptId: Long,
+        val threadId: String,
+        val stage: String,
+        val sinceStartMs: Long,
+        val durationMs: Long?,
+        val extra: String?,
     )
 
     fun startAttempt(
@@ -91,6 +102,10 @@ internal object ThreadOpenPerfLogger {
         }
     }
 
+    internal fun setLogObserverForTests(observer: ((Entry) -> Unit)?) {
+        logObserver = observer
+    }
+
     private fun log(
         session: Session,
         threadId: String,
@@ -101,6 +116,15 @@ internal object ThreadOpenPerfLogger {
         val sinceStartMs = nowMs() - session.startedAtMs
         val durationPart = durationMs?.let { " durationMs=$it" }.orEmpty()
         val extraPart = extra?.trim()?.takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
+        val entry = Entry(
+            attemptId = session.attemptId,
+            threadId = threadId,
+            stage = stage,
+            sinceStartMs = sinceStartMs,
+            durationMs = durationMs,
+            extra = extra,
+        )
+        logObserver?.invoke(entry)
         runCatching {
             Log.d(
                 logTag,
