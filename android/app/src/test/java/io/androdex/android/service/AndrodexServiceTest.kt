@@ -34,6 +34,7 @@ import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.TurnFileMention
 import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.model.TurnSkillMention
@@ -42,6 +43,7 @@ import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.WorkspaceRecentState
 import io.androdex.android.model.requestId
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -57,9 +59,190 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.ArrayDeque
+import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AndrodexServiceTest {
+    @Test
+    fun service_restoresPersistedThreadTimelinesAtStartup() = runTest {
+        val repository = FakeRepository().apply {
+            persistedThreadTimelines = linkedMapOf(
+                "thread-1" to listOf(
+                    ConversationMessage(
+                        id = "cached-user",
+                        threadId = "thread-1",
+                        role = ConversationRole.USER,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached prompt",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "user-item",
+                    ),
+                    ConversationMessage(
+                        id = "cached-assistant",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-item",
+                    ),
+                )
+            )
+        }
+
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("Cached prompt", "Cached reply"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+        assertEquals(2, service.state.value.timelineRenderSnapshotsByThread.getValue("thread-1").items.size)
+    }
+
+    @Test
+    fun openThread_showsPersistedTimelineBeforeHostHydrationFinishes() = runTest {
+        val cachedMessages = listOf(
+            ConversationMessage(
+                id = "cached-user",
+                threadId = "thread-1",
+                role = ConversationRole.USER,
+                kind = ConversationKind.CHAT,
+                text = "Cached prompt",
+                createdAtEpochMs = 1_000L,
+                turnId = "turn-1",
+                itemId = "user-item",
+            ),
+            ConversationMessage(
+                id = "cached-assistant",
+                threadId = "thread-1",
+                role = ConversationRole.ASSISTANT,
+                kind = ConversationKind.CHAT,
+                text = "Cached reply",
+                createdAtEpochMs = 2_000L,
+                turnId = "turn-1",
+                itemId = "assistant-item",
+            ),
+        )
+        val repository = FakeRepository().apply {
+            persistedThreadTimelines = linkedMapOf("thread-1" to cachedMessages)
+            loadThreadDelayMs = 5_000L
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, 5_000L),
+                messages = cachedMessages + ConversationMessage(
+                    id = "fresh-thinking",
+                    threadId = "thread-1",
+                    role = ConversationRole.SYSTEM,
+                    kind = ConversationKind.THINKING,
+                    text = "Fresh host state",
+                    createdAtEpochMs = 3_000L,
+                    turnId = "turn-1",
+                    itemId = "thinking-item",
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val openJob = backgroundScope.launch {
+            service.openThread("thread-1")
+        }
+        runCurrent()
+
+        assertTrue(openJob.isActive)
+        assertEquals("thread-1", service.state.value.selectedThreadId)
+        assertEquals(listOf("Cached prompt", "Cached reply"), service.state.value.messages.map { it.text })
+
+        openJob.cancel()
+    }
+
+    @Test
+    fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-a"
+        }
+        val persistenceDispatcher = ManualCoroutineDispatcher()
+        val service = AndrodexService(
+            repository = repository,
+            scope = backgroundScope,
+            threadTimelinePersistenceDispatcher = persistenceDispatcher,
+        )
+        runCurrent()
+        service.enqueueThreadTimelinePersistence(
+            scopeKey = "host-a",
+            changedMessagesByThread = mapOf(
+                "thread-1" to listOf(
+                    ConversationMessage(
+                        id = "assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                    )
+                )
+            ),
+        )
+        repository.currentThreadTimelineScopeKeyValue = "host-b"
+        persistenceDispatcher.runAll()
+
+        assertEquals(1, repository.persistedThreadTimelineWrites.size)
+        assertEquals("host-a", repository.persistedThreadTimelineWrites.single().first)
+    }
+
+    @Test
+    fun connectWithPairingPayload_reloadsPersistedTimelinesForNewHostScope() = runTest {
+        val hostAMessages = listOf(
+            ConversationMessage(
+                id = "host-a-user",
+                threadId = "thread-a",
+                role = ConversationRole.USER,
+                kind = ConversationKind.CHAT,
+                text = "Host A cached prompt",
+                createdAtEpochMs = 1_000L,
+            )
+        )
+        val hostBMessages = listOf(
+            ConversationMessage(
+                id = "host-b-user",
+                threadId = "thread-b",
+                role = ConversationRole.USER,
+                kind = ConversationKind.CHAT,
+                text = "Host B cached prompt",
+                createdAtEpochMs = 2_000L,
+            )
+        )
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-a"
+            persistedThreadTimelinesByScope = mapOf(
+                "host-a" to linkedMapOf("thread-a" to hostAMessages),
+                "host-b" to linkedMapOf("thread-b" to hostBMessages),
+            )
+            connectWithPairingPayloadAction = {
+                currentThreadTimelineScopeKeyValue = "host-b"
+            }
+        }
+
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        assertEquals(listOf("Host A cached prompt"), service.state.value.timelineByThread["thread-a"]?.map { it.text })
+
+        service.connectWithPairingPayload("payload", isFreshPairing = false)
+        advanceUntilIdle()
+
+        assertFalse(service.state.value.timelineByThread.containsKey("thread-a"))
+        assertEquals(listOf("Host B cached prompt"), service.state.value.timelineByThread["thread-b"]?.map { it.text })
+    }
+
     @Test
     fun sendMessage_keepsPerThreadRunningFallbackUntilTurnCompletion() = runTest {
         val repository = FakeRepository().apply {
@@ -4274,6 +4457,20 @@ class AndrodexServiceTest {
     }
 }
 
+private class ManualCoroutineDispatcher : CoroutineDispatcher() {
+    private val tasks = ArrayDeque<Runnable>()
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        tasks.addLast(block)
+    }
+
+    fun runAll() {
+        while (tasks.isNotEmpty()) {
+            tasks.removeFirst().run()
+        }
+    }
+}
+
 private class FakeRepository : AndrodexRepositoryContract {
     private val updatesFlow = MutableSharedFlow<ClientUpdate>(replay = 16, extraBufferCapacity = 16)
 
@@ -4285,6 +4482,18 @@ private class FakeRepository : AndrodexRepositoryContract {
     val activateWorkspaceErrorsByPath = mutableMapOf<String, Throwable>()
     val loadedThreadIds = mutableListOf<String>()
     val startedThreadCwds = mutableListOf<String?>()
+    var currentThreadTimelineScopeKeyValue: String? = null
+    var currentTrustedPairSnapshotValue: TrustedPairSnapshot? = null
+    var currentFingerprintValue: String? = null
+    var persistedThreadTimelinesByScope: Map<String?, Map<String, List<ConversationMessage>>> = emptyMap()
+    var persistedThreadTimelines: Map<String, List<ConversationMessage>>
+        get() = persistedThreadTimelinesByScope[currentThreadTimelineScopeKeyValue].orEmpty()
+        set(value) {
+            persistedThreadTimelinesByScope = persistedThreadTimelinesByScope + (currentThreadTimelineScopeKeyValue to value)
+        }
+    val persistedThreadTimelineWrites = mutableListOf<Triple<String?, String, List<ConversationMessage>>>()
+    var connectWithPairingPayloadAction: ((String) -> Unit)? = null
+    var reconnectSavedAction: (() -> Unit)? = null
     var refreshThreadsCalls = 0
     var listRecentWorkspacesCalls = 0
 
@@ -4296,15 +4505,36 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override fun hasSavedPairing(): Boolean = hasSavedPairing
 
-    override fun currentFingerprint(): String? = null
+    override fun currentFingerprint(): String? = currentFingerprintValue
 
-    override fun currentTrustedPairSnapshot() = null
+    override fun currentTrustedPairSnapshot(): TrustedPairSnapshot? = currentTrustedPairSnapshotValue
+
+    override fun currentThreadTimelineScopeKey(): String? = currentThreadTimelineScopeKeyValue
 
     override fun startupNotice(): String? = startupNotice
 
-    override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
+    override fun loadPersistedThreadTimelines(scopeKey: String?): Map<String, List<ConversationMessage>> {
+        return persistedThreadTimelinesByScope[scopeKey].orEmpty()
+    }
 
-    override suspend fun reconnectSaved(): Boolean = reconnectSavedResult
+    override fun savePersistedThreadTimeline(
+        scopeKey: String?,
+        threadId: String,
+        messages: List<ConversationMessage>,
+    ) {
+        val existing = persistedThreadTimelinesByScope[scopeKey].orEmpty()
+        persistedThreadTimelinesByScope = persistedThreadTimelinesByScope + (scopeKey to (existing + (threadId to messages)))
+        persistedThreadTimelineWrites += Triple(scopeKey, threadId, messages)
+    }
+
+    override suspend fun connectWithPairingPayload(rawPayload: String) {
+        connectWithPairingPayloadAction?.invoke(rawPayload)
+    }
+
+    override suspend fun reconnectSaved(): Boolean {
+        reconnectSavedAction?.invoke()
+        return reconnectSavedResult
+    }
 
     override suspend fun disconnect(clearSavedPairing: Boolean) = Unit
 

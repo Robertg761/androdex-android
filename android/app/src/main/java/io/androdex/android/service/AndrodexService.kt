@@ -45,8 +45,10 @@ import io.androdex.android.reviewRequestText
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.updateThreadTimelineRenderSnapshotForAssistantTextChange
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -56,6 +58,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -82,6 +85,11 @@ private data class SubagentIdentityEntry(
     val hasMetadata: Boolean
         get() = !nickname.isNullOrBlank() || !role.isNullOrBlank() || !agentId.isNullOrBlank()
 }
+
+private data class ThreadTimelinePersistenceRequest(
+    val scopeKey: String?,
+    val threadId: String,
+)
 
 data class ThreadTimelineState(
     val threadId: String,
@@ -161,6 +169,7 @@ data class AndrodexServiceState(
 class AndrodexService(
     private val repository: AndrodexRepositoryContract,
     private val scope: CoroutineScope,
+    private val threadTimelinePersistenceDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private var appInForeground = false
     private var savedReconnectInFlight = false
@@ -181,6 +190,14 @@ class AndrodexService(
     private val threadSessionContextRevision = AtomicLong(0L)
     private val threadOpenAttemptRevision = AtomicLong(0L)
     private val optimisticWorkspaceThreadIds = ConcurrentHashMap.newKeySet<String>()
+    private val persistedThreadMessagesByThread = ConcurrentHashMap<String, List<ConversationMessage>>()
+    private val threadTimelinePersistenceMutex = Mutex()
+    private val pendingThreadTimelinePersistenceByThread =
+        linkedMapOf<ThreadTimelinePersistenceRequest, List<ConversationMessage>>()
+    private var threadTimelinePersistenceJob: Job? = null
+    private var threadTimelinePersistenceScopeKey: String? = repository.currentThreadTimelineScopeKey()
+    private val initialPersistedThreadTimelineStateByThread =
+        loadPersistedThreadTimelineState(threadTimelinePersistenceScopeKey)
 
     private val stateFlow = MutableStateFlow(
         AndrodexServiceState(
@@ -191,6 +208,7 @@ class AndrodexService(
             connectionDetail = repository.startupConnectionDetail(),
             secureFingerprint = repository.currentFingerprint(),
             errorMessage = repository.startupNotice(),
+            threadTimelineStateByThread = initialPersistedThreadTimelineStateByThread,
         )
     )
 
@@ -198,6 +216,10 @@ class AndrodexService(
     val runCompletionEvents: SharedFlow<RunCompletionEvent> = runCompletionEventsFlow.asSharedFlow()
 
     init {
+        replacePersistedThreadTimelineBaseline(initialPersistedThreadTimelineStateByThread)
+        scope.launch {
+            observeThreadTimelinePersistence()
+        }
         scope.launch {
             repository.updates.collect(::processClientUpdate)
         }
@@ -331,6 +353,7 @@ class AndrodexService(
                 }
             }
             repository.connectWithPairingPayload(rawPayload)
+            restorePersistedThreadTimelinesForCurrentScope(force = true)
             suppressSavedReconnect = false
             stateFlow.update { it.copy(freshPairingAttempt = null) }
             refreshThreadsInternal()
@@ -349,6 +372,7 @@ class AndrodexService(
         stateFlow.update { it.copy(freshPairingAttempt = null) }
         val connected = repository.reconnectSaved()
         if (connected) {
+            restorePersistedThreadTimelinesForCurrentScope()
             refreshThreadsInternal()
             loadWorkspaceState()
         }
@@ -2557,6 +2581,116 @@ class AndrodexService(
         }
     }
 
+    private suspend fun observeThreadTimelinePersistence() {
+        var previousTimelineStateByThread = stateFlow.value.threadTimelineStateByThread
+        stateFlow.collect { snapshot ->
+            val nextTimelineStateByThread = snapshot.threadTimelineStateByThread
+            if (nextTimelineStateByThread === previousTimelineStateByThread) {
+                return@collect
+            }
+
+            val changedMessagesByThread = linkedMapOf<String, List<ConversationMessage>>()
+            nextTimelineStateByThread.forEach { (threadId, timelineState) ->
+                val previousMessages = persistedThreadMessagesByThread[threadId]
+                if (previousMessages == timelineState.rawMessages) {
+                    return@forEach
+                }
+                persistedThreadMessagesByThread[threadId] = timelineState.rawMessages
+                changedMessagesByThread[threadId] = timelineState.rawMessages
+            }
+            if (changedMessagesByThread.isNotEmpty()) {
+                scheduleThreadTimelinePersistence(changedMessagesByThread)
+            }
+            previousTimelineStateByThread = nextTimelineStateByThread
+        }
+    }
+
+    private fun scheduleThreadTimelinePersistence(changedMessagesByThread: Map<String, List<ConversationMessage>>) {
+        enqueueThreadTimelinePersistence(
+            scopeKey = threadTimelinePersistenceScopeKey,
+            changedMessagesByThread = changedMessagesByThread,
+        )
+    }
+
+    internal fun enqueueThreadTimelinePersistence(
+        scopeKey: String?,
+        changedMessagesByThread: Map<String, List<ConversationMessage>>,
+    ) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            threadTimelinePersistenceMutex.withLock {
+                changedMessagesByThread.forEach { (threadId, messages) ->
+                    pendingThreadTimelinePersistenceByThread[
+                        ThreadTimelinePersistenceRequest(
+                            scopeKey = scopeKey,
+                            threadId = threadId,
+                        )
+                    ] = messages
+                }
+                if (threadTimelinePersistenceJob?.isActive == true) {
+                    return@withLock
+                }
+                threadTimelinePersistenceJob = scope.launch(threadTimelinePersistenceDispatcher) {
+                    flushPendingThreadTimelinePersistence()
+                }
+            }
+        }
+    }
+
+    private suspend fun flushPendingThreadTimelinePersistence() {
+        while (true) {
+            val batch = threadTimelinePersistenceMutex.withLock {
+                if (pendingThreadTimelinePersistenceByThread.isEmpty()) {
+                    threadTimelinePersistenceJob = null
+                    return@withLock null
+                }
+                LinkedHashMap(pendingThreadTimelinePersistenceByThread).also {
+                    pendingThreadTimelinePersistenceByThread.clear()
+                }
+            }
+            if (batch == null) {
+                return
+            }
+            batch.forEach { (request, messages) ->
+                repository.savePersistedThreadTimeline(
+                    scopeKey = request.scopeKey,
+                    threadId = request.threadId,
+                    messages = messages,
+                )
+            }
+        }
+    }
+
+    private fun loadPersistedThreadTimelineState(scopeKey: String?): Map<String, ThreadTimelineState> {
+        return repository.loadPersistedThreadTimelines(scopeKey)
+            .mapValues { (threadId, messages) ->
+                (null as ThreadTimelineState?).withRawMessages(
+                    threadId = threadId,
+                    rawMessages = messages,
+                )
+            }
+    }
+
+    private fun replacePersistedThreadTimelineBaseline(timelineStateByThread: Map<String, ThreadTimelineState>) {
+        persistedThreadMessagesByThread.clear()
+        timelineStateByThread.values.forEach { timelineState ->
+            updateSubagentIdentitiesFromMessages(timelineState.rawMessages)
+            persistedThreadMessagesByThread[timelineState.threadId] = timelineState.rawMessages
+        }
+    }
+
+    private fun restorePersistedThreadTimelinesForCurrentScope(force: Boolean = false) {
+        val scopeKey = repository.currentThreadTimelineScopeKey()
+        if (!force && scopeKey == threadTimelinePersistenceScopeKey) {
+            return
+        }
+        threadTimelinePersistenceScopeKey = scopeKey
+        val restoredTimelineStateByThread = loadPersistedThreadTimelineState(scopeKey)
+        replacePersistedThreadTimelineBaseline(restoredTimelineStateByThread)
+        stateFlow.update { current ->
+            current.copy(threadTimelineStateByThread = restoredTimelineStateByThread)
+        }
+    }
+
     private fun scheduleSavedReconnectRetry(immediate: Boolean = false) {
         val snapshot = stateFlow.value
         if (!appInForeground || suppressSavedReconnect || !snapshot.hasSavedPairing) {
@@ -2587,6 +2721,7 @@ class AndrodexService(
                 try {
                     val connected = repository.reconnectSaved()
                     if (connected) {
+                        restorePersistedThreadTimelinesForCurrentScope()
                         refreshThreadsInternal()
                         loadWorkspaceState()
                         break

@@ -6,6 +6,7 @@ import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
+import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitCheckoutResult
@@ -41,9 +42,16 @@ interface AndrodexRepositoryContract {
     fun hasSavedPairing(): Boolean
     fun currentFingerprint(): String?
     fun currentTrustedPairSnapshot(): TrustedPairSnapshot?
+    fun currentThreadTimelineScopeKey(): String? = null
     fun startupNotice(): String?
     fun startupConnectionStatus(): io.androdex.android.model.ConnectionStatus? = null
     fun startupConnectionDetail(): String? = null
+    fun loadPersistedThreadTimelines(scopeKey: String?): Map<String, List<ConversationMessage>> = emptyMap()
+    fun savePersistedThreadTimeline(
+        scopeKey: String?,
+        threadId: String,
+        messages: List<ConversationMessage>,
+    ) = Unit
     suspend fun connectWithPairingPayload(rawPayload: String)
     suspend fun reconnectSaved(): Boolean
     suspend fun forgetTrustedHost() = Unit
@@ -150,11 +158,30 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override fun currentTrustedPairSnapshot(): TrustedPairSnapshot? = client.currentTrustedPairSnapshot()
 
+    override fun currentThreadTimelineScopeKey(): String? = client.currentTrustedPairSnapshot()?.deviceId
+        ?: client.currentFingerprint()
+
     override fun startupNotice(): String? = persistence.takeStartupNotice()
 
     override fun startupConnectionStatus(): io.androdex.android.model.ConnectionStatus? = client.startupConnectionStatus()
 
     override fun startupConnectionDetail(): String? = client.startupConnectionDetail()
+
+    override fun loadPersistedThreadTimelines(scopeKey: String?): Map<String, List<ConversationMessage>> {
+        return persistence.loadPersistedThreadTimelines(scopeKey)
+    }
+
+    override fun savePersistedThreadTimeline(
+        scopeKey: String?,
+        threadId: String,
+        messages: List<ConversationMessage>,
+    ) {
+        persistence.savePersistedThreadTimeline(
+            scopeKey = scopeKey,
+            threadId = threadId,
+            messages = messages,
+        )
+    }
 
     override suspend fun connectWithPairingPayload(rawPayload: String) {
         client.connectWithPairingPayload(rawPayload)

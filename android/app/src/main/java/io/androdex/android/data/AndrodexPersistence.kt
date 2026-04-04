@@ -1,20 +1,42 @@
 package io.androdex.android.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import io.androdex.android.crypto.SecureStore
 import io.androdex.android.model.AccessMode
+import io.androdex.android.model.ConversationKind
+import io.androdex.android.model.ConversationMessage
+import io.androdex.android.model.ConversationRole
+import io.androdex.android.model.ExecutionContent
+import io.androdex.android.model.ExecutionDetail
+import io.androdex.android.model.ExecutionKind
+import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.PairingPayload
+import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
 import io.androdex.android.model.SavedRelaySession
 import io.androdex.android.model.ServiceTier
+import io.androdex.android.model.SubagentAction
+import io.androdex.android.model.SubagentRef
+import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedMacRegistry
+import org.json.JSONArray
 import org.json.JSONObject
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 open class AndrodexPersistence internal constructor(
     private val secureStore: SecureStore,
+    private val timelineCachePreferences: SharedPreferences? = null,
 ) {
-    constructor(context: Context) : this(SecureStore(context))
+    constructor(context: Context) : this(
+        secureStore = SecureStore(context),
+        timelineCachePreferences = context.applicationContext.getSharedPreferences(
+            THREAD_TIMELINE_CACHE_PREFS_NAME,
+            Context.MODE_PRIVATE,
+        ),
+    )
 
     private var startupReport: SecureStateStartupReport
 
@@ -108,6 +130,7 @@ open class AndrodexPersistence internal constructor(
         clearPhoneIdentity()
         clearTrustedMacRegistry()
         saveLastTrustedMacDeviceId(null)
+        clearAllPersistedThreadTimelines()
         startupReport = SecureStateStartupReport()
     }
 
@@ -182,6 +205,87 @@ open class AndrodexPersistence internal constructor(
         }
     }
 
+    fun loadPersistedThreadTimelines(scopeKey: String?): Map<String, List<ConversationMessage>> {
+        val normalizedScopeKey = normalizeThreadTimelineScopeKey(scopeKey) ?: return emptyMap()
+        val preferences = timelineCachePreferences ?: return emptyMap()
+        val threadIds = decodePersistedStringListSpec(
+            preferences.getString(threadTimelineScopeIndexKey(normalizedScopeKey), null)
+        )
+        if (threadIds.isEmpty()) {
+            return emptyMap()
+        }
+
+        val decoded = linkedMapOf<String, List<ConversationMessage>>()
+        threadIds.forEach { threadId ->
+            val messages = decodePersistedThreadTimelineMessagesSpec(
+                rawValue = preferences.getString(
+                    threadTimelineEntryKey(normalizedScopeKey, threadId),
+                    null,
+                ),
+                fallbackThreadId = threadId,
+            ) ?: return@forEach
+            decoded[threadId] = messages
+        }
+        return decoded
+    }
+
+    fun savePersistedThreadTimeline(
+        scopeKey: String?,
+        threadId: String,
+        messages: List<ConversationMessage>,
+    ) {
+        val normalizedScopeKey = normalizeThreadTimelineScopeKey(scopeKey) ?: return
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val preferences = timelineCachePreferences ?: return
+
+        val existingThreadIds = decodePersistedStringListSpec(
+            preferences.getString(threadTimelineScopeIndexKey(normalizedScopeKey), null)
+        )
+        val nextThreadIds = buildList {
+            addAll(existingThreadIds)
+            if (normalizedThreadId !in this) {
+                add(normalizedThreadId)
+            }
+        }
+
+        preferences.edit()
+            .putString(
+                KEY_THREAD_TIMELINE_CACHE_SCOPES,
+                encodePersistedStringListSpec(
+                    decodePersistedStringListSpec(
+                        preferences.getString(KEY_THREAD_TIMELINE_CACHE_SCOPES, null)
+                    ) + normalizedScopeKey
+                ),
+            )
+            .putString(
+                threadTimelineScopeIndexKey(normalizedScopeKey),
+                encodePersistedStringListSpec(nextThreadIds),
+            )
+            .putString(
+                threadTimelineEntryKey(normalizedScopeKey, normalizedThreadId),
+                encodePersistedThreadTimelineMessagesSpec(messages),
+            )
+            .apply()
+    }
+
+    fun clearPersistedThreadTimelines(scopeKey: String?) {
+        val normalizedScopeKey = normalizeThreadTimelineScopeKey(scopeKey) ?: return
+        val preferences = timelineCachePreferences ?: return
+        val threadIds = decodePersistedStringListSpec(
+            preferences.getString(threadTimelineScopeIndexKey(normalizedScopeKey), null)
+        )
+        val remainingScopes = decodePersistedStringListSpec(
+            preferences.getString(KEY_THREAD_TIMELINE_CACHE_SCOPES, null)
+        ).filterNot { it == normalizedScopeKey }
+        val editor = preferences.edit()
+            .putString(KEY_THREAD_TIMELINE_CACHE_SCOPES, encodePersistedStringListSpec(remainingScopes))
+            .remove(threadTimelineScopeIndexKey(normalizedScopeKey))
+        threadIds.forEach { threadId ->
+            editor.remove(threadTimelineEntryKey(normalizedScopeKey, threadId))
+        }
+        editor.apply()
+    }
+
     private fun sanitizeUnreadableSecureState(): SecureStateStartupReport {
         val savedRelaySessionState = secureStore.readStringState(KEY_SAVED_RELAY_SESSION)
         val pairingState = secureStore.readStringState(KEY_PAIRING)
@@ -253,7 +357,32 @@ open class AndrodexPersistence internal constructor(
         secureStore.remove(KEY_PAIRING)
     }
 
+    private fun clearAllPersistedThreadTimelines() {
+        val preferences = timelineCachePreferences ?: return
+        val scopeKeys = decodePersistedStringListSpec(
+            preferences.getString(KEY_THREAD_TIMELINE_CACHE_SCOPES, null)
+        )
+        if (scopeKeys.isEmpty()) {
+            preferences.edit().remove(KEY_THREAD_TIMELINE_CACHE_SCOPES).apply()
+            return
+        }
+
+        val editor = preferences.edit().remove(KEY_THREAD_TIMELINE_CACHE_SCOPES)
+        scopeKeys.forEach { scopeKey ->
+            val threadIds = decodePersistedStringListSpec(
+                preferences.getString(threadTimelineScopeIndexKey(scopeKey), null)
+            )
+            editor.remove(threadTimelineScopeIndexKey(scopeKey))
+            threadIds.forEach { threadId ->
+                editor.remove(threadTimelineEntryKey(scopeKey, threadId))
+            }
+        }
+        editor.apply()
+    }
+
     private companion object {
+        const val THREAD_TIMELINE_CACHE_PREFS_NAME = "androdex.thread_timelines"
+        const val KEY_THREAD_TIMELINE_CACHE_SCOPES = "thread_timeline_cache_scopes"
         const val KEY_PAIRING = "pairing_payload"
         const val KEY_SAVED_RELAY_SESSION = "saved_relay_session"
         const val KEY_PHONE_IDENTITY = "phone_identity"
@@ -376,4 +505,325 @@ private fun decodeThreadRuntimeOverrideSpec(value: JSONObject): ThreadRuntimeOve
         overridesReasoning = value.optBoolean("overridesReasoning"),
         overridesServiceTier = value.optBoolean("overridesServiceTier"),
     )
+}
+
+internal fun decodePersistedThreadTimelineMessagesSpec(
+    rawValue: String?,
+    fallbackThreadId: String? = null,
+): List<ConversationMessage>? {
+    val normalizedRawValue = rawValue?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val payload = runCatching { JSONObject(normalizedRawValue) }.getOrNull() ?: return null
+    val items = payload.optJSONArray("messages") ?: return null
+    val decoded = mutableListOf<ConversationMessage>()
+    for (index in 0 until items.length()) {
+        val messageObject = items.optJSONObject(index) ?: continue
+        decodePersistedConversationMessageSpec(messageObject, fallbackThreadId)?.let(decoded::add)
+    }
+    return decoded.sortedBy { it.createdAtEpochMs }
+}
+
+internal fun encodePersistedThreadTimelineMessagesSpec(messages: List<ConversationMessage>): String {
+    val items = JSONArray()
+    messages.forEach { message ->
+        items.put(encodePersistedConversationMessageSpec(message))
+    }
+    return JSONObject()
+        .put("v", 1)
+        .put("messages", items)
+        .toString()
+}
+
+internal fun decodePersistedStringListSpec(rawValue: String?): List<String> {
+    val normalizedRawValue = rawValue?.trim()?.takeIf { it.isNotEmpty() } ?: return emptyList()
+    val items = runCatching { JSONArray(normalizedRawValue) }.getOrNull() ?: return emptyList()
+    return buildList {
+        for (index in 0 until items.length()) {
+            val value = items.optString(index).trim().takeIf { it.isNotEmpty() } ?: continue
+            if (value !in this) {
+                add(value)
+            }
+        }
+    }
+}
+
+internal fun encodePersistedStringListSpec(values: List<String>): String? {
+    if (values.isEmpty()) {
+        return null
+    }
+    val items = JSONArray()
+    val seen = linkedSetOf<String>()
+    values.forEach { value ->
+        val normalizedValue = value.trim()
+        if (normalizedValue.isNotEmpty() && seen.add(normalizedValue)) {
+            items.put(normalizedValue)
+        }
+    }
+    return items.takeIf { it.length() > 0 }?.toString()
+}
+
+private fun normalizeThreadTimelineScopeKey(value: String?): String? {
+    return value?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+private fun threadTimelineScopeIndexKey(scopeKey: String): String {
+    return "thread_timeline_scope.${encodedTimelinePreferenceSegment(scopeKey)}.index"
+}
+
+private fun threadTimelineEntryKey(scopeKey: String, threadId: String): String {
+    return "thread_timeline_scope.${encodedTimelinePreferenceSegment(scopeKey)}.thread.${encodedTimelinePreferenceSegment(threadId)}"
+}
+
+private fun encodedTimelinePreferenceSegment(value: String): String {
+    return Base64.getUrlEncoder()
+        .withoutPadding()
+        .encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+}
+
+private fun encodePersistedConversationMessageSpec(message: ConversationMessage): JSONObject {
+    return JSONObject()
+        .put("id", message.id)
+        .put("threadId", message.threadId)
+        .put("role", message.role.name)
+        .put("kind", message.kind.name)
+        .put("text", message.text)
+        .put("attachments", JSONArray().apply {
+            message.attachments.forEach { attachment ->
+                put(
+                    JSONObject()
+                        .put("id", attachment.id)
+                        .put("thumbnailBase64Jpeg", attachment.thumbnailBase64Jpeg)
+                        .put("payloadDataUrl", attachment.payloadDataUrl)
+                        .put("sourceUrl", attachment.sourceUrl)
+                )
+            }
+        })
+        .put("createdAtEpochMs", message.createdAtEpochMs)
+        .put("turnId", message.turnId)
+        .put("itemId", message.itemId)
+        .put("isStreaming", message.isStreaming)
+        .put("filePath", message.filePath)
+        .put("status", message.status)
+        .put("diffText", message.diffText)
+        .put("command", message.command)
+        .put("execution", message.execution?.let(::encodePersistedExecutionContentSpec) ?: JSONObject.NULL)
+        .put("planExplanation", message.planExplanation)
+        .put("planSteps", message.planSteps?.let(::encodePersistedPlanStepsSpec) ?: JSONObject.NULL)
+        .put("subagentAction", message.subagentAction?.let(::encodePersistedSubagentActionSpec) ?: JSONObject.NULL)
+}
+
+private fun decodePersistedConversationMessageSpec(
+    value: JSONObject,
+    fallbackThreadId: String?,
+): ConversationMessage? {
+    val id = value.optString("id").trim().ifEmpty { return null }
+    val threadId = value.optString("threadId").trim().ifEmpty { fallbackThreadId ?: return null }
+    val role = enumValueOfOrNull<ConversationRole>(value.optString("role").trim()) ?: return null
+    val kind = enumValueOfOrNull<ConversationKind>(value.optString("kind").trim()) ?: return null
+    return ConversationMessage(
+        id = id,
+        threadId = threadId,
+        role = role,
+        kind = kind,
+        text = value.optString("text"),
+        attachments = decodePersistedImageAttachmentsSpec(value.optJSONArray("attachments")),
+        createdAtEpochMs = value.optLong("createdAtEpochMs", 0L),
+        turnId = value.optString("turnId").trim().ifEmpty { null },
+        itemId = value.optString("itemId").trim().ifEmpty { null },
+        isStreaming = false,
+        filePath = value.optString("filePath").trim().ifEmpty { null },
+        status = value.optString("status").trim().ifEmpty { null },
+        diffText = value.optString("diffText").trim().ifEmpty { null },
+        command = value.optString("command").trim().ifEmpty { null },
+        execution = value.optJSONObject("execution")?.let(::decodePersistedExecutionContentSpec),
+        planExplanation = value.optString("planExplanation").trim().ifEmpty { null },
+        planSteps = value.optJSONArray("planSteps")?.let(::decodePersistedPlanStepsSpec),
+        subagentAction = value.optJSONObject("subagentAction")?.let(::decodePersistedSubagentActionSpec),
+    )
+}
+
+private fun encodePersistedExecutionContentSpec(value: ExecutionContent): JSONObject {
+    return JSONObject()
+        .put("kind", value.kind.name)
+        .put("title", value.title)
+        .put("status", value.status)
+        .put("summary", value.summary)
+        .put("output", value.output)
+        .put("details", JSONArray().apply {
+            value.details.forEach { detail ->
+                put(
+                    JSONObject()
+                        .put("label", detail.label)
+                        .put("value", detail.value)
+                        .put("isMonospace", detail.isMonospace)
+                )
+            }
+        })
+}
+
+private fun decodePersistedExecutionContentSpec(value: JSONObject): ExecutionContent? {
+    val kind = enumValueOfOrNull<ExecutionKind>(value.optString("kind").trim()) ?: return null
+    val title = value.optString("title").trim().ifEmpty { return null }
+    val status = value.optString("status").trim().ifEmpty { return null }
+    return ExecutionContent(
+        kind = kind,
+        title = title,
+        status = status,
+        summary = value.optString("summary").trim().ifEmpty { null },
+        output = value.optString("output").trim().ifEmpty { null },
+        details = buildList {
+            val details = value.optJSONArray("details") ?: return@buildList
+            for (index in 0 until details.length()) {
+                val detail = details.optJSONObject(index) ?: continue
+                val label = detail.optString("label").trim().ifEmpty { continue }
+                val text = detail.optString("value")
+                add(
+                    ExecutionDetail(
+                        label = label,
+                        value = text,
+                        isMonospace = detail.optBoolean("isMonospace"),
+                    )
+                )
+            }
+        },
+    )
+}
+
+private fun encodePersistedPlanStepsSpec(value: List<PlanStep>): JSONArray {
+    return JSONArray().apply {
+        value.forEach { step ->
+            put(
+                JSONObject()
+                    .put("text", step.text)
+                    .put("status", step.status)
+            )
+        }
+    }
+}
+
+private fun decodePersistedPlanStepsSpec(value: JSONArray): List<PlanStep> {
+    return buildList {
+        for (index in 0 until value.length()) {
+            val step = value.optJSONObject(index) ?: continue
+            val text = step.optString("text").trim().ifEmpty { continue }
+            add(
+                PlanStep(
+                    text = text,
+                    status = step.optString("status").trim().ifEmpty { null },
+                )
+            )
+        }
+    }
+}
+
+private fun encodePersistedSubagentActionSpec(value: SubagentAction): JSONObject {
+    val agentStates = JSONObject()
+    value.agentStates.forEach { (threadId, state) ->
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return@forEach
+        agentStates.put(
+            normalizedThreadId,
+            JSONObject()
+                .put("threadId", state.threadId)
+                .put("status", state.status)
+                .put("message", state.message)
+        )
+    }
+    return JSONObject()
+        .put("tool", value.tool)
+        .put("status", value.status)
+        .put("prompt", value.prompt)
+        .put("model", value.model)
+        .put("receiverThreadIds", JSONArray(value.receiverThreadIds))
+        .put("receiverAgents", JSONArray().apply {
+            value.receiverAgents.forEach { receiver ->
+                put(
+                    JSONObject()
+                        .put("threadId", receiver.threadId)
+                        .put("agentId", receiver.agentId)
+                        .put("nickname", receiver.nickname)
+                        .put("role", receiver.role)
+                        .put("model", receiver.model)
+                        .put("prompt", receiver.prompt)
+                )
+            }
+        })
+        .put("agentStates", agentStates)
+}
+
+private fun decodePersistedSubagentActionSpec(value: JSONObject): SubagentAction? {
+    val tool = value.optString("tool").trim().ifEmpty { return null }
+    val status = value.optString("status").trim().ifEmpty { return null }
+    return SubagentAction(
+        tool = tool,
+        status = status,
+        prompt = value.optString("prompt").trim().ifEmpty { null },
+        model = value.optString("model").trim().ifEmpty { null },
+        receiverThreadIds = buildList {
+            val threadIds = value.optJSONArray("receiverThreadIds") ?: return@buildList
+            for (index in 0 until threadIds.length()) {
+                val threadId = threadIds.optString(index).trim().ifEmpty { continue }
+                if (threadId !in this) {
+                    add(threadId)
+                }
+            }
+        },
+        receiverAgents = buildList {
+            val receivers = value.optJSONArray("receiverAgents") ?: return@buildList
+            for (index in 0 until receivers.length()) {
+                val receiver = receivers.optJSONObject(index) ?: continue
+                val threadId = receiver.optString("threadId").trim().ifEmpty { continue }
+                add(
+                    SubagentRef(
+                        threadId = threadId,
+                        agentId = receiver.optString("agentId").trim().ifEmpty { null },
+                        nickname = receiver.optString("nickname").trim().ifEmpty { null },
+                        role = receiver.optString("role").trim().ifEmpty { null },
+                        model = receiver.optString("model").trim().ifEmpty { null },
+                        prompt = receiver.optString("prompt").trim().ifEmpty { null },
+                    )
+                )
+            }
+        },
+        agentStates = buildMap {
+            val agentStates = value.optJSONObject("agentStates") ?: return@buildMap
+            val keys = agentStates.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val agentState = agentStates.optJSONObject(key) ?: continue
+                val threadId = agentState.optString("threadId").trim().ifEmpty { key.trim() }.ifEmpty { continue }
+                val state = agentState.optString("status").trim().ifEmpty { continue }
+                put(
+                    threadId,
+                    SubagentState(
+                        threadId = threadId,
+                        status = state,
+                        message = agentState.optString("message").trim().ifEmpty { null },
+                    )
+                )
+            }
+        },
+    )
+}
+
+private fun decodePersistedImageAttachmentsSpec(value: JSONArray?): List<ImageAttachment> {
+    return buildList {
+        val items = value ?: return@buildList
+        for (index in 0 until items.length()) {
+            val attachment = items.optJSONObject(index) ?: continue
+            val id = attachment.optString("id").trim().ifEmpty { continue }
+            val thumbnail = attachment.optString("thumbnailBase64Jpeg").trim().ifEmpty { continue }
+            add(
+                ImageAttachment(
+                    id = id,
+                    thumbnailBase64Jpeg = thumbnail,
+                    payloadDataUrl = attachment.optString("payloadDataUrl").trim().ifEmpty { null },
+                    sourceUrl = attachment.optString("sourceUrl").trim().ifEmpty { null },
+                )
+            )
+        }
+    }
+}
+
+private inline fun <reified T : Enum<T>> enumValueOfOrNull(value: String?): T? {
+    val normalizedValue = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return enumValues<T>().firstOrNull { it.name.equals(normalizedValue, ignoreCase = true) }
 }
