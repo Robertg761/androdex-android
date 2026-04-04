@@ -78,4 +78,36 @@ class AndrodexPersistenceThreadTimelineCacheTest {
         assertEquals("Recovered", decoded.single().text)
         assertFalse(decoded.single().isStreaming)
     }
+
+    @Test
+    fun encodeDecodePersistedThreadTimeline_sortsMessagesAndClearsStreamingFlagsForEveryRow() {
+        val encoded = encodePersistedThreadTimelineMessagesSpec(
+            listOf(
+                ConversationMessage(
+                    id = "assistant-2",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "Second",
+                    createdAtEpochMs = 20L,
+                    isStreaming = true,
+                ),
+                ConversationMessage(
+                    id = "assistant-1",
+                    threadId = "thread-1",
+                    role = ConversationRole.ASSISTANT,
+                    kind = ConversationKind.CHAT,
+                    text = "First",
+                    createdAtEpochMs = 10L,
+                    isStreaming = true,
+                ),
+            )
+        )
+
+        val decoded = decodePersistedThreadTimelineMessagesSpec(encoded, fallbackThreadId = "thread-1")
+
+        requireNotNull(decoded)
+        assertEquals(listOf("assistant-1", "assistant-2"), decoded.map { it.id })
+        assertEquals(listOf(false, false), decoded.map { it.isStreaming })
+    }
 }

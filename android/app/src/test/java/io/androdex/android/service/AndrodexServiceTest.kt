@@ -55,6 +55,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -406,6 +407,62 @@ class AndrodexServiceTest {
         assertSame(beforeUserRow, afterSnapshot.items.first())
         assertEquals("Hello", afterSnapshot.items.last().message.text)
         assertTrue(afterSnapshot.items.last().message.isStreaming)
+    }
+
+    @Test
+    fun reasoningDelta_structuralChangeRebuildsRenderSnapshotRows() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "user-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.USER,
+                        kind = ConversationKind.CHAT,
+                        text = "Prompt",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "user-item",
+                    ),
+                    ConversationMessage(
+                        id = "assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Answer",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-item",
+                        isStreaming = true,
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val beforeSnapshot = service.state.value.timelineRenderSnapshotsByThread.getValue("thread-1")
+        val beforeUserRow = beforeSnapshot.items.first()
+
+        service.processClientUpdate(
+            ClientUpdate.ReasoningDelta("thread-1", "turn-1", "thinking-item", "Planning")
+        )
+
+        val afterSnapshot = service.state.value.timelineRenderSnapshotsByThread.getValue("thread-1")
+        assertEquals(3, afterSnapshot.items.size)
+        assertNotSame(beforeUserRow, afterSnapshot.items.first())
+        assertEquals(ConversationKind.THINKING, afterSnapshot.items.last().message.kind)
     }
 
     @Test
@@ -772,6 +829,52 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun refreshThreads_keepsHydratedThreadWhenSummaryVersionIsUnchanged() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Cached reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.refreshThreads()
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertTrue("thread-1" in service.state.value.hydratedThreadIds)
+        assertEquals(listOf("Cached reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
+    }
+
+    @Test
     fun openThread_reloadsHydratedThreadAfterReconnect() = runTest {
         val repository = FakeRepository().apply {
             refreshedThreads = listOf(
@@ -847,6 +950,74 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun openThread_reselectingRunningHydratedThreadForcesFreshHistoryLoad() = runTest {
+        val repository = FakeRepository().apply {
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-stale",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Stale reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                        isStreaming = true,
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, 1_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-fresh",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Fresh reply",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-2",
+                        itemId = "assistant-2",
+                        isStreaming = true,
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-2",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-2",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(
+            listOf("Stale reply", "Fresh reply"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+        assertEquals("turn-2", service.state.value.activeTurnIdByThread["thread-1"])
+        assertTrue("thread-1" in service.state.value.runningThreadIds)
+    }
+
+    @Test
     fun createThread_reopeningClosedThreadReloadsHistory() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
@@ -862,6 +1033,23 @@ class AndrodexServiceTest {
         assertTrue(service.state.value.timelineByThread["thread-created"].orEmpty().isEmpty())
         assertTrue("thread-created" in service.state.value.hydratedThreadIds)
         assertEquals(listOf("thread-created"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun createThread_reselectingFreshEmptyThreadSkipsHostHydration() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.createThread()
+        advanceUntilIdle()
+
+        service.openThread("thread-created")
+        advanceUntilIdle()
+
+        assertEquals(emptyList<String>(), repository.loadedThreadIds)
+        assertTrue(service.state.value.timelineByThread["thread-created"].orEmpty().isEmpty())
+        assertTrue("thread-created" in service.state.value.hydratedThreadIds)
     }
 
     @Test

@@ -239,6 +239,49 @@ class ThreadTimelineFormattingTest {
     }
 
     @Test
+    fun updateThreadTimelineRenderSnapshotForAssistantTextChange_largeTimelineStreamingStaysOnFastPath() {
+        var messages = buildLargeStreamingTimelineMessages(messagePairs = 600)
+        val initialSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 1L,
+            messages = messages,
+        )
+        var snapshot = initialSnapshot
+        val firstStableRow = initialSnapshot.items.first()
+        val middleStableRow = initialSnapshot.items[initialSnapshot.items.lastIndex / 2]
+        val penultimateStableRow = initialSnapshot.items[initialSnapshot.items.lastIndex - 1]
+        val startedAtNs = System.nanoTime()
+
+        repeat(200) { iteration ->
+            val nextMessages = messages.toMutableList()
+            val lastIndex = nextMessages.lastIndex
+            nextMessages[lastIndex] = nextMessages[lastIndex].copy(
+                text = "assistant-stream-${iteration + 1}",
+                isStreaming = true,
+            )
+
+            val updatedSnapshot = updateThreadTimelineRenderSnapshotForAssistantTextChange(
+                previousSnapshot = snapshot,
+                previousMessages = messages,
+                nextMessages = nextMessages,
+                nextMessageRevision = snapshot.messageRevision + 1L,
+            )
+
+            assertNotNull(updatedSnapshot)
+            snapshot = requireNotNull(updatedSnapshot)
+            messages = nextMessages
+        }
+
+        val elapsedMs = (System.nanoTime() - startedAtNs) / 1_000_000L
+        assertSame(firstStableRow, snapshot.items.first())
+        assertSame(middleStableRow, snapshot.items[initialSnapshot.items.lastIndex / 2])
+        assertSame(penultimateStableRow, snapshot.items[initialSnapshot.items.lastIndex - 1])
+        assertSame(initialSnapshot.firstMessageIndexByTurnId, snapshot.firstMessageIndexByTurnId)
+        assertEquals(initialSnapshot.latestMessageIndex, snapshot.latestMessageIndex)
+        assertTrue("elapsedMs=$elapsedMs", elapsedMs < 5_000L)
+    }
+
+    @Test
     fun parseTimelineBodyBlocks_splitsParagraphsAndCodeFences() {
         val blocks = parseTimelineBodyBlocks(
             """
@@ -399,5 +442,36 @@ class ThreadTimelineFormattingTest {
             isStreaming = isStreaming,
             execution = execution,
         )
+    }
+
+    private fun buildLargeStreamingTimelineMessages(messagePairs: Int): List<ConversationMessage> {
+        return buildList(messagePairs * 2) {
+            repeat(messagePairs) { index ->
+                val turnId = "turn-${index + 1}"
+                add(
+                    chatMessage(
+                        id = "user-${index + 1}",
+                        role = ConversationRole.USER,
+                        createdAt = (index * 2L) + 1L,
+                    ).copy(
+                        turnId = turnId,
+                        itemId = "user-item-${index + 1}",
+                        text = "user-prompt-${index + 1}",
+                    )
+                )
+                add(
+                    chatMessage(
+                        id = "assistant-${index + 1}",
+                        role = ConversationRole.ASSISTANT,
+                        createdAt = (index * 2L) + 2L,
+                    ).copy(
+                        turnId = turnId,
+                        itemId = "assistant-item-${index + 1}",
+                        text = if (index == messagePairs - 1) "assistant-stream-0" else "assistant-reply-${index + 1}",
+                        isStreaming = index == messagePairs - 1,
+                    )
+                )
+            }
+        }
     }
 }
