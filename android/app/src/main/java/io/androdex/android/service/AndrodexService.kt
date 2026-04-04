@@ -42,6 +42,8 @@ import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.requestId
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.reviewRequestText
+import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
+import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CompletableDeferred
@@ -80,6 +82,13 @@ private data class SubagentIdentityEntry(
         get() = !nickname.isNullOrBlank() || !role.isNullOrBlank() || !agentId.isNullOrBlank()
 }
 
+data class ThreadTimelineState(
+    val threadId: String,
+    val rawMessages: List<ConversationMessage> = emptyList(),
+    val messageRevision: Long = 0L,
+    val renderSnapshot: ThreadTimelineRenderSnapshot = ThreadTimelineRenderSnapshot.empty(threadId),
+)
+
 data class AndrodexServiceState(
     val hasSavedPairing: Boolean = false,
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
@@ -94,7 +103,7 @@ data class AndrodexServiceState(
     val isLoadingThreadList: Boolean = false,
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
-    val timelineByThread: Map<String, List<ConversationMessage>> = emptyMap(),
+    val threadTimelineStateByThread: Map<String, ThreadTimelineState> = emptyMap(),
     val hydratedThreadIds: Set<String> = emptySet(),
     val hydratedThreadVersions: Map<String, Long?> = emptyMap(),
     val activeTurnIdByThread: Map<String, String> = emptyMap(),
@@ -132,8 +141,20 @@ data class AndrodexServiceState(
     val pendingApproval: ApprovalRequest? = null,
     val pendingToolInputsByThread: Map<String, Map<String, ToolUserInputRequest>> = emptyMap(),
 ) {
+    val timelineByThread: Map<String, List<ConversationMessage>>
+        get() = threadTimelineStateByThread.mapValues { (_, timelineState) -> timelineState.rawMessages }
+
+    val timelineRenderSnapshotsByThread: Map<String, ThreadTimelineRenderSnapshot>
+        get() = threadTimelineStateByThread.mapValues { (_, timelineState) -> timelineState.renderSnapshot }
+
     val messages: List<ConversationMessage>
-        get() = selectedThreadId?.let { timelineByThread[it] }.orEmpty()
+        get() = selectedThreadId?.let { threadTimelineStateByThread[it]?.rawMessages }.orEmpty()
+
+    val selectedThreadRenderSnapshot: ThreadTimelineRenderSnapshot?
+        get() = selectedThreadId?.let { threadTimelineStateByThread[it]?.renderSnapshot }
+
+    val selectedThreadMessageCount: Int
+        get() = selectedThreadRenderSnapshot?.messageCount ?: 0
 }
 
 class AndrodexService(
@@ -470,7 +491,10 @@ class AndrodexService(
                 selectedThreadId = thread.id,
                 selectedThreadTitle = thread.title.ifBlank { "Conversation" },
                 focusedTurnId = null,
-                timelineByThread = sanitized.timelineByThread + (thread.id to emptyList()),
+                threadTimelineStateByThread = sanitized.threadTimelineStateByThread.withThreadMessages(
+                    threadId = thread.id,
+                    rawMessages = emptyList(),
+                ),
                 hydratedThreadIds = sanitized.hydratedThreadIds + thread.id,
                 hydratedThreadVersions = sanitized.hydratedThreadVersions + (thread.id to threadHydrationVersion(thread)),
             )
@@ -501,8 +525,9 @@ class AndrodexService(
                     selectedThreadId = thread.id,
                     selectedThreadTitle = thread.title.ifBlank { "Conversation" },
                     focusedTurnId = null,
-                    timelineByThread = sanitized.timelineByThread + (
-                        thread.id to sanitized.timelineByThread[thread.id].orEmpty()
+                    threadTimelineStateByThread = sanitized.threadTimelineStateByThread.withThreadMessages(
+                        threadId = thread.id,
+                        rawMessages = sanitized.threadMessages(thread.id),
                     ),
                     hydratedThreadIds = sanitized.hydratedThreadIds + thread.id,
                     hydratedThreadVersions = sanitized.hydratedThreadVersions + (thread.id to threadHydrationVersion(thread)),
@@ -726,7 +751,10 @@ class AndrodexService(
                 } else {
                     current.selectedThreadTitle
                 },
-                timelineByThread = current.timelineByThread + (normalizedThreadId to result.messages),
+                threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
+                    threadId = normalizedThreadId,
+                    rawMessages = result.messages,
+                ),
                 hydratedThreadIds = current.hydratedThreadIds + normalizedThreadId,
                 hydratedThreadVersions = current.hydratedThreadVersions + (
                     normalizedThreadId to resolveHydratedThreadVersion(
@@ -770,8 +798,9 @@ class AndrodexService(
                 selectedThreadId = forkedThread.id,
                 selectedThreadTitle = forkedThread.title,
                 focusedTurnId = null,
-                timelineByThread = sanitized.timelineByThread + (
-                    forkedThread.id to sanitized.timelineByThread[forkedThread.id].orEmpty()
+                threadTimelineStateByThread = sanitized.threadTimelineStateByThread.withThreadMessages(
+                    threadId = forkedThread.id,
+                    rawMessages = sanitized.threadMessages(forkedThread.id),
                 ),
             )
         }
@@ -958,7 +987,7 @@ class AndrodexService(
                 isLoadingThreadList = isLoadingThreadList ?: current.isLoadingThreadList,
                 selectedThreadId = null,
                 selectedThreadTitle = null,
-                timelineByThread = emptyMap(),
+                threadTimelineStateByThread = emptyMap(),
                 hydratedThreadIds = emptySet(),
                 hydratedThreadVersions = emptyMap(),
                 activeTurnIdByThread = emptyMap(),
@@ -1088,7 +1117,7 @@ class AndrodexService(
             var mergedMessageCount = 0
             val mergeStartedAt = System.currentTimeMillis()
             stateFlow.update { current ->
-                val existingMessages = current.timelineByThread[threadId].orEmpty()
+                val existingMessages = current.threadMessages(threadId)
                 val keepStreamingRows = keepStreamingRowsOverride ?: isThreadConsideredRunning(threadId, current)
                 val mergedMessages = mergeThreadMessages(
                     threadId = threadId,
@@ -1103,7 +1132,10 @@ class AndrodexService(
                     } else {
                         current.selectedThreadTitle
                     },
-                    timelineByThread = current.timelineByThread + (threadId to mergedMessages),
+                    threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
+                        threadId = threadId,
+                        rawMessages = mergedMessages,
+                    ),
                     hydratedThreadIds = current.hydratedThreadIds + threadId,
                     hydratedThreadVersions = current.hydratedThreadVersions + (
                         threadId to resolveHydratedThreadVersion(
@@ -1264,13 +1296,14 @@ class AndrodexService(
                 threads = updatedThreads,
                 selectedThreadId = threadId,
                 selectedThreadTitle = result.thread?.title ?: current.selectedThreadTitle,
-                timelineByThread = current.timelineByThread + (
-                    threadId to mergeThreadMessages(
+                threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
+                    threadId = threadId,
+                    rawMessages = mergeThreadMessages(
                         threadId = threadId,
-                        existing = current.timelineByThread[threadId].orEmpty(),
+                        existing = current.threadMessages(threadId),
                         incoming = result.messages,
                         keepStreamingRows = isThreadConsideredRunning(threadId, current),
-                    )
+                    ),
                 ),
                 hydratedThreadIds = current.hydratedThreadIds + threadId,
                 hydratedThreadVersions = current.hydratedThreadVersions + (
@@ -1427,7 +1460,10 @@ class AndrodexService(
                         } else {
                             current.selectedThreadTitle
                         },
-                        timelineByThread = current.timelineByThread + (threadId to update.messages),
+                        threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
+                            threadId = threadId,
+                            rawMessages = update.messages,
+                        ),
                         hydratedThreadIds = current.hydratedThreadIds + threadId,
                         hydratedThreadVersions = current.hydratedThreadVersions + (
                             threadId to resolveHydratedThreadVersion(
@@ -1876,9 +1912,11 @@ class AndrodexService(
         transform: (List<ConversationMessage>) -> List<ConversationMessage>,
     ) {
         stateFlow.update { current ->
-            val existing = current.timelineByThread[threadId].orEmpty()
             current.copy(
-                timelineByThread = current.timelineByThread + (threadId to transform(existing)),
+                threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
+                    threadId = threadId,
+                    rawMessages = transform(current.threadMessages(threadId)),
+                ),
             )
         }
     }
@@ -2235,7 +2273,7 @@ class AndrodexService(
     private fun AndrodexServiceState.clearScopedStateForThread(threadId: String): AndrodexServiceState {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return this
         return copy(
-            timelineByThread = timelineByThread - normalizedThreadId,
+            threadTimelineStateByThread = threadTimelineStateByThread - normalizedThreadId,
             hydratedThreadIds = hydratedThreadIds - normalizedThreadId,
             hydratedThreadVersions = hydratedThreadVersions - normalizedThreadId,
             activeTurnIdByThread = activeTurnIdByThread - normalizedThreadId,
@@ -2251,7 +2289,7 @@ class AndrodexService(
 
     private fun AndrodexServiceState.clearWorkspaceScopedThreadState(): AndrodexServiceState {
         return copy(
-            timelineByThread = emptyMap(),
+            threadTimelineStateByThread = emptyMap(),
             hydratedThreadIds = emptySet(),
             hydratedThreadVersions = emptyMap(),
             activeTurnIdByThread = emptyMap(),
@@ -2464,7 +2502,7 @@ class AndrodexService(
             it.copy(
                 selectedThreadId = previousState.selectedThreadId,
                 selectedThreadTitle = previousState.selectedThreadTitle,
-                timelineByThread = previousState.timelineByThread,
+                threadTimelineStateByThread = previousState.threadTimelineStateByThread,
                 hydratedThreadIds = previousState.hydratedThreadIds,
                 hydratedThreadVersions = previousState.hydratedThreadVersions,
                 activeTurnIdByThread = previousState.activeTurnIdByThread,
@@ -2771,8 +2809,8 @@ class AndrodexService(
 
     private fun refreshSubagentMessages() {
         stateFlow.update { current ->
-            val nextTimeline = current.timelineByThread.mapValues { (_, messages) ->
-                messages.map { message ->
+            val nextTimeline = current.threadTimelineStateByThread.mapValues { (_, timelineState) ->
+                val nextMessages = timelineState.rawMessages.map { message ->
                     if (message.kind != ConversationKind.SUBAGENT_ACTION || message.subagentAction == null) {
                         message
                     } else {
@@ -2783,10 +2821,62 @@ class AndrodexService(
                         )
                     }
                 }
+                timelineState.withRawMessages(nextMessages)
             }
-            current.copy(timelineByThread = nextTimeline)
+            current.copy(threadTimelineStateByThread = nextTimeline)
         }
     }
+}
+
+private fun AndrodexServiceState.threadMessages(threadId: String): List<ConversationMessage> {
+    val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
+    return threadTimelineStateByThread[normalizedThreadId]?.rawMessages.orEmpty()
+}
+
+private fun Map<String, ThreadTimelineState>.withThreadMessages(
+    threadId: String,
+    rawMessages: List<ConversationMessage>,
+): Map<String, ThreadTimelineState> {
+    val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return this
+    val existingState = this[normalizedThreadId]
+    val nextState = existingState.withRawMessages(
+        threadId = normalizedThreadId,
+        rawMessages = rawMessages,
+    )
+    return this + (normalizedThreadId to nextState)
+}
+
+private fun ThreadTimelineState?.withRawMessages(
+    threadId: String,
+    rawMessages: List<ConversationMessage>,
+): ThreadTimelineState {
+    val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return this
+        ?: ThreadTimelineState(threadId = threadId)
+    val existingState = this
+    if (existingState != null
+        && existingState.threadId == normalizedThreadId
+        && existingState.rawMessages == rawMessages
+    ) {
+        return existingState
+    }
+    val nextRevision = (existingState?.messageRevision ?: 0L) + 1L
+    return ThreadTimelineState(
+        threadId = normalizedThreadId,
+        rawMessages = rawMessages,
+        messageRevision = nextRevision,
+        renderSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = normalizedThreadId,
+            messageRevision = nextRevision,
+            messages = rawMessages,
+        ),
+    )
+}
+
+private fun ThreadTimelineState.withRawMessages(rawMessages: List<ConversationMessage>): ThreadTimelineState {
+    return (this as ThreadTimelineState?).withRawMessages(
+        threadId = threadId,
+        rawMessages = rawMessages,
+    )
 }
 
 private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputRequest(

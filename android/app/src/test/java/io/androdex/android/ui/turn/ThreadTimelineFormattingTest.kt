@@ -10,6 +10,9 @@ import io.androdex.android.model.ExecutionContent
 import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.QueuedTurnDraft
+import io.androdex.android.timeline.buildThreadAgentActivityText
+import io.androdex.android.timeline.buildThreadTimelineRenderItems
+import io.androdex.android.timeline.timelineScrollTargetIndex
 import io.androdex.android.ui.state.ToolUserInputOptionUiState
 import io.androdex.android.ui.state.ToolUserInputQuestionUiState
 import org.junit.Assert.assertEquals
@@ -49,7 +52,7 @@ class ThreadTimelineFormattingTest {
             chatMessage(id = "u1", role = ConversationRole.USER, createdAt = 420_000L),
         )
 
-        val contexts = buildBubbleContexts(messages)
+        val contexts = buildThreadTimelineRenderItems(messages)
 
         assertEquals(4, contexts.size)
         assertTrue(contexts[0].isFirstInGroup)
@@ -64,7 +67,7 @@ class ThreadTimelineFormattingTest {
 
     @Test
     fun buildAgentActivityText_prefersStructuredSystemState() {
-        val activity = buildAgentActivityText(
+        val activity = buildThreadAgentActivityText(
             listOf(
                 chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L),
                 systemMessage(

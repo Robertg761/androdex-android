@@ -49,6 +49,7 @@ import io.androdex.android.onboarding.FirstPairingOnboardingStore
 import io.androdex.android.onboarding.InMemoryFirstPairingOnboardingStore
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
+import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.ui.pairing.PairingPayloadValidationResult
 import io.androdex.android.ui.pairing.validatePairingPayload
 import kotlinx.coroutines.CoroutineStart
@@ -79,6 +80,8 @@ data class AndrodexUiState(
     val isLoadingThreadList: Boolean = false,
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
+    val selectedThreadRenderSnapshot: ThreadTimelineRenderSnapshot? = null,
+    val selectedThreadMessageCount: Int = 0,
     val messages: List<ConversationMessage> = emptyList(),
     val focusedTurnId: String? = null,
     val activeTurnIdByThread: Map<String, String> = emptyMap(),
@@ -1689,7 +1692,7 @@ class MainViewModel(
             || current.isSendingMessage
             || current.isInterruptingSelectedThread
             || current.isThreadRunning(threadId)
-            || current.messages.isEmpty()
+            || current.selectedThreadMessageCount == 0
         ) {
             return
         }
@@ -1706,7 +1709,7 @@ class MainViewModel(
             || current.isSendingMessage
             || current.isInterruptingSelectedThread
             || current.isThreadRunning(threadId)
-            || current.messages.isEmpty()
+            || current.selectedThreadMessageCount == 0
         ) {
             return
         }
@@ -3029,7 +3032,7 @@ private fun applyServiceState(
         threadId = activeThreadId,
         stage = "MainViewModel.applyServiceState",
         extra = {
-            "serviceMessages=${serviceState.messages.size} threads=${serviceState.threads.size}"
+            "serviceMessages=${serviceState.selectedThreadMessageCount} threads=${serviceState.threads.size}"
         },
     ) {
         applyServiceStateSnapshot(current = current, serviceState = serviceState)
@@ -3087,7 +3090,9 @@ private fun applyServiceStateSnapshot(
         isLoadingThreadList = serviceState.isLoadingThreadList,
         selectedThreadId = serviceState.selectedThreadId,
         selectedThreadTitle = serviceState.selectedThreadTitle,
-        messages = serviceState.messages,
+        selectedThreadRenderSnapshot = serviceState.selectedThreadRenderSnapshot,
+        selectedThreadMessageCount = serviceState.selectedThreadMessageCount,
+        messages = serviceState.messages.takeIf { serviceState.selectedThreadRenderSnapshot == null } ?: emptyList(),
         focusedTurnId = serviceState.focusedTurnId,
         activeTurnIdByThread = serviceState.activeTurnIdByThread,
         runningThreadIds = serviceState.runningThreadIds,

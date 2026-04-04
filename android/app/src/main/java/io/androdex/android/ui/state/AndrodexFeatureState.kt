@@ -21,7 +21,6 @@ import io.androdex.android.model.ComposerMentionedFile
 import io.androdex.android.model.ComposerMentionedSkill
 import io.androdex.android.model.ComposerSendAvailability
 import io.androdex.android.model.ConnectionStatus
-import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.FuzzyFileMatch
 import io.androdex.android.model.GitBranchesWithStatusResult
 import io.androdex.android.model.GitRepoSyncResult
@@ -41,6 +40,8 @@ import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
 import io.androdex.android.model.requestId
+import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
+import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import java.net.URI
 import java.text.DateFormat
 import java.util.Date
@@ -218,7 +219,7 @@ internal data class ThreadTimelineUiState(
     val threadId: String,
     val title: String,
     val subtitle: String?,
-    val messages: List<ConversationMessage>,
+    val timeline: ThreadTimelineRenderSnapshot,
     val focusedTurnId: String?,
     val runState: ThreadRunBadgeUiState?,
     val isForkedThread: Boolean,
@@ -561,16 +562,27 @@ private fun AndrodexUiState.toProjectPickerUiState(): ProjectPickerUiState? {
 
 private fun AndrodexUiState.toThreadTimelineUiState(): ThreadTimelineUiState {
     val threadId = requireNotNull(selectedThreadId)
+    val timelineSnapshot = selectedThreadRenderSnapshot ?: buildThreadTimelineRenderSnapshot(
+        threadId = threadId,
+        messageRevision = 0L,
+        messages = messages,
+    )
     return ThreadOpenPerfLogger.measure(
         threadId = threadId,
         stage = "AndrodexFeatureState.toThreadTimelineUiState",
-        extra = { "messages=${messages.size} gitLoaded=${gitStateByThread[threadId] != null}" },
+        extra = { "messages=${timelineSnapshot.messageCount} gitLoaded=${gitStateByThread[threadId] != null}" },
     ) {
-        buildThreadTimelineUiState(threadId)
+        buildThreadTimelineUiState(
+            threadId = threadId,
+            timelineSnapshot = timelineSnapshot,
+        )
     }
 }
 
-private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): ThreadTimelineUiState {
+private fun AndrodexUiState.buildThreadTimelineUiState(
+    threadId: String,
+    timelineSnapshot: ThreadTimelineRenderSnapshot,
+): ThreadTimelineUiState {
     val selectedThread = threads.firstOrNull { it.id == threadId }
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val planModeSupported = CollaborationModeKind.PLAN in collaborationModes
@@ -627,10 +639,10 @@ private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): Thread
                     answers[question.id]?.trim()?.isNotEmpty() == true
                 },
             )
-        }
+    }
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
     val maintenanceActionBusy = isBusy || isSendingMessage || isInterruptingSelectedThread
-    val hasThreadHistory = messages.isNotEmpty()
+    val hasThreadHistory = timelineSnapshot.messageCount > 0
     val workingDirectory = selectedThread?.cwd
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -682,7 +694,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(threadId: String): Thread
         title = selectedThreadTitle ?: "Conversation",
         subtitle = selectedThread?.projectName
             ?.takeIf { it.isNotBlank() && it != (selectedThreadTitle ?: "Conversation") },
-        messages = messages,
+        timeline = timelineSnapshot,
         focusedTurnId = focusedTurnId,
         runState = threadRunBadge(threadId),
         isForkedThread = selectedThread?.forkedFromThreadId != null,

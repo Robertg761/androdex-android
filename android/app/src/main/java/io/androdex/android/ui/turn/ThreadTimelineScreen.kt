@@ -106,6 +106,7 @@ import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
+import io.androdex.android.timeline.timelineScrollTargetIndex as renderTimelineScrollTargetIndex
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.shared.RemodexButton
 import io.androdex.android.ui.shared.RemodexButtonStyle
@@ -133,12 +134,6 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 
-internal data class BubbleContext(
-    val message: ConversationMessage,
-    val isFirstInGroup: Boolean,
-    val isLastInGroup: Boolean,
-)
-
 internal sealed interface TimelineBodyBlock {
     data class Paragraph(val text: String) : TimelineBodyBlock
     data class CodeFence(val language: String?, val code: String) : TimelineBodyBlock
@@ -155,75 +150,6 @@ private fun runStateDotColor(runState: ThreadRunBadgeUiState?): Color = when (ru
     ThreadRunBadgeUiState.READY -> MaterialTheme.colorScheme.tertiary
     ThreadRunBadgeUiState.FAILED -> MaterialTheme.colorScheme.error
     null -> Color.Transparent
-}
-
-internal fun buildBubbleContexts(messages: List<ConversationMessage>): List<BubbleContext> {
-    if (messages.isEmpty()) return emptyList()
-    val result = mutableListOf<BubbleContext>()
-    for (i in messages.indices) {
-        val msg = messages[i]
-        val isSystem = msg.role == ConversationRole.SYSTEM
-        if (isSystem) {
-            result.add(BubbleContext(message = msg, isFirstInGroup = true, isLastInGroup = true))
-            continue
-        }
-        val prev = messages.getOrNull(i - 1)
-        val next = messages.getOrNull(i + 1)
-        fun sameGroup(a: ConversationMessage, b: ConversationMessage): Boolean {
-            if (a.role == ConversationRole.SYSTEM || b.role == ConversationRole.SYSTEM) return false
-            if (a.role != b.role) return false
-            if (a.role == ConversationRole.ASSISTANT && (a.kind != ConversationKind.CHAT || b.kind != ConversationKind.CHAT)) return false
-            if ((b.createdAtEpochMs - a.createdAtEpochMs) > 180_000L) return false
-            return true
-        }
-        val isSameGroupAsPrev = prev != null && sameGroup(prev, msg)
-        val isSameGroupAsNext = next != null && sameGroup(msg, next)
-        result.add(
-            BubbleContext(
-                message = msg,
-                isFirstInGroup = !isSameGroupAsPrev,
-                isLastInGroup = !isSameGroupAsNext,
-            )
-        )
-    }
-    return result
-}
-
-internal fun buildAgentActivityText(messages: List<ConversationMessage>): String? {
-    val isStreaming = messages.any { it.isStreaming }
-    if (!isStreaming) return null
-
-    val activeSystemMessage = messages.lastOrNull {
-        it.role == ConversationRole.SYSTEM && it.isStreaming
-    } ?: messages.lastOrNull { it.role == ConversationRole.SYSTEM }
-
-    return when {
-        activeSystemMessage == null -> "Agent is writing a response..."
-        activeSystemMessage.kind == ConversationKind.FILE_CHANGE -> {
-            val fileName = activeSystemMessage.filePath
-                ?.substringAfterLast('/')
-                ?.substringAfterLast('\\')
-            if (fileName != null) "Edited $fileName" else "Edited files"
-        }
-        activeSystemMessage.kind == ConversationKind.COMMAND -> {
-            val title = activeSystemMessage.execution?.title
-                ?: activeSystemMessage.command
-                ?: "command"
-            "Running: ${title.take(40)}"
-        }
-        activeSystemMessage.kind == ConversationKind.EXECUTION -> {
-            val execution = activeSystemMessage.execution
-            when {
-                execution == null -> "Running activity..."
-                execution.title.isBlank() -> "Running ${execution.label.lowercase()}..."
-                else -> "${execution.label}: ${execution.title.take(48)}"
-            }
-        }
-        activeSystemMessage.kind == ConversationKind.SUBAGENT_ACTION -> "Managing subagents..."
-        activeSystemMessage.kind == ConversationKind.THINKING -> "Thinking..."
-        activeSystemMessage.kind == ConversationKind.PLAN -> "Planning..."
-        else -> null
-    }
 }
 
 internal fun parseTimelineBodyBlocks(text: String): List<TimelineBodyBlock> {
@@ -306,22 +232,6 @@ internal fun queuedDraftSummaryText(draftCount: Int, isPaused: Boolean): String 
 
 internal fun pendingToolInputSummary(requestCount: Int): String {
     return if (requestCount == 1) "1 request waiting" else "$requestCount requests waiting"
-}
-
-internal fun timelineScrollTargetIndex(
-    messages: List<ConversationMessage>,
-    focusedTurnId: String?,
-): Int? {
-    if (messages.isEmpty()) {
-        return null
-    }
-    val normalizedFocusedTurnId = focusedTurnId?.trim()?.takeIf { it.isNotEmpty() }
-    if (normalizedFocusedTurnId == null) {
-        return messages.lastIndex
-    }
-    return messages.indexOfFirst { it.turnId == normalizedFocusedTurnId }
-        .takeIf { it >= 0 }
-        ?: messages.lastIndex
 }
 
 internal fun toolInputCustomFieldLabel(question: ToolUserInputQuestionUiState): String {
@@ -430,9 +340,9 @@ internal fun ThreadTimelineScreen(
         }
     }
 
-    LaunchedEffect(state.threadId, state.messages.size, state.focusedTurnId) {
-        val targetIndex = timelineScrollTargetIndex(
-            messages = state.messages,
+    LaunchedEffect(state.threadId, state.timeline.messageCount, state.focusedTurnId) {
+        val targetIndex = renderTimelineScrollTargetIndex(
+            snapshot = state.timeline,
             focusedTurnId = state.focusedTurnId,
         )
         if (targetIndex != null) {
@@ -440,24 +350,6 @@ internal fun ThreadTimelineScreen(
             if (state.focusedTurnId != null) {
                 onConsumeFocusTurn()
             }
-        }
-    }
-    val bubbleContexts = remember(state.threadId, state.messages) {
-        ThreadOpenPerfLogger.measure(
-            threadId = state.threadId,
-            stage = "ThreadTimelineScreen.buildBubbleContexts",
-            extra = { "messages=${state.messages.size}" },
-        ) {
-            buildBubbleContexts(state.messages)
-        }
-    }
-    val agentActivityText = remember(state.threadId, state.messages) {
-        ThreadOpenPerfLogger.measure(
-            threadId = state.threadId,
-            stage = "ThreadTimelineScreen.buildAgentActivityText",
-            extra = { "messages=${state.messages.size}" },
-        ) {
-            buildAgentActivityText(state.messages)
         }
     }
     val gitAffordance = remember(state.git) { buildGitAffordanceUiState(state.git) }
@@ -663,7 +555,7 @@ internal fun ThreadTimelineScreen(
                                 ForkedThreadBanner()
                             }
                         }
-                        items(bubbleContexts, key = { it.message.id }) { ctx ->
+                        items(state.timeline.items, key = { it.message.id }) { ctx ->
                             MessageBubble(
                                 message = ctx.message,
                                 isFirstInGroup = ctx.isFirstInGroup,
@@ -691,8 +583,8 @@ internal fun ThreadTimelineScreen(
                             SmallFloatingActionButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        if (state.messages.isNotEmpty()) {
-                                            listState.animateScrollToItem(state.messages.lastIndex)
+                                        state.timeline.latestMessageIndex?.let { latestIndex ->
+                                            listState.animateScrollToItem(latestIndex)
                                         }
                                     }
                                 },
@@ -776,7 +668,7 @@ internal fun ThreadTimelineScreen(
                 ) {
                     ComposerBar(
                         state = state.composer,
-                        activityText = agentActivityText,
+                        activityText = state.timeline.agentActivityText,
                         onTextChange = onComposerChanged,
                         onPlanModeChanged = onPlanModeChanged,
                         onSubagentsModeChanged = onSubagentsModeChanged,
