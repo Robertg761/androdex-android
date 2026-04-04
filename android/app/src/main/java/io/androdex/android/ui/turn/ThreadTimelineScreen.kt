@@ -106,6 +106,8 @@ import io.androdex.android.model.PlanStep
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentThreadPresentation
+import io.androdex.android.timeline.ThreadTimelineRenderItem
+import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.timelineScrollTargetIndex as renderTimelineScrollTargetIndex
 import io.androdex.android.ui.shared.BusyIndicator
 import io.androdex.android.ui.shared.RemodexButton
@@ -144,12 +146,86 @@ private data class TimelineStatusTone(
     val accent: Color,
 )
 
+internal data class ThreadTimelineComposeCache(
+    val threadId: String,
+    val messageRevision: Long,
+    val items: List<ThreadTimelineRenderItem>,
+    val latestMessageIndex: Int?,
+    val agentActivityText: String?,
+)
+
+internal data class ThreadTimelineAutoScrollState(
+    val threadId: String,
+    val messageCount: Int,
+    val focusedTurnId: String?,
+    val targetIndex: Int?,
+)
+
 @Composable
 private fun runStateDotColor(runState: ThreadRunBadgeUiState?): Color = when (runState) {
     ThreadRunBadgeUiState.RUNNING -> MaterialTheme.colorScheme.primary
     ThreadRunBadgeUiState.READY -> MaterialTheme.colorScheme.tertiary
     ThreadRunBadgeUiState.FAILED -> MaterialTheme.colorScheme.error
     null -> Color.Transparent
+}
+
+internal fun buildThreadTimelineComposeCache(
+    snapshot: ThreadTimelineRenderSnapshot,
+): ThreadTimelineComposeCache {
+    return ThreadOpenPerfLogger.measure(
+        threadId = snapshot.threadId,
+        stage = "ThreadTimelineScreen.buildComposeCache",
+        extra = { "messages=${snapshot.messageCount} revision=${snapshot.messageRevision}" },
+    ) {
+        ThreadTimelineComposeCache(
+            threadId = snapshot.threadId,
+            messageRevision = snapshot.messageRevision,
+            items = snapshot.items,
+            latestMessageIndex = snapshot.latestMessageIndex,
+            agentActivityText = snapshot.agentActivityText,
+        )
+    }
+}
+
+internal fun buildThreadTimelineScrollTarget(
+    snapshot: ThreadTimelineRenderSnapshot,
+    focusedTurnId: String?,
+): Int? {
+    return ThreadOpenPerfLogger.measure(
+        threadId = snapshot.threadId,
+        stage = "ThreadTimelineScreen.buildScrollTarget",
+        extra = {
+            "messages=${snapshot.messageCount} revision=${snapshot.messageRevision} focused=${focusedTurnId != null}"
+        },
+    ) {
+        renderTimelineScrollTargetIndex(
+            snapshot = snapshot,
+            focusedTurnId = focusedTurnId,
+        )
+    }
+}
+
+internal fun buildThreadTimelineAutoScrollState(
+    snapshot: ThreadTimelineRenderSnapshot,
+    focusedTurnId: String?,
+): ThreadTimelineAutoScrollState {
+    return ThreadOpenPerfLogger.measure(
+        threadId = snapshot.threadId,
+        stage = "ThreadTimelineScreen.buildAutoScrollState",
+        extra = {
+            "messages=${snapshot.messageCount} revision=${snapshot.messageRevision} focused=${focusedTurnId != null}"
+        },
+    ) {
+        ThreadTimelineAutoScrollState(
+            threadId = snapshot.threadId,
+            messageCount = snapshot.messageCount,
+            focusedTurnId = focusedTurnId?.trim()?.takeIf { it.isNotEmpty() },
+            targetIndex = buildThreadTimelineScrollTarget(
+                snapshot = snapshot,
+                focusedTurnId = focusedTurnId,
+            ),
+        )
+    }
 }
 
 internal fun parseTimelineBodyBlocks(text: String): List<TimelineBodyBlock> {
@@ -328,6 +404,19 @@ internal fun ThreadTimelineScreen(
     var overflowMenuExpanded by rememberSaveable { mutableStateOf(false) }
     var rollbackDialogOpen by rememberSaveable { mutableStateOf(false) }
     var cleanBackgroundTerminalsDialogOpen by rememberSaveable { mutableStateOf(false) }
+    val timelineCache = remember(state.timeline.threadId, state.timeline.messageRevision) {
+        buildThreadTimelineComposeCache(state.timeline)
+    }
+    val autoScrollState = remember(
+        state.timeline.threadId,
+        state.timeline.messageRevision,
+        state.focusedTurnId,
+    ) {
+        buildThreadTimelineAutoScrollState(
+            snapshot = state.timeline,
+            focusedTurnId = state.focusedTurnId,
+        )
+    }
     val showJumpToLatest by remember {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
@@ -340,14 +429,15 @@ internal fun ThreadTimelineScreen(
         }
     }
 
-    LaunchedEffect(state.threadId, state.timeline.messageCount, state.focusedTurnId) {
-        val targetIndex = renderTimelineScrollTargetIndex(
-            snapshot = state.timeline,
-            focusedTurnId = state.focusedTurnId,
-        )
-        if (targetIndex != null) {
-            listState.scrollToItem(targetIndex)
-            if (state.focusedTurnId != null) {
+    LaunchedEffect(
+        autoScrollState.threadId,
+        autoScrollState.messageCount,
+        autoScrollState.focusedTurnId,
+        autoScrollState.targetIndex,
+    ) {
+        if (autoScrollState.targetIndex != null) {
+            listState.scrollToItem(autoScrollState.targetIndex)
+            if (autoScrollState.focusedTurnId != null) {
                 onConsumeFocusTurn()
             }
         }
@@ -555,7 +645,7 @@ internal fun ThreadTimelineScreen(
                                 ForkedThreadBanner()
                             }
                         }
-                        items(state.timeline.items, key = { it.message.id }) { ctx ->
+                        items(timelineCache.items, key = { it.message.id }) { ctx ->
                             MessageBubble(
                                 message = ctx.message,
                                 isFirstInGroup = ctx.isFirstInGroup,
@@ -583,7 +673,7 @@ internal fun ThreadTimelineScreen(
                             SmallFloatingActionButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        state.timeline.latestMessageIndex?.let { latestIndex ->
+                                        timelineCache.latestMessageIndex?.let { latestIndex ->
                                             listState.animateScrollToItem(latestIndex)
                                         }
                                     }
@@ -668,7 +758,7 @@ internal fun ThreadTimelineScreen(
                 ) {
                     ComposerBar(
                         state = state.composer,
-                        activityText = state.timeline.agentActivityText,
+                        activityText = timelineCache.agentActivityText,
                         onTextChange = onComposerChanged,
                         onPlanModeChanged = onPlanModeChanged,
                         onSubagentsModeChanged = onSubagentsModeChanged,

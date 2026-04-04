@@ -11,6 +11,7 @@ import io.androdex.android.model.ExecutionKind
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.timeline.buildThreadAgentActivityText
+import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.buildThreadTimelineRenderItems
 import io.androdex.android.timeline.timelineScrollTargetIndex
 import io.androdex.android.ui.state.ToolUserInputOptionUiState
@@ -85,6 +86,81 @@ class ThreadTimelineFormattingTest {
         )
 
         assertEquals("Command: npm test", activity)
+    }
+
+    @Test
+    fun buildThreadTimelineComposeCache_preservesSnapshotDerivedFields() {
+        val snapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 7L,
+            messages = listOf(
+                chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+                systemMessage(
+                    id = "exec",
+                    kind = ConversationKind.EXECUTION,
+                    createdAt = 2_000L,
+                    isStreaming = true,
+                    execution = ExecutionContent(
+                        kind = ExecutionKind.COMMAND,
+                        title = "npm test",
+                        status = "running",
+                    ),
+                ).copy(turnId = "turn-1"),
+            ),
+        )
+
+        val cache = buildThreadTimelineComposeCache(snapshot)
+
+        assertEquals("thread-1", cache.threadId)
+        assertEquals(7L, cache.messageRevision)
+        assertEquals(snapshot.items, cache.items)
+        assertEquals(snapshot.latestMessageIndex, cache.latestMessageIndex)
+        assertEquals(snapshot.agentActivityText, cache.agentActivityText)
+    }
+
+    @Test
+    fun buildThreadTimelineScrollTarget_usesSnapshotTurnIndex() {
+        val snapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 3L,
+            messages = listOf(
+                chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+                systemMessage(id = "thinking", kind = ConversationKind.THINKING, createdAt = 2_000L).copy(turnId = "turn-2"),
+                chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 3_000L).copy(turnId = "turn-2"),
+            ),
+        )
+
+        assertEquals(1, buildThreadTimelineScrollTarget(snapshot, "turn-2"))
+        assertEquals(snapshot.latestMessageIndex, buildThreadTimelineScrollTarget(snapshot, "missing"))
+    }
+
+    @Test
+    fun buildThreadTimelineAutoScrollState_ignoresStreamingRevisionBumps() {
+        val messages = listOf(
+            chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+            chatMessage(id = "assistant", role = ConversationRole.ASSISTANT, createdAt = 2_000L).copy(turnId = "turn-2"),
+        )
+        val firstSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 1L,
+            messages = messages,
+        )
+        val streamedSnapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 2L,
+            messages = messages.mapIndexed { index, message ->
+                if (index == messages.lastIndex) {
+                    message.copy(text = "updated", isStreaming = true)
+                } else {
+                    message
+                }
+            },
+        )
+
+        assertEquals(
+            buildThreadTimelineAutoScrollState(firstSnapshot, null),
+            buildThreadTimelineAutoScrollState(streamedSnapshot, null),
+        )
     }
 
     @Test
