@@ -140,25 +140,18 @@ Path: `androdex-bridge/src/`
 
 - `index.js`: CLI/runtime entry coordination
 - `bridge.js`: main bridge server/orchestration logic
-- `codex-rpc-client.js`: JSON-RPC bridge to Codex
-- `codex-transport.js`: transport helpers for Codex runtime communication
-- `workspace-runtime.js`: host workspace activation/runtime binding
-- `workspace-handler.js`: workspace operations exposed to Android
-- `workspace-browser.js`: host-side folder browsing
+- `codex/`: Codex transport and RPC helpers
+- `workspace/`: workspace browsing, activation, and patch/revert operations
+- `pairing/`: QR output, trusted device persistence, and secure transport
+- `notifications/`: push registration, dedupe, service client, and completion tracking
+- `rollout/`: rollout watching and live mirroring
 - `git-handler.js`: git, branch, and worktree actions
-- `secure-transport.js`: encrypted session transport
-- `secure-device-state.js`: trusted device persistence
 - `session-state.js`: active session bookkeeping
 - `thread-context-handler.js`: thread-scoped context helpers
-- `notifications-handler.js`: push registration/completion handling
-- `push-notification-*.js`: push dedupe, service client, tracker
-- `rollout-live-mirror.js`: mirrors live rollout state toward Android
-- `rollout-watch.js`: rollout log watch support
 - `codex-desktop-refresher.js`: desktop refresh workaround logic
 - `macos-launch-agent.js`: launchd installation/control
 - `daemon-state.js`: daemon status persistence
 - `runtime-compat.js`: compatibility checks with host runtime features
-- `qr.js`: pairing QR output
 - `account-status.js`: account/status helpers
 - `scripts/codex-refresh.applescript`: macOS refresh helper
 
@@ -192,6 +185,7 @@ This folder contains working documentation, not runtime code.
 - `Docs/play-store/`: Play submission assets, review notes, policies
 - `Docs/local/`: local-only planning notes
 - `Docs/PRIVACY_POLICY.md`: documentation copy for privacy-related surfaces
+- `Docs/README.md`: lightweight index into the most useful docs
 
 ## Static Site
 

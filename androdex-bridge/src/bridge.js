@@ -2,7 +2,7 @@
 // Purpose: Runs Codex locally, bridges relay traffic, and coordinates desktop refreshes for Codex.app.
 // Layer: CLI service
 // Exports: startBridge
-// Depends on: ws, crypto, os, ./qr, ./codex-desktop-refresher, ./workspace-runtime, ./rollout-watch, ./runtime-compat
+// Depends on: ws, crypto, os, ./pairing/qr, ./codex-desktop-refresher, ./workspace/runtime, ./rollout/watch, ./runtime-compat
 
 const WebSocket = require("ws");
 const { randomBytes } = require("crypto");
@@ -11,24 +11,25 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
-const { createCodexRpcClient } = require("./codex-rpc-client");
-const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
-const { printQR } = require("./qr");
+const { createCodexRpcClient } = require("./codex/rpc-client");
+const { createThreadRolloutActivityWatcher } = require("./rollout/watch");
+const { printQR } = require("./pairing/qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
 const { composeSanitizedAuthStatusFromSettledResults } = require("./account-status");
 const { handleThreadContextRequest } = require("./thread-context-handler");
-const { handleWorkspaceRequest } = require("./workspace-handler");
-const { createNotificationsHandler } = require("./notifications-handler");
+const { handleWorkspaceRequest } = require("./workspace/handler");
+const { createNotificationsHandler } = require("./notifications/handler");
 const {
+  getTrustedPhoneRecoveryIdentities,
   loadOrCreateBridgeDeviceState,
   resolveBridgeRelaySession,
-} = require("./secure-device-state");
-const { createBridgeSecureTransport } = require("./secure-transport");
-const { createPushNotificationServiceClient } = require("./push-notification-service-client");
-const { createPushNotificationTracker } = require("./push-notification-tracker");
-const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
-const { createWorkspaceRuntime } = require("./workspace-runtime");
+} = require("./pairing/device-state");
+const { createBridgeSecureTransport } = require("./pairing/secure-transport");
+const { createPushNotificationServiceClient } = require("./notifications/service-client");
+const { createPushNotificationTracker } = require("./notifications/tracker");
+const { createRolloutLiveMirrorController } = require("./rollout/live-mirror");
+const { createWorkspaceRuntime } = require("./workspace/runtime");
 const {
   extractBridgeMessageContext,
   normalizeLegacyAndroidRpcMessage,
@@ -108,6 +109,13 @@ function startBridge({
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
       sendRelayRegistrationUpdate(nextDeviceState);
+    },
+    onRecoveryProvisioning(recoveryPayload) {
+      if (!recoveryPayload) {
+        return;
+      }
+      console.log("\nRecovery payload (save this somewhere safe for remote reinstall recovery):");
+      console.log(`${JSON.stringify(recoveryPayload)}\n`);
     },
   });
   const pushServiceClient = createPushNotificationServiceClient({
@@ -1060,18 +1068,33 @@ function buildMacRegistrationHeaders(deviceState) {
   if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
     headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
     headers["x-trusted-phone-public-key"] = registration.trustedPhonePublicKey;
+    if (registration.trustedPhoneRecoveryPublicKey) {
+      headers["x-trusted-phone-recovery-public-key"] = registration.trustedPhoneRecoveryPublicKey;
+    }
+    if (registration.trustedPhonePreviousRecoveryPublicKey) {
+      headers["x-trusted-phone-previous-recovery-public-key"] = registration.trustedPhonePreviousRecoveryPublicKey;
+    }
   }
   return headers;
 }
 
 function buildMacRegistration(deviceState) {
   const trustedPhoneEntry = Object.entries(deviceState?.trustedPhones || {})[0] || null;
+  const trustedPhoneRecoveryIdentities = trustedPhoneEntry
+    ? getTrustedPhoneRecoveryIdentities(deviceState, trustedPhoneEntry[0])
+    : [];
   return {
     macDeviceId: normalizeNonEmptyString(deviceState?.macDeviceId),
     macIdentityPublicKey: normalizeNonEmptyString(deviceState?.macIdentityPublicKey),
     displayName: normalizeNonEmptyString(os.hostname()),
     trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
     trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
+    trustedPhoneRecoveryPublicKey: normalizeNonEmptyString(
+      trustedPhoneRecoveryIdentities[0]?.recoveryIdentityPublicKey
+    ),
+    trustedPhonePreviousRecoveryPublicKey: normalizeNonEmptyString(
+      trustedPhoneRecoveryIdentities[1]?.recoveryIdentityPublicKey
+    ),
   };
 }
 

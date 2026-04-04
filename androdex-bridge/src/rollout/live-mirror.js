@@ -1,14 +1,14 @@
-// FILE: rollout-live-mirror.js
+// FILE: rollout/live-mirror.js
 // Purpose: Mirrors desktop-origin rollout activity back into live bridge notifications for Android catch-up.
 // Layer: CLI helper
 // Exports: createRolloutLiveMirrorController
-// Depends on: fs, ./rollout-watch
+// Depends on: fs, ./watch
 
 const fs = require("fs");
 const {
   findRecentRolloutFileForContextRead,
   resolveSessionsRoot,
-} = require("./rollout-watch");
+} = require("./watch");
 
 const DEFAULT_POLL_INTERVAL_MS = 700;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 5_000;

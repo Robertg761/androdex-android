@@ -1,4 +1,4 @@
-// FILE: qr.js
+// FILE: pairing/qr.js
 // Purpose: Prints the pairing QR payload that the mobile clients expect.
 // Layer: CLI helper
 // Exports: printQR

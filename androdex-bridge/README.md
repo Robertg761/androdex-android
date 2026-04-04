@@ -103,6 +103,17 @@ npm install
 npm start
 ```
 
+## Internal Structure
+
+The bridge source is grouped by responsibility so changes are easier to place without mixing unrelated concerns:
+
+- `src/codex/`: Codex process transport and JSON-RPC client helpers
+- `src/pairing/`: QR output, trusted-device persistence, and secure bridge transport
+- `src/notifications/`: push registration handling, dedupe, service client, and completion tracking
+- `src/rollout/`: rollout watching and live-mirror helpers
+- `src/workspace/`: workspace browsing, activation, and reverse-patch workflows
+- `src/`: top-level orchestration and shared helpers such as `bridge.js`, `git-handler.js`, `daemon-state.js`, and `macos-launch-agent.js`
+
 ## Release
 
 Publish the npm package from this directory, not from the repository root:

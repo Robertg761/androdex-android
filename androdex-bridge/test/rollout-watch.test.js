@@ -2,7 +2,7 @@
 // Purpose: Verifies rollout token parsing prefers last-turn usage over cumulative session totals.
 // Layer: Unit test
 // Exports: node:test suite
-// Depends on: node:test, node:assert/strict, ../src/rollout-watch
+// Depends on: node:test, node:assert/strict, ../src/rollout/watch
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -15,7 +15,7 @@ const {
   contextUsageFromTokenCountPayload,
   createThreadRolloutActivityWatcher,
   readLatestContextWindowUsage,
-} = require("../src/rollout-watch");
+} = require("../src/rollout/watch");
 
 test("contextUsageFromTokenCountPayload prefers last_token_usage totals", () => {
   const usage = contextUsageFromTokenCountPayload({

@@ -2,11 +2,11 @@
 // Purpose: Debounced Mac desktop refresh controller for Codex.app after phone-authored conversation changes.
 // Layer: CLI helper
 // Exports: CodexDesktopRefresher, readBridgeConfig
-// Depends on: child_process, path, ./rollout-watch
+// Depends on: child_process, path, ./rollout/watch
 
 const { execFile } = require("child_process");
 const path = require("path");
-const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
+const { createThreadRolloutActivityWatcher } = require("./rollout/watch");
 
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
 const DEFAULT_APP_PATH = "/Applications/Codex.app";

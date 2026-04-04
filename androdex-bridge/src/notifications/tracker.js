@@ -1,12 +1,12 @@
-// FILE: push-notification-tracker.js
+// FILE: notifications/tracker.js
 // Purpose: Tracks per-turn titles and previews so the bridge can emit completion pushes after the phone disconnects.
 // Layer: Bridge helper
 // Exports: createPushNotificationTracker
-// Depends on: ./push-notification-completion-dedupe
+// Depends on: ./completion-dedupe
 
 const {
   createPushNotificationCompletionDedupe,
-} = require("./push-notification-completion-dedupe");
+} = require("./completion-dedupe");
 
 const DEFAULT_PREVIEW_MAX_CHARS = 160;
 

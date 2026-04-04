@@ -1,4 +1,4 @@
-// FILE: workspace-browser.js
+// FILE: workspace/browser.js
 // Purpose: Enumerates host directories and formats workspace browse data for remote clients.
 // Layer: Bridge helper
 // Exports: workspace browsing helpers

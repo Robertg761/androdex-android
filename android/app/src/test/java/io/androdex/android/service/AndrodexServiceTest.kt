@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -4808,6 +4809,93 @@ class AndrodexServiceTest {
         assertEquals(0, repository.refreshThreadsCalls)
         assertEquals(0, repository.listRecentWorkspacesCalls)
     }
+
+    @Test
+    fun briefBackground_keepsSavedReconnectRetryAlive() = runTest {
+        var reconnectCalls = 0
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+            reconnectSavedResult = false
+            reconnectSavedAction = {
+                reconnectCalls += 1
+            }
+        }
+        val service = AndrodexService(
+            repository = repository,
+            scope = backgroundScope,
+            appBackgroundGraceDelayMs = 20_000L,
+        )
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+            )
+        )
+        advanceUntilIdle()
+
+        service.onAppForegrounded()
+        service.onAppBackgrounded()
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.RETRYING_SAVED_PAIRING,
+                detail = "Host temporarily unavailable",
+            )
+        )
+
+        advanceTimeBy(5_000L)
+        runCurrent()
+
+        assertEquals(1, reconnectCalls)
+    }
+
+    @Test
+    fun longBackground_waitsForForegroundBeforeRetryingSavedReconnect() = runTest {
+        var reconnectCalls = 0
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+            reconnectSavedResult = false
+            reconnectSavedAction = {
+                reconnectCalls += 1
+            }
+        }
+        val service = AndrodexService(
+            repository = repository,
+            scope = backgroundScope,
+            appBackgroundGraceDelayMs = 20_000L,
+        )
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+            )
+        )
+        advanceUntilIdle()
+
+        service.onAppForegrounded()
+        service.onAppBackgrounded()
+        advanceTimeBy(20_000L)
+        runCurrent()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.RETRYING_SAVED_PAIRING,
+                detail = "Host temporarily unavailable",
+            )
+        )
+        advanceTimeBy(5_000L)
+        runCurrent()
+
+        assertEquals(0, reconnectCalls)
+
+        service.onAppForegrounded()
+        runCurrent()
+
+        assertEquals(1, reconnectCalls)
+    }
 }
 
 private class ManualCoroutineDispatcher : CoroutineDispatcher() {
@@ -4846,6 +4934,7 @@ private class FakeRepository : AndrodexRepositoryContract {
         }
     val persistedThreadTimelineWrites = mutableListOf<Triple<String?, String, List<ConversationMessage>>>()
     var connectWithPairingPayloadAction: ((String) -> Unit)? = null
+    var connectWithRecoveryPayloadAction: ((String) -> Unit)? = null
     var reconnectSavedAction: (() -> Unit)? = null
     var refreshThreadsCalls = 0
     var listRecentWorkspacesCalls = 0
@@ -4882,6 +4971,10 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun connectWithPairingPayload(rawPayload: String) {
         connectWithPairingPayloadAction?.invoke(rawPayload)
+    }
+
+    override suspend fun connectWithRecoveryPayload(rawPayload: String) {
+        connectWithRecoveryPayloadAction?.invoke(rawPayload)
     }
 
     override suspend fun reconnectSaved(): Boolean {

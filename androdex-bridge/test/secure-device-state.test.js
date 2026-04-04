@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 const childProcess = require("child_process");
 
-const modulePath = path.resolve(__dirname, "../src/secure-device-state.js");
+const modulePath = path.resolve(__dirname, "../src/pairing/device-state.js");
 
 function withTempHome(optionsOrRun, maybeRun) {
   const options = typeof optionsOrRun === "function" ? {} : (optionsOrRun || {});
@@ -267,5 +267,50 @@ test("rememberTrustedPhone trims identifiers and replaces older trusted phone en
       "public-key-trimmed"
     );
     assert.deepEqual(Object.keys(updatedState.trustedPhones), ["phone-trimmed"]);
+  });
+});
+
+test("rememberTrustedPhone preserves the recovery credential that authorized a rotation", () => {
+  withTempHome(({ secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const firstRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-a",
+      recoveryIdentityPrivateKey: "recovery-private-a",
+    };
+    const supersededRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-b",
+      recoveryIdentityPrivateKey: "recovery-private-b",
+    };
+    const nextRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-c",
+      recoveryIdentityPrivateKey: "recovery-private-c",
+    };
+
+    const trustedState = secureDeviceState.rememberTrustedPhone(
+      initialState,
+      "phone-old",
+      "phone-public-old",
+      {
+        recoveryIdentity: supersededRecoveryIdentity,
+        previousRecoveryIdentity: firstRecoveryIdentity,
+      }
+    );
+    const rotatedState = secureDeviceState.rememberTrustedPhone(
+      trustedState,
+      "phone-new",
+      "phone-public-new",
+      {
+        recoveryIdentity: nextRecoveryIdentity,
+        previousRecoveryIdentity: firstRecoveryIdentity,
+      }
+    );
+
+    assert.deepEqual(rotatedState.trustedPhones, {
+      "phone-new": "phone-public-new",
+    });
+    assert.deepEqual(
+      secureDeviceState.getTrustedPhoneRecoveryIdentities(rotatedState, "phone-new"),
+      [nextRecoveryIdentity, firstRecoveryIdentity]
+    );
   });
 });

@@ -392,6 +392,7 @@ private class ComposerRepository : AndrodexRepositoryContract {
     override fun startupNotice(): String? = null
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
+    override suspend fun connectWithRecoveryPayload(rawPayload: String) = Unit
 
     override suspend fun reconnectSaved(): Boolean = true
 

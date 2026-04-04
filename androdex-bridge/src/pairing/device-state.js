@@ -1,7 +1,7 @@
-// FILE: secure-device-state.js
+// FILE: pairing/device-state.js
 // Purpose: Persists canonical bridge identity and trusted-phone state for local QR pairing.
 // Layer: CLI helper
-// Exports: loadOrCreateBridgeDeviceState, resetBridgeDeviceState, rememberTrustedPhone, getTrustedPhonePublicKey, resolveBridgeRelaySession
+// Exports: loadOrCreateBridgeDeviceState, resetBridgeDeviceState, rememberTrustedPhone, getTrustedPhonePublicKey, getTrustedPhoneRecoveryIdentity, resolveBridgeRelaySession
 // Depends on: fs, os, path, crypto, child_process
 
 const fs = require("fs");
@@ -66,11 +66,32 @@ function resolveBridgeRelaySession(state) {
   };
 }
 
-function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { persist = true } = {}) {
+function rememberTrustedPhone(
+  state,
+  phoneDeviceId,
+  phoneIdentityPublicKey,
+  {
+    recoveryIdentity = null,
+    previousRecoveryIdentity = null,
+    persist = true,
+  } = {}
+) {
   const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
   const normalizedPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
   if (!normalizedDeviceId || !normalizedPublicKey) {
     return state;
+  }
+
+  const nextRecoveryIdentities = {};
+  const normalizedRecoveryIdentity = normalizeRecoveryIdentity(recoveryIdentity);
+  const normalizedPreviousRecoveryIdentity = normalizeRecoveryIdentity(previousRecoveryIdentity);
+  const nextRecoveryIdentityChain = buildNextRecoveryIdentityChain({
+    existingRecoveryIdentities: getTrustedPhoneRecoveryIdentities(state, normalizedDeviceId),
+    nextRecoveryIdentity: normalizedRecoveryIdentity,
+    previousRecoveryIdentity: normalizedPreviousRecoveryIdentity,
+  });
+  if (nextRecoveryIdentityChain) {
+    nextRecoveryIdentities[normalizedDeviceId] = nextRecoveryIdentityChain;
   }
 
   const nextState = normalizeBridgeDeviceState({
@@ -78,6 +99,7 @@ function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { pe
     trustedPhones: {
       [normalizedDeviceId]: normalizedPublicKey,
     },
+    trustedPhoneRecoveryIdentities: nextRecoveryIdentities,
   });
   if (persist) {
     writeBridgeDeviceState(nextState);
@@ -91,6 +113,27 @@ function getTrustedPhonePublicKey(state, phoneDeviceId) {
     return null;
   }
   return state.trustedPhones?.[normalizedDeviceId] || null;
+}
+
+function getTrustedPhoneRecoveryIdentity(state, phoneDeviceId) {
+  return getTrustedPhoneRecoveryIdentities(state, phoneDeviceId)[0] || null;
+}
+
+function getTrustedPhoneRecoveryIdentities(state, phoneDeviceId) {
+  const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
+  if (!normalizedDeviceId) {
+    return [];
+  }
+  const recoveryIdentityChain = normalizeRecoveryIdentityChain(
+    state.trustedPhoneRecoveryIdentities?.[normalizedDeviceId]
+  );
+  if (!recoveryIdentityChain) {
+    return [];
+  }
+  return [
+    recoveryIdentityChain.current,
+    recoveryIdentityChain.previous,
+  ].filter(Boolean);
 }
 
 function hasTrustedPhones(state) {
@@ -108,6 +151,7 @@ function createBridgeDeviceState() {
     macIdentityPublicKey: base64UrlToBase64(publicJwk.x),
     macIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
     trustedPhones: {},
+    trustedPhoneRecoveryIdentities: {},
   };
 }
 
@@ -303,13 +347,119 @@ function normalizeBridgeDeviceState(rawState) {
     }
   }
 
+  const trustedPhoneRecoveryIdentities = {};
+  if (rawState?.trustedPhoneRecoveryIdentities && typeof rawState.trustedPhoneRecoveryIdentities === "object") {
+    for (const [deviceId, recoveryIdentity] of Object.entries(rawState.trustedPhoneRecoveryIdentities)) {
+      const normalizedDeviceId = normalizeNonEmptyString(deviceId);
+      const normalizedRecoveryIdentity = normalizeRecoveryIdentityChain(recoveryIdentity);
+      if (!normalizedDeviceId || !normalizedRecoveryIdentity) {
+        continue;
+      }
+      trustedPhoneRecoveryIdentities[normalizedDeviceId] = normalizedRecoveryIdentity;
+    }
+  }
+
   return {
     version: 1,
     macDeviceId,
     macIdentityPublicKey,
     macIdentityPrivateKey,
     trustedPhones,
+    trustedPhoneRecoveryIdentities,
   };
+}
+
+function normalizeRecoveryIdentity(rawIdentity) {
+  const recoveryIdentityPublicKey = normalizeNonEmptyString(rawIdentity?.recoveryIdentityPublicKey);
+  const recoveryIdentityPrivateKey = normalizeNonEmptyString(rawIdentity?.recoveryIdentityPrivateKey);
+  if (!recoveryIdentityPublicKey) {
+    return null;
+  }
+  return recoveryIdentityPrivateKey
+    ? {
+      recoveryIdentityPublicKey,
+      recoveryIdentityPrivateKey,
+    }
+    : {
+      recoveryIdentityPublicKey,
+    };
+}
+
+function normalizeRecoveryIdentityChain(rawIdentity) {
+  const directIdentity = normalizeRecoveryIdentity(rawIdentity);
+  if (directIdentity) {
+    return {
+      current: directIdentity,
+      previous: null,
+    };
+  }
+
+  const current = normalizeRecoveryIdentity(rawIdentity?.current);
+  let previous = normalizeRecoveryIdentity(rawIdentity?.previous);
+  if (!current && !previous) {
+    return null;
+  }
+  if (!current) {
+    return {
+      current: previous,
+      previous: null,
+    };
+  }
+  if (sameRecoveryIdentity(current, previous)) {
+    previous = null;
+  }
+  return {
+    current,
+    previous,
+  };
+}
+
+function buildNextRecoveryIdentityChain({
+  existingRecoveryIdentities,
+  nextRecoveryIdentity,
+  previousRecoveryIdentity,
+}) {
+  const [existingCurrentRecoveryIdentity, existingPreviousRecoveryIdentity] = existingRecoveryIdentities;
+  if (!nextRecoveryIdentity) {
+    if (!existingCurrentRecoveryIdentity) {
+      return null;
+    }
+    return {
+      current: existingCurrentRecoveryIdentity,
+      previous: existingPreviousRecoveryIdentity || null,
+    };
+  }
+
+  if (
+    sameRecoveryIdentity(nextRecoveryIdentity, existingCurrentRecoveryIdentity)
+    && !previousRecoveryIdentity
+  ) {
+    return existingCurrentRecoveryIdentity
+      ? {
+        current: existingCurrentRecoveryIdentity,
+        previous: existingPreviousRecoveryIdentity || null,
+      }
+      : null;
+  }
+
+  const fallbackRecoveryIdentity = previousRecoveryIdentity
+    || existingCurrentRecoveryIdentity
+    || existingPreviousRecoveryIdentity
+    || null;
+  return {
+    current: nextRecoveryIdentity,
+    previous: sameRecoveryIdentity(nextRecoveryIdentity, fallbackRecoveryIdentity)
+      ? null
+      : fallbackRecoveryIdentity,
+  };
+}
+
+function sameRecoveryIdentity(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.recoveryIdentityPublicKey === right.recoveryIdentityPublicKey
+  );
 }
 
 function corruptedStateError(source, cause) {
@@ -337,6 +487,8 @@ function base64UrlToBase64(value) {
 module.exports = {
   hasTrustedPhones,
   getTrustedPhonePublicKey,
+  getTrustedPhoneRecoveryIdentity,
+  getTrustedPhoneRecoveryIdentities,
   loadOrCreateBridgeDeviceState,
   rememberTrustedPhone,
   resetBridgeDeviceState,

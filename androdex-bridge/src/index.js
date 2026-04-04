@@ -2,12 +2,12 @@
 // Purpose: Small entrypoint wrapper for bridge lifecycle commands.
 // Layer: CLI entry
 // Exports: bridge lifecycle, pairing reset, thread resume/watch, and macOS service helpers.
-// Depends on: ./bridge, ./secure-device-state, ./session-state, ./rollout-watch, ./macos-launch-agent
+// Depends on: ./bridge, ./pairing/device-state, ./session-state, ./rollout/watch, ./macos-launch-agent
 
 const { startBridge } = require("./bridge");
-const { resetBridgeDeviceState } = require("./secure-device-state");
+const { resetBridgeDeviceState } = require("./pairing/device-state");
 const { openLastActiveThread } = require("./session-state");
-const { watchThreadRollout } = require("./rollout-watch");
+const { watchThreadRollout } = require("./rollout/watch");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const {
   getMacOSBridgeServiceStatus,

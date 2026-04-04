@@ -50,8 +50,8 @@ import io.androdex.android.onboarding.InMemoryFirstPairingOnboardingStore
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
-import io.androdex.android.ui.pairing.PairingPayloadValidationResult
-import io.androdex.android.ui.pairing.validatePairingPayload
+import io.androdex.android.ui.pairing.ConnectPayloadValidationResult
+import io.androdex.android.ui.pairing.validateConnectPayload
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1166,16 +1166,17 @@ class MainViewModel(
             return
         }
         service.recordFreshPairingPayloadCaptured()
-        when (val validation = validatePairingPayload(payload)) {
-            is PairingPayloadValidationResult.Error -> {
+        when (val validation = validateConnectPayload(payload)) {
+            is ConnectPayloadValidationResult.Error -> {
                 service.reportError(validation.message)
                 return
             }
-            is PairingPayloadValidationResult.UpdateRequired -> {
+            is ConnectPayloadValidationResult.UpdateRequired -> {
                 service.reportError(validation.message)
                 return
             }
-            is PairingPayloadValidationResult.Success -> Unit
+            is ConnectPayloadValidationResult.Success,
+            is ConnectPayloadValidationResult.RecoverySuccess -> Unit
         }
 
         if (fromExternalPayload) {
@@ -1185,7 +1186,15 @@ class MainViewModel(
         viewModelScope.launch {
             uiStateFlow.update { it.copy(isBusy = true, busyLabel = null) }
             try {
-                service.connectWithPairingPayload(payload, isFreshPairing = true)
+                when (validateConnectPayload(payload)) {
+                    is ConnectPayloadValidationResult.Success -> {
+                        service.connectWithPairingPayload(payload, isFreshPairing = true)
+                    }
+                    is ConnectPayloadValidationResult.RecoverySuccess -> {
+                        service.connectWithRecoveryPayload(payload)
+                    }
+                    else -> error("Validated payload unexpectedly failed on second pass.")
+                }
             } catch (error: Throwable) {
                 service.failFreshPairingAttempt()
                 service.reportError(error.message ?: "Request failed.")
