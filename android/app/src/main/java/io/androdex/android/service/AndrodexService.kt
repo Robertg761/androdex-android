@@ -468,7 +468,6 @@ class AndrodexService(
 
             val shouldForceHydrate = forceRefresh
                 || isThreadConsideredRunning(threadId, previousState)
-                || previousState.selectedThreadId != threadId
             val hydrateStartedAt = System.currentTimeMillis()
             try {
                 ensureThreadHydrated(threadId, forceRefresh = shouldForceHydrate)

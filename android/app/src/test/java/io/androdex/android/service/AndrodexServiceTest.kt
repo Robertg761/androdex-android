@@ -1018,7 +1018,7 @@ class AndrodexServiceTest {
     }
 
     @Test
-    fun createThread_reopeningClosedThreadReloadsHistory() = runTest {
+    fun createThread_reopeningClosedEmptyThreadSkipsHostHydration() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
         advanceUntilIdle()
@@ -1032,7 +1032,7 @@ class AndrodexServiceTest {
 
         assertTrue(service.state.value.timelineByThread["thread-created"].orEmpty().isEmpty())
         assertTrue("thread-created" in service.state.value.hydratedThreadIds)
-        assertEquals(listOf("thread-created"), repository.loadedThreadIds)
+        assertEquals(emptyList<String>(), repository.loadedThreadIds)
     }
 
     @Test
@@ -1050,6 +1050,80 @@ class AndrodexServiceTest {
         assertEquals(emptyList<String>(), repository.loadedThreadIds)
         assertTrue(service.state.value.timelineByThread["thread-created"].orEmpty().isEmpty())
         assertTrue("thread-created" in service.state.value.hydratedThreadIds)
+    }
+
+    @Test
+    fun openThread_switchingBackToHydratedIdleThreadSkipsReload() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResultsByThreadId["thread-a"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-a", "Thread A", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-a",
+                        threadId = "thread-a",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Reply A",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-a",
+                        itemId = "assistant-a",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            loadThreadResultsByThreadId["thread-b"] = ThreadLoadResult(
+                thread = ThreadSummary("thread-b", "Thread B", null, null, 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-b",
+                        threadId = "thread-b",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Reply B",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-b",
+                        itemId = "assistant-b",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-b",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-a", "Thread A", null, null, 1_000L, 1_000L),
+                    ThreadSummary("thread-b", "Thread B", null, null, 1_000L, 1_000L),
+                )
+            )
+        )
+
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        service.openThread("thread-b")
+        advanceUntilIdle()
+
+        service.openThread("thread-a")
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-a", "thread-b"), repository.loadedThreadIds)
+        assertEquals(listOf("Reply A"), service.state.value.timelineByThread["thread-a"].orEmpty().map { it.text })
+        assertEquals("thread-a", service.state.value.selectedThreadId)
     }
 
     @Test
