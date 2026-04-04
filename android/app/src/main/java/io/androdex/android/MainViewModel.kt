@@ -1610,9 +1610,9 @@ class MainViewModel(
         }
     }
 
-    fun respondToApproval(accept: Boolean) {
+    fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         runBusyAction("Sending approval...") {
-            service.respondToApproval(accept)
+            service.respondToApproval(request, accept)
         }
     }
 

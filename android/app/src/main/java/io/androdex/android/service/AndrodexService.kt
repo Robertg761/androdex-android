@@ -688,8 +688,7 @@ class AndrodexService(
         }
     }
 
-    suspend fun respondToApproval(accept: Boolean) {
-        val request = stateFlow.value.pendingApproval ?: return
+    suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         repository.respondToApproval(request, accept)
     }
 

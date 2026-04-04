@@ -196,8 +196,8 @@ fun AndrodexApp(viewModel: MainViewModel) {
     if (appState.overlay.approvalRequest != null) {
         ApprovalDialog(
             request = appState.overlay.approvalRequest,
-            onApprove = { viewModel.respondToApproval(true) },
-            onDecline = { viewModel.respondToApproval(false) },
+            onApprove = { viewModel.respondToApproval(appState.overlay.approvalRequest, true) },
+            onDecline = { viewModel.respondToApproval(appState.overlay.approvalRequest, false) },
         )
     }
     appState.overlay.errorMessage?.let { message ->

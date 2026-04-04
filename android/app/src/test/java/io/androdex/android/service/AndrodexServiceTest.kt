@@ -228,6 +228,36 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun respondToApproval_usesExplicitRequestInsteadOfCurrentPendingApproval() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val renderedRequest = ApprovalRequest(
+            idValue = "request-rendered",
+            method = "item/commandExecution/requestApproval",
+            command = "rm -rf /tmp/demo",
+            reason = "Needs approval",
+            threadId = "thread-1",
+            turnId = "turn-1",
+        )
+        val replacementRequest = renderedRequest.copy(
+            idValue = "request-replacement",
+            command = "echo replacement",
+        )
+
+        repository.emit(ClientUpdate.ApprovalRequested(renderedRequest))
+        advanceUntilIdle()
+        repository.emit(ClientUpdate.ApprovalRequested(replacementRequest))
+        advanceUntilIdle()
+
+        service.respondToApproval(renderedRequest, accept = true)
+
+        assertEquals(renderedRequest, repository.lastApprovalRequest)
+        assertEquals(true, repository.lastApprovalAccepted)
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"
@@ -4917,6 +4947,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     val rollbackRequests = mutableListOf<String>()
     val cleanedBackgroundTerminalThreadIds = mutableListOf<String>()
     val forkRequests = mutableListOf<String>()
+    var lastApprovalRequest: ApprovalRequest? = null
+    var lastApprovalAccepted: Boolean? = null
     var lastToolInputRequest: ToolUserInputRequest? = null
     var lastToolInputResponse: ToolUserInputResponse? = null
     var lastRejectedToolInputRequest: ToolUserInputRequest? = null
@@ -5047,7 +5079,10 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
 
-    override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) = Unit
+    override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
+        lastApprovalRequest = request
+        lastApprovalAccepted = accept
+    }
 
     override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
         lastToolInputRequest = request
