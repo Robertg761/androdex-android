@@ -2,7 +2,7 @@
 // Purpose: Owns macOS-only launchd install/start/stop/status helpers for the background Androdex bridge.
 // Layer: CLI helper
 // Exports: start/stop/status helpers plus the launchd service runner used by `androdex up`.
-// Depends on: child_process, fs, os, path, ./bridge, ./daemon-state, ./codex-desktop-refresher, ./qr, ./secure-device-state
+// Depends on: child_process, fs, os, path, ./bridge, ./daemon-state, ./codex-desktop-refresher, ./pairing/qr, ./pairing/device-state
 
 const { execFileSync } = require("child_process");
 const fs = require("fs");
@@ -10,12 +10,12 @@ const os = require("os");
 const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
-const { printQR } = require("./qr");
+const { printQR } = require("./pairing/qr");
 const {
   hasTrustedPhones,
   loadOrCreateBridgeDeviceState,
   resetBridgeDeviceState,
-} = require("./secure-device-state");
+} = require("./pairing/device-state");
 const {
   clearBridgeStatus,
   clearPairingSession,

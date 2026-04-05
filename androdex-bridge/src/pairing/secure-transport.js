@@ -1,8 +1,8 @@
-// FILE: secure-transport.js
+// FILE: pairing/secure-transport.js
 // Purpose: Owns the bridge-side E2EE handshake, envelope crypto, and reconnect catch-up buffer.
 // Layer: CLI helper
 // Exports: createBridgeSecureTransport, SECURE_PROTOCOL_VERSION, PAIRING_QR_VERSION
-// Depends on: crypto, ./secure-device-state
+// Depends on: crypto, ./device-state
 
 const {
   createCipheriv,
@@ -19,15 +19,19 @@ const {
   verify,
 } = require("crypto");
 const {
+  getTrustedPhoneRecoveryIdentity,
+  getTrustedPhoneRecoveryIdentities,
   getTrustedPhonePublicKey,
   rememberTrustedPhone,
-} = require("./secure-device-state");
+} = require("./device-state");
 
 const PAIRING_QR_VERSION = 3;
 const SECURE_PROTOCOL_VERSION = 1;
 const HANDSHAKE_TAG = "androdex-e2ee-v1";
 const HANDSHAKE_MODE_QR_BOOTSTRAP = "qr_bootstrap";
 const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
+const HANDSHAKE_MODE_TRUSTED_REKEY = "trusted_rekey";
+const RECOVERY_AUTH_LABEL = "recovery-auth";
 const SECURE_SENDER_MAC = "mac";
 const SECURE_SENDER_ANDROID = "android";
 const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
@@ -41,6 +45,7 @@ function createBridgeSecureTransport({
   deviceState,
   platformAdapter,
   onTrustedPhoneUpdate = null,
+  onRecoveryProvisioning = null,
 } = {}) {
   const stableHostId = normalizeNonEmptyString(hostId)
     || normalizeNonEmptyString(sessionId)
@@ -58,6 +63,7 @@ function createBridgeSecureTransport({
   let nextBridgeOutboundSeq = 1;
   let outboundBufferBytes = 0;
   const outboundBuffer = [];
+  let pendingRecoveryProvisioning = null;
 
   function createPairingPayload() {
     currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
@@ -153,6 +159,14 @@ function createBridgeSecureTransport({
     );
   }
 
+  function trustedRecoveryIdentityForPhone(phoneDeviceId) {
+    return getTrustedPhoneRecoveryIdentity(currentDeviceState, phoneDeviceId);
+  }
+
+  function trustedRecoveryIdentitiesForPhone(phoneDeviceId) {
+    return getTrustedPhoneRecoveryIdentities(currentDeviceState, phoneDeviceId);
+  }
+
   function handleClientHello(message, sendControlMessage) {
     const protocolVersion = Number(message.protocolVersion);
     const incomingSessionId = normalizeNonEmptyString(message.hostId || message.sessionId);
@@ -160,6 +174,9 @@ function createBridgeSecureTransport({
     const phoneDeviceId = normalizeNonEmptyString(message.phoneDeviceId);
     const phoneIdentityPublicKey = normalizeNonEmptyString(message.phoneIdentityPublicKey);
     const phoneEphemeralPublicKey = normalizeNonEmptyString(message.phoneEphemeralPublicKey);
+    const trustedPhoneDeviceId = normalizeNonEmptyString(message.trustedPhoneDeviceId);
+    const trustedRecoveryPublicKey = normalizeNonEmptyString(message.trustedRecoveryPublicKey);
+    const nextRecoveryIdentityPublicKey = normalizeNonEmptyString(message.nextRecoveryIdentityPublicKey);
     const clientNonceBase64 = normalizeNonEmptyString(message.clientNonce);
     const bootstrapToken = normalizeNonEmptyString(message.bootstrapToken);
 
@@ -179,7 +196,11 @@ function createBridgeSecureTransport({
       return;
     }
 
-    if (handshakeMode !== HANDSHAKE_MODE_QR_BOOTSTRAP && handshakeMode !== HANDSHAKE_MODE_TRUSTED_RECONNECT) {
+    if (
+      handshakeMode !== HANDSHAKE_MODE_QR_BOOTSTRAP
+      && handshakeMode !== HANDSHAKE_MODE_TRUSTED_RECONNECT
+      && handshakeMode !== HANDSHAKE_MODE_TRUSTED_REKEY
+    ) {
       sendControlMessage(createSecureError({
         code: "invalid_handshake_mode",
         message: "The mobile client requested an unknown secure pairing mode.",
@@ -232,6 +253,31 @@ function createBridgeSecureTransport({
       }
     }
 
+    if (handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY) {
+      const trustedRecoveryIdentities = trustedRecoveryIdentitiesForPhone(trustedPhoneDeviceId);
+      if (!trustedPhoneDeviceId || !trustedRecoveryPublicKey || !nextRecoveryIdentityPublicKey) {
+        sendControlMessage(createSecureError({
+          code: "invalid_recovery_request",
+          message: "The recovery handshake is missing required trusted recovery fields.",
+        }));
+        return;
+      }
+      if (trustedRecoveryIdentities.length === 0) {
+        sendControlMessage(createSecureError({
+          code: "recovery_not_trusted",
+          message: "This host does not recognize the supplied recovery credential.",
+        }));
+        return;
+      }
+      if (!trustedRecoveryIdentities.some((identity) => identity.recoveryIdentityPublicKey === trustedRecoveryPublicKey)) {
+        sendControlMessage(createSecureError({
+          code: "recovery_not_trusted",
+          message: "The trusted recovery credential does not match this host.",
+        }));
+        return;
+      }
+    }
+
     const clientNonce = base64ToBuffer(clientNonceBase64);
     if (!clientNonce || clientNonce.length === 0) {
       sendControlMessage(createSecureError({
@@ -255,9 +301,12 @@ function createBridgeSecureTransport({
       handshakeMode,
       keyEpoch,
       macDeviceId: currentDeviceState.macDeviceId,
+      trustedPhoneDeviceId,
       phoneDeviceId,
       macIdentityPublicKey: currentDeviceState.macIdentityPublicKey,
+      trustedRecoveryPublicKey,
       phoneIdentityPublicKey,
+      nextRecoveryIdentityPublicKey,
       macEphemeralPublicKey: base64UrlToBase64(publicJwk.x),
       phoneEphemeralPublicKey,
       clientNonce,
@@ -281,6 +330,9 @@ function createBridgeSecureTransport({
       sessionId: stableHostId,
       handshakeMode,
       keyEpoch,
+      trustedPhoneDeviceId,
+      trustedRecoveryPublicKey,
+      nextRecoveryIdentityPublicKey,
       phoneDeviceId,
       phoneIdentityPublicKey,
       phoneEphemeralPublicKey,
@@ -298,6 +350,9 @@ function createBridgeSecureTransport({
       hostId: stableHostId,
       handshakeMode,
       macDeviceId: currentDeviceState.macDeviceId,
+      trustedPhoneDeviceId,
+      trustedRecoveryPublicKey,
+      nextRecoveryIdentityPublicKey,
       macIdentityPublicKey: currentDeviceState.macIdentityPublicKey,
       macEphemeralPublicKey: pendingHandshake.macEphemeralPublicKey,
       serverNonce: serverNonce.toString("base64"),
@@ -321,6 +376,7 @@ function createBridgeSecureTransport({
     const phoneDeviceId = normalizeNonEmptyString(message.phoneDeviceId);
     const keyEpoch = Number(message.keyEpoch);
     const phoneSignature = normalizeNonEmptyString(message.phoneSignature);
+    const trustedRecoverySignature = normalizeNonEmptyString(message.trustedRecoverySignature);
     if (
       incomingSessionId !== pendingHandshake.sessionId
       || phoneDeviceId !== pendingHandshake.phoneDeviceId
@@ -333,6 +389,36 @@ function createBridgeSecureTransport({
         message: "The secure client authentication payload was invalid.",
       }));
       return;
+    }
+
+    if (pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY) {
+      const trustedRecoveryIdentity = trustedRecoveryIdentitiesForPhone(
+        pendingHandshake.trustedPhoneDeviceId
+      ).find(
+        (identity) => identity.recoveryIdentityPublicKey === pendingHandshake.trustedRecoveryPublicKey
+      );
+      const recoveryAuthTranscript = Buffer.concat([
+        pendingHandshake.transcriptBytes,
+        encodeLengthPrefixedUTF8(RECOVERY_AUTH_LABEL),
+      ]);
+      const recoveryVerified = Boolean(
+        trustedRecoveryIdentity
+        && trustedRecoveryIdentity.recoveryIdentityPublicKey === pendingHandshake.trustedRecoveryPublicKey
+        && trustedRecoverySignature
+        && verifyTranscript(
+          trustedRecoveryIdentity.recoveryIdentityPublicKey,
+          recoveryAuthTranscript,
+          trustedRecoverySignature
+        )
+      );
+      if (!recoveryVerified) {
+        pendingHandshake = null;
+        sendControlMessage(createSecureError({
+          code: "invalid_recovery_signature",
+          message: "The trusted recovery credential could not authorize this key rotation.",
+        }));
+        return;
+      }
     }
 
     const clientAuthTranscript = Buffer.concat([
@@ -397,20 +483,70 @@ function createBridgeSecureTransport({
     nextKeyEpoch = pendingHandshake.keyEpoch + 1;
     if (
       pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
-      || getTrustedPhonePublicKey(currentDeviceState, pendingHandshake.phoneDeviceId)
+      || pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_RECONNECT
+      || pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY
     ) {
+      const existingTrustedRecoveryIdentity = (
+        pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY
+          ? null
+          : trustedRecoveryIdentityForPhone(pendingHandshake.phoneDeviceId)
+      );
+      const priorAuthorizedRecoveryIdentity = (
+        pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY
+          ? trustedRecoveryIdentitiesForPhone(pendingHandshake.trustedPhoneDeviceId).find(
+            (identity) => identity.recoveryIdentityPublicKey === pendingHandshake.trustedRecoveryPublicKey
+          ) || null
+          : null
+      );
+      const nextTrustedRecoveryIdentity = existingTrustedRecoveryIdentity || (
+        pendingHandshake.nextRecoveryIdentityPublicKey
+          ? {
+            recoveryIdentityPublicKey: pendingHandshake.nextRecoveryIdentityPublicKey,
+          }
+          : createRecoveryIdentity()
+      );
       const previousTrustedPhonePublicKey = getTrustedPhonePublicKey(
         currentDeviceState,
         pendingHandshake.phoneDeviceId
       );
+      const previousTrustedRecoveryPublicKey = (
+        pendingHandshake.handshakeMode === HANDSHAKE_MODE_TRUSTED_REKEY
+          ? trustedRecoveryIdentityForPhone(pendingHandshake.trustedPhoneDeviceId)?.recoveryIdentityPublicKey
+          : existingTrustedRecoveryIdentity?.recoveryIdentityPublicKey
+      ) || null;
       currentDeviceState = rememberTrustedPhone(
         currentDeviceState,
         pendingHandshake.phoneDeviceId,
         pendingHandshake.phoneIdentityPublicKey,
-        { platformAdapter }
+        {
+          platformAdapter,
+          recoveryIdentity: nextTrustedRecoveryIdentity,
+          previousRecoveryIdentity: priorAuthorizedRecoveryIdentity,
+        }
       );
-      if (previousTrustedPhonePublicKey !== pendingHandshake.phoneIdentityPublicKey) {
+      const trustedPhoneChanged = previousTrustedPhonePublicKey !== pendingHandshake.phoneIdentityPublicKey;
+      const trustedRecoveryChanged = previousTrustedRecoveryPublicKey !== nextTrustedRecoveryIdentity.recoveryIdentityPublicKey;
+      if (trustedPhoneChanged || trustedRecoveryChanged) {
         onTrustedPhoneUpdate?.(currentDeviceState);
+      }
+      if (
+        pendingHandshake.handshakeMode !== HANDSHAKE_MODE_TRUSTED_REKEY
+        && nextTrustedRecoveryIdentity.recoveryIdentityPrivateKey
+        && (
+          pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
+          || trustedRecoveryChanged
+        )
+      ) {
+        pendingRecoveryProvisioning = {
+          version: 1,
+          relay: relayUrl,
+          macDeviceId: currentDeviceState.macDeviceId,
+          macIdentityPublicKey: currentDeviceState.macIdentityPublicKey,
+          phoneDeviceId: pendingHandshake.phoneDeviceId,
+          recoveryIdentityPublicKey: nextTrustedRecoveryIdentity.recoveryIdentityPublicKey,
+          recoveryIdentityPrivateKey: nextTrustedRecoveryIdentity.recoveryIdentityPrivateKey,
+        };
+        onRecoveryProvisioning?.(pendingRecoveryProvisioning);
       }
     }
     if (pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP) {
@@ -443,6 +579,16 @@ function createBridgeSecureTransport({
     lastRelayedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq;
     const missingEntries = replayableOutboundEntries(lastAppliedBridgeOutboundSeq);
     activeSession.isResumed = true;
+    if (pendingRecoveryProvisioning) {
+      queueOutboundApplicationMessage(
+        JSON.stringify({
+          method: "pairing/recoveryProvisioned",
+          params: pendingRecoveryProvisioning,
+        }),
+        activeSession.sendWireMessage
+      );
+      pendingRecoveryProvisioning = null;
+    }
     for (const entry of missingEntries) {
       if (!sendBufferedEntry(entry, activeSession.sendWireMessage)) {
         break;
@@ -659,6 +805,16 @@ function signTranscript(privateKeyBase64, publicKeyBase64, transcriptBytes) {
   return signature.toString("base64");
 }
 
+function createRecoveryIdentity() {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const privateJwk = privateKey.export({ format: "jwk" });
+  const publicJwk = publicKey.export({ format: "jwk" });
+  return {
+    recoveryIdentityPublicKey: base64UrlToBase64(publicJwk.x),
+    recoveryIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
+  };
+}
+
 function verifyTranscript(publicKeyBase64, transcriptBytes, signatureBase64) {
   try {
     return verify(
@@ -685,9 +841,12 @@ function buildTranscriptBytes({
   handshakeMode,
   keyEpoch,
   macDeviceId,
+  trustedPhoneDeviceId = "",
   phoneDeviceId,
   macIdentityPublicKey,
+  trustedRecoveryPublicKey = "",
   phoneIdentityPublicKey,
+  nextRecoveryIdentityPublicKey = "",
   macEphemeralPublicKey,
   phoneEphemeralPublicKey,
   clientNonce,
@@ -701,9 +860,12 @@ function buildTranscriptBytes({
     encodeLengthPrefixedUTF8(handshakeMode),
     encodeLengthPrefixedUTF8(String(keyEpoch)),
     encodeLengthPrefixedUTF8(macDeviceId),
+    encodeLengthPrefixedUTF8(trustedPhoneDeviceId),
     encodeLengthPrefixedUTF8(phoneDeviceId),
     encodeLengthPrefixedBuffer(base64ToBuffer(macIdentityPublicKey)),
+    encodeLengthPrefixedBuffer(base64ToBuffer(trustedRecoveryPublicKey)),
     encodeLengthPrefixedBuffer(base64ToBuffer(phoneIdentityPublicKey)),
+    encodeLengthPrefixedBuffer(base64ToBuffer(nextRecoveryIdentityPublicKey)),
     encodeLengthPrefixedBuffer(base64ToBuffer(macEphemeralPublicKey)),
     encodeLengthPrefixedBuffer(base64ToBuffer(phoneEphemeralPublicKey)),
     encodeLengthPrefixedBuffer(clientNonce),
@@ -780,6 +942,7 @@ function base64ToBase64Url(value) {
 module.exports = {
   HANDSHAKE_MODE_QR_BOOTSTRAP,
   HANDSHAKE_MODE_TRUSTED_RECONNECT,
+  HANDSHAKE_MODE_TRUSTED_REKEY,
   PAIRING_QR_VERSION,
   SECURE_PROTOCOL_VERSION,
   createBridgeSecureTransport,

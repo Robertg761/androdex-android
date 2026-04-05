@@ -91,6 +91,20 @@ class AndrodexClientConnectionPolicyTest {
     }
 
     @Test
+    fun trustedSessionRecoverUrl_rewritesRelaySocketPathToHttpsEndpoint() {
+        val recoverUrl = trustedSessionRecoverUrl("wss://relay.androdex.xyz/relay")
+
+        assertEquals("https://relay.androdex.xyz/v1/trusted/session/recover", recoverUrl)
+    }
+
+    @Test
+    fun trustedSessionRecoverUrl_preservesBasePathBeforeRelaySegment() {
+        val recoverUrl = trustedSessionRecoverUrl("ws://localhost:8787/custom/relay")
+
+        assertEquals("http://localhost:8787/custom/v1/trusted/session/recover", recoverUrl)
+    }
+
+    @Test
     fun trustedSessionResolveFailure_requiresFreshLiveSessionWhenRelaySaysHostIsOffline() {
         val result = mapTrustedSessionResolveFailure(
             responseCode = 404,
@@ -154,20 +168,31 @@ class AndrodexClientConnectionPolicyTest {
     }
 
     @Test
-    fun legacyRelaySessionIdentifier_detectsUuidSessionIds() {
-        assertTrue(looksLikeLegacyRelaySessionIdentifier("51b5f04f-b19d-4fa7-b0ea-df5b31adb240"))
+    fun legacyRelaySessionIdentifier_detectsWhenDeviceIdMatchesHostSessionId() {
+        assertTrue(
+            looksLikeLegacyRelaySessionIdentifier(
+                value = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
+                hostId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
+            )
+        )
     }
 
     @Test
-    fun legacyRelaySessionIdentifier_ignoresRealDeviceIds() {
-        assertEquals(false, looksLikeLegacyRelaySessionIdentifier("mac-5"))
+    fun legacyRelaySessionIdentifier_ignoresStableUuidDeviceIds() {
+        assertEquals(
+            false,
+            looksLikeLegacyRelaySessionIdentifier(
+                value = "e2e4cc8a-acda-47ab-902f-67328c027aaa",
+                hostId = "f0bb6982-1985-4abe-8878-dfc0c0595242",
+            )
+        )
     }
 
     @Test
     fun selectPreferredTrustedMacRecord_prefersStableTrustedRecordOverLegacySavedSession() {
         val legacySession = SavedRelaySession(
             relayUrl = "wss://relay.example/relay",
-            hostId = "host-1",
+            hostId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
             macDeviceId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
             macIdentityPublicKey = "legacy-key",
             protocolVersion = 3,
@@ -176,13 +201,14 @@ class AndrodexClientConnectionPolicyTest {
             macDeviceId = legacySession.macDeviceId,
             macIdentityPublicKey = "legacy-key",
             lastPairedAtEpochMs = 10L,
+            lastResolvedHostId = legacySession.hostId,
         )
         val stableTrusted = TrustedMacRecord(
-            macDeviceId = "mac-5",
+            macDeviceId = "e2e4cc8a-acda-47ab-902f-67328c027aaa",
             macIdentityPublicKey = "stable-key",
             lastPairedAtEpochMs = 20L,
             relayUrl = "wss://relay.example/relay",
-            lastResolvedHostId = "host-5",
+            lastResolvedHostId = "f0bb6982-1985-4abe-8878-dfc0c0595242",
             lastUsedAtEpochMs = 30L,
         )
 
@@ -195,7 +221,7 @@ class AndrodexClientConnectionPolicyTest {
             savedRelaySession = legacySession,
         )
 
-        assertEquals("mac-5", selected?.macDeviceId)
+        assertEquals("e2e4cc8a-acda-47ab-902f-67328c027aaa", selected?.macDeviceId)
     }
 
     @Test
@@ -204,6 +230,7 @@ class AndrodexClientConnectionPolicyTest {
             macDeviceId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
             macIdentityPublicKey = "legacy-key",
             lastPairedAtEpochMs = 10L,
+            lastResolvedHostId = "51b5f04f-b19d-4fa7-b0ea-df5b31adb240",
         )
 
         val selected = selectPreferredTrustedMacRecord(

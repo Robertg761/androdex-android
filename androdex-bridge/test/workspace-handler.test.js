@@ -2,7 +2,7 @@
 // Purpose: Verifies workspace browsing and activation RPC behavior.
 // Layer: Unit test
 // Exports: node:test suite
-// Depends on: node:test, node:assert/strict, ../src/workspace-browser, ../src/workspace-handler
+// Depends on: node:test, node:assert/strict, ../src/workspace/browser, ../src/workspace/handler
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -11,8 +11,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const { execFileSync } = require("node:child_process");
 
-const { createWorkspaceBrowser } = require("../src/workspace-browser");
-const { handleWorkspaceRequest } = require("../src/workspace-handler");
+const { createWorkspaceBrowser } = require("../src/workspace/browser");
+const { handleWorkspaceRequest } = require("../src/workspace/handler");
 
 function flushMicrotasks() {
   return new Promise((resolve) => setTimeout(resolve, 0));

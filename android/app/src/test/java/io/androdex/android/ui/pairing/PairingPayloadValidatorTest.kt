@@ -7,7 +7,7 @@ import org.junit.Test
 class PairingPayloadValidatorTest {
     @Test
     fun unsupportedVersion_returnsUpdateRequired() {
-        val result = validatePairingPayload(
+        val result = validateConnectPayload(
             rawPayload = """
                 {
                   "v": 99,
@@ -22,12 +22,12 @@ class PairingPayloadValidatorTest {
             nowEpochMs = 0L,
         )
 
-        assertTrue(result is PairingPayloadValidationResult.UpdateRequired)
+        assertTrue(result is ConnectPayloadValidationResult.UpdateRequired)
     }
 
     @Test
     fun expiredLegacyPayload_returnsBridgeRefreshMessage() {
-        val result = validatePairingPayload(
+        val result = validateConnectPayload(
             rawPayload = """
                 {
                   "v": 2,
@@ -41,16 +41,16 @@ class PairingPayloadValidatorTest {
             nowEpochMs = 999999999L,
         )
 
-        assertTrue(result is PairingPayloadValidationResult.Error)
+        assertTrue(result is ConnectPayloadValidationResult.Error)
         assertEquals(
             "The pairing QR code has expired. Generate a new QR code from the bridge.",
-            (result as PairingPayloadValidationResult.Error).message,
+            (result as ConnectPayloadValidationResult.Error).message,
         )
     }
 
     @Test
     fun currentPayload_returnsSuccess() {
-        val result = validatePairingPayload(
+        val result = validateConnectPayload(
             rawPayload = """
                 {
                   "v": 3,
@@ -65,6 +65,6 @@ class PairingPayloadValidatorTest {
             nowEpochMs = 0L,
         )
 
-        assertTrue(result is PairingPayloadValidationResult.Success)
+        assertTrue(result is ConnectPayloadValidationResult.Success)
     }
 }

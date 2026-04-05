@@ -1,4 +1,4 @@
-// FILE: codex-rpc-client.js
+// FILE: codex/rpc-client.js
 // Purpose: Lets the bridge make private Codex RPC calls and consume their responses without forwarding them to Android.
 // Layer: CLI helper
 // Exports: createCodexRpcClient

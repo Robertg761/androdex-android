@@ -1,4 +1,4 @@
-// FILE: push-notification-service-client.js
+// FILE: notifications/service-client.js
 // Purpose: Sends Android push registration and completion requests from the bridge to an optional notification service.
 // Layer: Bridge helper
 // Exports: createPushNotificationServiceClient

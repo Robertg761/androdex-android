@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createPushNotificationServiceClient } = require("../src/push-notification-service-client");
+const { createPushNotificationServiceClient } = require("../src/notifications/service-client");
 
 test("push service client posts Android registration payloads to the configured endpoint", async () => {
   const requests = [];

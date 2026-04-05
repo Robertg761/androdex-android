@@ -1,4 +1,4 @@
-// FILE: push-notification-completion-dedupe.js
+// FILE: notifications/completion-dedupe.js
 // Purpose: Owns duplicate-suppression state for completion pushes emitted by the bridge.
 // Layer: Bridge helper
 // Exports: createPushNotificationCompletionDedupe

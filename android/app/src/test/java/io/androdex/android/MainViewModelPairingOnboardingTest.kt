@@ -237,6 +237,8 @@ private class PairingOnboardingRepository(
         connectedPayload = rawPayload
     }
 
+    override suspend fun connectWithRecoveryPayload(rawPayload: String) = Unit
+
     override suspend fun reconnectSaved(): Boolean {
         reconnectSavedCalls += 1
         return true

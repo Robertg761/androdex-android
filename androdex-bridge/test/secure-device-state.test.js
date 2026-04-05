@@ -5,7 +5,14 @@ const os = require("os");
 const path = require("path");
 const childProcess = require("child_process");
 
-const modulePath = path.resolve(__dirname, "../src/secure-device-state.js");
+const modulePath = path.resolve(__dirname, "../src/pairing/device-state.js");
+const PHONE_ID_RELOADED = "11111111-1111-4111-8111-111111111111";
+const PHONE_ID_RESET = "22222222-2222-4222-8222-222222222222";
+const PHONE_ID_CORRUPT = "33333333-3333-4333-8333-333333333333";
+const PHONE_ID_TRIMMED = "44444444-4444-4444-8444-444444444444";
+const PHONE_ID_OLD = "55555555-5555-4555-8555-555555555555";
+const PHONE_ID_NEW = "66666666-6666-4666-8666-666666666666";
+const STALE_MAC_ID = "77777777-7777-4777-8777-777777777777";
 
 function withTempHome(optionsOrRun, maybeRun) {
   const options = typeof optionsOrRun === "function" ? {} : (optionsOrRun || {});
@@ -13,11 +20,17 @@ function withTempHome(optionsOrRun, maybeRun) {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "androdex-device-state-"));
   const previousHome = process.env.HOME;
   const previousUserProfile = process.env.USERPROFILE;
+  const previousDeviceStateDir = process.env.ANDRODEX_DEVICE_STATE_DIR;
+  const previousDeviceStateFile = process.env.ANDRODEX_DEVICE_STATE_FILE;
+  const previousAllowSynthetic = process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE;
   const previousExecFileSync = childProcess.execFileSync;
   const previousPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   const effectivePlatform = options.platform || process.platform;
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
+  delete process.env.ANDRODEX_DEVICE_STATE_DIR;
+  delete process.env.ANDRODEX_DEVICE_STATE_FILE;
+  delete process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE;
   childProcess.execFileSync = (...args) => {
     if (typeof options.execFileSyncHandler === "function") {
       return options.execFileSyncHandler(previousExecFileSync, ...args);
@@ -62,6 +75,21 @@ function withTempHome(optionsOrRun, maybeRun) {
     } else {
       process.env.USERPROFILE = previousUserProfile;
     }
+    if (previousDeviceStateDir == null) {
+      delete process.env.ANDRODEX_DEVICE_STATE_DIR;
+    } else {
+      process.env.ANDRODEX_DEVICE_STATE_DIR = previousDeviceStateDir;
+    }
+    if (previousDeviceStateFile == null) {
+      delete process.env.ANDRODEX_DEVICE_STATE_FILE;
+    } else {
+      process.env.ANDRODEX_DEVICE_STATE_FILE = previousDeviceStateFile;
+    }
+    if (previousAllowSynthetic == null) {
+      delete process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE;
+    } else {
+      process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE = previousAllowSynthetic;
+    }
     fs.rmSync(tempHome, { recursive: true, force: true });
   }
 }
@@ -71,6 +99,7 @@ function getStatePaths(tempHome) {
   return {
     storeDir,
     primaryFile: path.join(storeDir, "device-state.json"),
+    backupFile: path.join(storeDir, "device-state.backup.json"),
   };
 }
 
@@ -79,7 +108,7 @@ test("trusted phone state is reloaded from persisted bridge device state", () =>
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
     const updatedState = secureDeviceState.rememberTrustedPhone(
       initialState,
-      "phone-1",
+      PHONE_ID_RELOADED,
       "public-key-1"
     );
 
@@ -89,7 +118,7 @@ test("trusted phone state is reloaded from persisted bridge device state", () =>
 
     assert.equal(reloadedState.macDeviceId, updatedState.macDeviceId);
     assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(reloadedState, "phone-1"),
+      reloadedModule.getTrustedPhonePublicKey(reloadedState, PHONE_ID_RELOADED),
       "public-key-1"
     );
     const { primaryFile } = getStatePaths(tempHome);
@@ -100,7 +129,7 @@ test("trusted phone state is reloaded from persisted bridge device state", () =>
 test("resetBridgeDeviceState removes persisted trust and regenerates a fresh identity", () => {
   withTempHome(({ tempHome, secureDeviceState }) => {
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
-    secureDeviceState.rememberTrustedPhone(initialState, "phone-2", "public-key-2");
+    secureDeviceState.rememberTrustedPhone(initialState, PHONE_ID_RESET, "public-key-2");
 
     const resetResult = secureDeviceState.resetBridgeDeviceState();
     assert.equal(resetResult.hadState, true);
@@ -111,7 +140,7 @@ test("resetBridgeDeviceState removes persisted trust and regenerates a fresh ide
 
     assert.notEqual(reloadedState.macDeviceId, initialState.macDeviceId);
     assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(reloadedState, "phone-2"),
+      reloadedModule.getTrustedPhonePublicKey(reloadedState, PHONE_ID_RESET),
       null
     );
     const { primaryFile } = getStatePaths(tempHome);
@@ -142,7 +171,7 @@ test("corrupted canonical state is recovered from the legacy keychain mirror on 
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
     const updatedState = secureDeviceState.rememberTrustedPhone(
       initialState,
-      "phone-corrupt",
+      PHONE_ID_CORRUPT,
       "public-key-corrupt"
     );
     const { primaryFile } = getStatePaths(tempHome);
@@ -156,7 +185,7 @@ test("corrupted canonical state is recovered from the legacy keychain mirror on 
 
     assert.equal(recoveredState.macDeviceId, updatedState.macDeviceId);
     assert.equal(
-      reloadedModule.getTrustedPhonePublicKey(recoveredState, "phone-corrupt"),
+      reloadedModule.getTrustedPhonePublicKey(recoveredState, PHONE_ID_CORRUPT),
       "public-key-corrupt"
     );
   });
@@ -178,6 +207,54 @@ test("corrupted canonical state without a recoverable mirror throws instead of m
     );
     assert.equal(fs.readFileSync(primaryFile, "utf8"), "{not-json");
     assert.equal(initialState.macDeviceId.length > 0, true);
+  });
+});
+
+test("synthetic canonical state is recovered from the last known-good backup", () => {
+  withTempHome(({ tempHome, secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const { primaryFile, backupFile } = getStatePaths(tempHome);
+
+    fs.writeFileSync(backupFile, JSON.stringify(initialState, null, 2), "utf8");
+    fs.writeFileSync(primaryFile, JSON.stringify({
+      version: 1,
+      macDeviceId: "mac-5",
+      macIdentityPublicKey: "pub",
+      macIdentityPrivateKey: "priv",
+      trustedPhones: {
+        [PHONE_ID_NEW]: "phone-pub",
+      },
+    }, null, 2), "utf8");
+
+    delete require.cache[modulePath];
+    const reloadedModule = require(modulePath);
+    const recoveredState = reloadedModule.loadOrCreateBridgeDeviceState();
+
+    assert.equal(recoveredState.macDeviceId, initialState.macDeviceId);
+  });
+});
+
+test("synthetic canonical state without backup is rejected outside explicit synthetic-test mode", () => {
+  withTempHome(({ tempHome }) => {
+    const { primaryFile } = getStatePaths(tempHome);
+    fs.mkdirSync(path.dirname(primaryFile), { recursive: true });
+    fs.writeFileSync(primaryFile, JSON.stringify({
+      version: 1,
+      macDeviceId: "mac-5",
+      macIdentityPublicKey: "pub",
+      macIdentityPrivateKey: "priv",
+      trustedPhones: {
+        [PHONE_ID_NEW]: "phone-pub",
+      },
+    }, null, 2), "utf8");
+
+    delete require.cache[modulePath];
+    const reloadedModule = require(modulePath);
+
+    assert.throws(
+      () => reloadedModule.loadOrCreateBridgeDeviceState(),
+      /Saved bridge identity state is corrupted in device-state\.json/i
+    );
   });
 });
 
@@ -242,7 +319,7 @@ test("canonical file state repairs a stale keychain mirror on darwin", () => {
     const canonicalState = secureDeviceState.loadOrCreateBridgeDeviceState();
     mirroredState = JSON.stringify({
       ...canonicalState,
-      macDeviceId: "stale-device",
+      macDeviceId: STALE_MAC_ID,
     }, null, 2);
 
     const reloadedState = secureDeviceState.loadOrCreateBridgeDeviceState();
@@ -258,14 +335,59 @@ test("rememberTrustedPhone trims identifiers and replaces older trusted phone en
     const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
     const updatedState = secureDeviceState.rememberTrustedPhone(
       initialState,
-      "  phone-trimmed  ",
+      `  ${PHONE_ID_TRIMMED}  `,
       "  public-key-trimmed  "
     );
 
     assert.equal(
-      secureDeviceState.getTrustedPhonePublicKey(updatedState, "phone-trimmed"),
+      secureDeviceState.getTrustedPhonePublicKey(updatedState, PHONE_ID_TRIMMED),
       "public-key-trimmed"
     );
-    assert.deepEqual(Object.keys(updatedState.trustedPhones), ["phone-trimmed"]);
+    assert.deepEqual(Object.keys(updatedState.trustedPhones), [PHONE_ID_TRIMMED]);
+  });
+});
+
+test("rememberTrustedPhone preserves the recovery credential that authorized a rotation", () => {
+  withTempHome(({ secureDeviceState }) => {
+    const initialState = secureDeviceState.loadOrCreateBridgeDeviceState();
+    const firstRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-a",
+      recoveryIdentityPrivateKey: "recovery-private-a",
+    };
+    const supersededRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-b",
+      recoveryIdentityPrivateKey: "recovery-private-b",
+    };
+    const nextRecoveryIdentity = {
+      recoveryIdentityPublicKey: "recovery-public-c",
+      recoveryIdentityPrivateKey: "recovery-private-c",
+    };
+
+    const trustedState = secureDeviceState.rememberTrustedPhone(
+      initialState,
+      PHONE_ID_OLD,
+      "phone-public-old",
+      {
+        recoveryIdentity: supersededRecoveryIdentity,
+        previousRecoveryIdentity: firstRecoveryIdentity,
+      }
+    );
+    const rotatedState = secureDeviceState.rememberTrustedPhone(
+      trustedState,
+      PHONE_ID_NEW,
+      "phone-public-new",
+      {
+        recoveryIdentity: nextRecoveryIdentity,
+        previousRecoveryIdentity: firstRecoveryIdentity,
+      }
+    );
+
+    assert.deepEqual(rotatedState.trustedPhones, {
+      [PHONE_ID_NEW]: "phone-public-new",
+    });
+    assert.deepEqual(
+      secureDeviceState.getTrustedPhoneRecoveryIdentities(rotatedState, PHONE_ID_NEW),
+      [nextRecoveryIdentity, firstRecoveryIdentity]
+    );
   });
 });

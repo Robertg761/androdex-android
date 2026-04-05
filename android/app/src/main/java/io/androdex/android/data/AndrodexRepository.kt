@@ -53,6 +53,7 @@ interface AndrodexRepositoryContract {
         messages: List<ConversationMessage>,
     ) = Unit
     suspend fun connectWithPairingPayload(rawPayload: String)
+    suspend fun connectWithRecoveryPayload(rawPayload: String)
     suspend fun reconnectSaved(): Boolean
     suspend fun forgetTrustedHost() = Unit
     suspend fun disconnect(clearSavedPairing: Boolean = false)
@@ -185,6 +186,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun connectWithPairingPayload(rawPayload: String) {
         client.connectWithPairingPayload(rawPayload)
+    }
+
+    override suspend fun connectWithRecoveryPayload(rawPayload: String) {
+        client.connectWithRecoveryPayload(rawPayload)
     }
 
     override suspend fun reconnectSaved(): Boolean = client.reconnectSaved()

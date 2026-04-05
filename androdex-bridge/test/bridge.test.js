@@ -15,6 +15,7 @@ const {
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
 
 test("sanitizeThreadHistoryImagesForRelay replaces inline history images with lightweight references", () => {
@@ -269,4 +270,56 @@ test("rememberForwardedRequestTiming ignores unrelated methods", () => {
     ),
     null
   );
+});
+
+test("shouldQueueMessageUntilCodexWarm defers thread RPCs after a transport reset when initialize params are cached", () => {
+  assert.equal(shouldQueueMessageUntilCodexWarm({
+    rawMessage: JSON.stringify({
+      id: "req-thread-read",
+      method: "thread/read",
+      params: {
+        threadId: "thread-123",
+      },
+    }),
+    codexHandshakeState: "cold",
+    lastInitializeParams: {
+      clientInfo: {
+        name: "Androdex",
+      },
+    },
+  }), true);
+});
+
+test("shouldQueueMessageUntilCodexWarm does not defer when the bridge has no cached initialize params", () => {
+  assert.equal(shouldQueueMessageUntilCodexWarm({
+    rawMessage: JSON.stringify({
+      id: "req-thread-read",
+      method: "thread/read",
+      params: {
+        threadId: "thread-123",
+      },
+    }),
+    codexHandshakeState: "cold",
+    lastInitializeParams: null,
+  }), false);
+});
+
+test("shouldQueueMessageUntilCodexWarm leaves explicit initialize traffic alone", () => {
+  assert.equal(shouldQueueMessageUntilCodexWarm({
+    rawMessage: JSON.stringify({
+      id: "req-init",
+      method: "initialize",
+      params: {
+        clientInfo: {
+          name: "Androdex",
+        },
+      },
+    }),
+    codexHandshakeState: "cold",
+    lastInitializeParams: {
+      clientInfo: {
+        name: "Androdex",
+      },
+    },
+  }), false);
 });

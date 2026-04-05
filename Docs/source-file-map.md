@@ -44,8 +44,8 @@ Base path: `android/app/src/main/java/io/androdex/android/`
 
 ### Data and protocol layer
 
-- `data/AndrodexClient.kt`: low-level relay/bridge client that owns socket behavior, secure-session handshake logic, JSON-RPC messaging, capability negotiation, and turn/thread payload building.
-- `data/AndrodexPersistence.kt`: persistent storage for saved relay sessions, trusted pairing state, thread runtime overrides, and cached timeline/history data.
+- `data/AndrodexClient.kt`: low-level relay/bridge client that owns socket behavior, secure-session handshake logic, trusted reconnect, recovery/rekey flows, JSON-RPC messaging, capability negotiation, and turn/thread payload building.
+- `data/AndrodexPersistence.kt`: persistent storage for the disposable saved relay session plus the durable phone identity, trusted host registry, recovery payloads, thread runtime overrides, and cached timeline/history data.
 - `data/AndrodexRepository.kt`: repository abstraction over client plus persistence, exposing higher-level app operations and state flows.
 - `data/JsonHelpers.kt`: JSON decoding and normalization helpers for thread, timeline, workspace, and protocol payloads.
 - `data/TurnRequestCompatibility.kt`: fallback/retry rules for older bridge/runtime payload formats when turn requests are rejected.
@@ -144,37 +144,37 @@ Base paths:
 ### Bridge runtime and helpers
 
 - `src/account-status.js`: builds sanitized account/auth status payloads to send back to Android without leaking unsafe detail.
-- `src/bridge.js`: main bridge process that connects the relay, secure transport, Codex runtime, notifications, workspace runtime, git/workspace handlers, and desktop refresh logic.
+- `src/bridge.js`: main bridge process that connects the relay, secure transport, Codex runtime, notifications, workspace runtime, git/workspace handlers, desktop refresh logic, and initialize-replay logic after host transport restarts.
 - `src/codex-desktop-refresher.js`: desktop refresh workaround controller for reopening or nudging the Codex desktop app after phone-authored activity.
-- `src/codex-rpc-client.js`: lightweight JSON-RPC client wrapper around the active Codex transport.
-- `src/codex-transport.js`: starts Codex locally or connects to an existing endpoint, then exposes a normalized transport interface.
+- `src/codex/rpc-client.js`: lightweight JSON-RPC client wrapper around the active Codex transport.
+- `src/codex/transport.js`: starts Codex locally or connects to an existing endpoint, then exposes a normalized transport interface.
 - `src/daemon-state.js`: persists bridge daemon config, pairing session payloads, status files, and log paths under the host’s `~/.androdex` state directory.
 - `src/git-handler.js`: host-side git operations for status, diff, commit, pull, push, branch, and worktree workflows.
 - `src/index.js`: public module exports for the bridge package’s CLI/runtime surface.
 - `src/macos-launch-agent.js`: launchd-specific install/start/stop/status flow for the background macOS bridge service.
-- `src/notifications-handler.js`: handles bridge-side notification RPCs such as token registration and completion registration requests.
-- `src/push-notification-completion-dedupe.js`: dedupe logic so the same completion notification is not forwarded multiple times.
-- `src/push-notification-service-client.js`: HTTP client for talking to an external push service from the bridge.
-- `src/push-notification-tracker.js`: watches outbound assistant activity and turns final results into completion-notification events.
-- `src/qr.js`: terminal QR rendering for pairing payloads.
-- `src/rollout-live-mirror.js`: reads rollout logs and mirrors live activity back to Android as the run progresses.
-- `src/rollout-watch.js`: rollout discovery/watch utilities used for `watch`, live mirrors, desktop refresh, and context usage fallback.
+- `src/notifications/handler.js`: handles bridge-side notification RPCs such as token registration and completion registration requests.
+- `src/notifications/completion-dedupe.js`: dedupe logic so the same completion notification is not forwarded multiple times.
+- `src/notifications/service-client.js`: HTTP client for talking to an external push service from the bridge.
+- `src/notifications/tracker.js`: watches outbound assistant activity and turns final results into completion-notification events.
+- `src/pairing/qr.js`: terminal QR rendering for pairing payloads.
+- `src/rollout/live-mirror.js`: reads rollout logs and mirrors live activity back to Android as the run progresses.
+- `src/rollout/watch.js`: rollout discovery/watch utilities used for `watch`, live mirrors, desktop refresh, and context usage fallback.
 - `src/runtime-compat.js`: compatibility layer that normalizes older/newer RPC payloads and sanitizes history images for relay transport.
 - `src/scripts/codex-refresh.applescript`: AppleScript helper used by the macOS desktop refresh path.
-- `src/secure-device-state.js`: canonical bridge identity and trusted-phone persistence, including migration/recovery from older storage.
-- `src/secure-transport.js`: bridge-side encrypted pairing and reconnect protocol, including QR bootstrap, trusted reconnect, encryption, and replay buffering.
+- `src/pairing/device-state.js`: canonical bridge identity and trusted-phone persistence, including migration/recovery from older storage, recovery-identity persistence, and guardrails against synthetic test state leaking into real host state.
+- `src/pairing/secure-transport.js`: bridge-side encrypted pairing and reconnect protocol, including QR bootstrap, phone-owned recovery registration, trusted reconnect, recovery/rekey rotation, encryption, and replay buffering.
 - `src/session-state.js`: remembers the last active thread and can reopen it in the local Codex desktop app.
 - `src/thread-context-handler.js`: handler for thread context/usage RPC requests routed from Android.
-- `src/workspace-browser.js`: safe host-side directory browsing for the Android workspace picker.
-- `src/workspace-handler.js`: workspace RPC handler for recent workspaces, directory listing, activation, and reverse-patch preview/apply flows.
-- `src/workspace-runtime.js`: active workspace manager that binds the chosen host directory to a Codex transport and tracks recent workspaces.
+- `src/workspace/browser.js`: safe host-side directory browsing for the Android workspace picker.
+- `src/workspace/handler.js`: workspace RPC handler for recent workspaces, directory listing, activation, and reverse-patch preview/apply flows.
+- `src/workspace/runtime.js`: active workspace manager that binds the chosen host directory to a Codex transport and tracks recent workspaces.
 
 ## Relay
 
 Base path: `relay/`
 
 - `server.js`: standalone HTTP/HTTPS server wrapper that exposes the relay, health endpoints, and optional push-session routes.
-- `relay.js`: core in-memory WebSocket relay that pairs one host daemon with one mobile client, handles heartbeat/liveness, and supports trusted-session resolution.
+- `relay.js`: core in-memory WebSocket relay that pairs one host daemon with one mobile client, handles heartbeat/liveness, supports trusted-session resolution, and verifies trusted recovery/rekey requests against current and fallback recovery identities.
 - `push-service.js`: optional push-session registry plus webhook fan-out helper used for completion notifications.
 
 ## How To Use This Map
@@ -187,7 +187,7 @@ If you are trying to place new work:
 
 If you are trying to debug a feature:
 
-- pairing and reconnect: start with Android `data/AndrodexClient.kt`, bridge `secure-transport.js`, and relay `relay.js`
+- pairing and reconnect: start with Android `data/AndrodexClient.kt`, Android `service/AndrodexService.kt`, bridge `pairing/secure-transport.js`, and relay `relay.js`
 - thread/timeline UI: start with Android `service/AndrodexService.kt`, `timeline/ThreadTimelineRender.kt`, and `ui/turn/ThreadTimelineScreen.kt`
-- host workspace or git behavior: start with bridge `workspace-runtime.js`, `workspace-handler.js`, and `git-handler.js`
-- notifications: start with Android `notifications/`, bridge `notifications-handler.js` and `push-notification-tracker.js`, then relay `push-service.js`
+- host workspace or git behavior: start with bridge `workspace/runtime.js`, `workspace/handler.js`, and `git-handler.js`
+- notifications: start with Android `notifications/`, bridge `notifications/handler.js` and `notifications/tracker.js`, then relay `push-service.js`
