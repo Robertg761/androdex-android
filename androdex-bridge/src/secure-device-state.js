@@ -14,6 +14,7 @@ const DEFAULT_STORE_DIR = path.join(os.homedir(), ".androdex");
 const KEYCHAIN_SERVICE = "io.androdex.bridge.device-state";
 const KEYCHAIN_ACCOUNT = "default";
 const KEYCHAIN_COMMAND_TIMEOUT_MS = 1_500;
+const STABLE_RELAY_HOST_PREFIX = "mac.";
 let hasLoggedMismatch = false;
 
 function loadOrCreateBridgeDeviceState() {
@@ -64,6 +65,14 @@ function resolveBridgeRelaySession(state) {
     isPersistent: false,
     sessionId: randomUUID(),
   };
+}
+
+function stableRelayHostIdForMacDeviceId(macDeviceId) {
+  const normalizedMacDeviceId = normalizeNonEmptyString(macDeviceId);
+  if (!normalizedMacDeviceId) {
+    return null;
+  }
+  return `${STABLE_RELAY_HOST_PREFIX}${normalizedMacDeviceId}`;
 }
 
 function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { persist = true } = {}) {
@@ -341,4 +350,5 @@ module.exports = {
   rememberTrustedPhone,
   resetBridgeDeviceState,
   resolveBridgeRelaySession,
+  stableRelayHostIdForMacDeviceId,
 };

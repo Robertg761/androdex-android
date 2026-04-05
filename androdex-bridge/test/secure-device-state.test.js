@@ -194,6 +194,15 @@ test("resolveBridgeRelaySession issues a fresh relay session id without changing
   });
 });
 
+test("stableRelayHostIdForMacDeviceId derives a durable public host route from the mac device id", () => {
+  withTempHome(({ secureDeviceState }) => {
+    assert.equal(
+      secureDeviceState.stableRelayHostIdForMacDeviceId("123e4567-e89b-12d3-a456-426614174000"),
+      "mac.123e4567-e89b-12d3-a456-426614174000"
+    );
+  });
+});
+
 test("loadOrCreateBridgeDeviceState repairs the legacy keychain mirror when the canonical file exists", () => {
   let keychainReadAttempts = 0;
 

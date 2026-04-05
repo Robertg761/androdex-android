@@ -123,6 +123,27 @@ class ThreadTimelineFormattingTest {
     }
 
     @Test
+    fun buildThreadTimelineComposeCache_hidesRedundantThinkingFooterActivity() {
+        val snapshot = buildThreadTimelineRenderSnapshot(
+            threadId = "thread-1",
+            messageRevision = 8L,
+            messages = listOf(
+                chatMessage(id = "user", role = ConversationRole.USER, createdAt = 1_000L).copy(turnId = "turn-1"),
+                systemMessage(
+                    id = "thinking",
+                    kind = ConversationKind.THINKING,
+                    createdAt = 2_000L,
+                    isStreaming = true,
+                ).copy(turnId = "turn-1", text = "Thinking..."),
+            ),
+        )
+
+        val cache = buildThreadTimelineComposeCache(snapshot)
+
+        assertNull(cache.agentActivityText)
+    }
+
+    @Test
     fun buildThreadTimelineScrollTarget_usesSnapshotTurnIndex() {
         val snapshot = buildThreadTimelineRenderSnapshot(
             threadId = "thread-1",

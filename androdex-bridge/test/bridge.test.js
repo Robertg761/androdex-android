@@ -11,6 +11,7 @@ const {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
   rememberForwardedRequestTiming,
+  resolveForwardedRequestReplay,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
@@ -186,6 +187,31 @@ test("resolveForwardedInitializeResponse rewrites already-initialized errors int
   assert.equal(forwardedInitializeRequestIds.has("req-init"), false);
 });
 
+test("resolveForwardedInitializeResponse rewrites successful initialize results into bridge-managed success", () => {
+  const forwardedInitializeRequestIds = new Set(["req-init"]);
+
+  const normalized = resolveForwardedInitializeResponse(
+    JSON.stringify({
+      id: "req-init",
+      result: {
+        protocolVersion: "2026-03-26",
+      },
+    }),
+    forwardedInitializeRequestIds
+  );
+
+  assert.ok(normalized);
+  assert.equal(normalized.handshakeWarm, true);
+  assert.deepEqual(JSON.parse(normalized.message), {
+    id: "req-init",
+    result: {
+      bridgeManaged: true,
+      workspaceActive: true,
+    },
+  });
+  assert.equal(forwardedInitializeRequestIds.has("req-init"), false);
+});
+
 test("resolveForwardedInitializeResponse passes through non-initialize responses unchanged", () => {
   const forwardedInitializeRequestIds = new Set(["req-init"]);
 
@@ -269,4 +295,39 @@ test("rememberForwardedRequestTiming ignores unrelated methods", () => {
     ),
     null
   );
+});
+
+test("resolveForwardedRequestReplay returns the original request when Codex says it is not initialized", () => {
+  const forwardedRequestTimingsById = new Map();
+  const rawRequest = JSON.stringify({
+    id: "req-thread-read",
+    method: "thread/read",
+    params: {
+      threadId: "thread-123",
+    },
+  });
+
+  rememberForwardedRequestTiming(
+    rawRequest,
+    new Set(["thread/list", "thread/read", "thread/resume"]),
+    forwardedRequestTimingsById,
+    1_000
+  );
+
+  const replay = resolveForwardedRequestReplay(
+    JSON.stringify({
+      id: "req-thread-read",
+      error: {
+        message: "Not initialized",
+      },
+    }),
+    forwardedRequestTimingsById
+  );
+
+  assert.deepEqual(replay, {
+    requestId: "req-thread-read",
+    method: "thread/read",
+    threadId: "thread-123",
+    rawMessage: rawRequest,
+  });
 });

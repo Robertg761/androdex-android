@@ -182,8 +182,20 @@ internal fun buildThreadTimelineComposeCache(
             messageRevision = snapshot.messageRevision,
             items = snapshot.items,
             latestMessageIndex = snapshot.latestMessageIndex,
-            agentActivityText = snapshot.agentActivityText,
+            agentActivityText = composeAgentActivityText(snapshot),
         )
+    }
+}
+
+private fun composeAgentActivityText(snapshot: ThreadTimelineRenderSnapshot): String? {
+    val latestMessage = snapshot.items.lastOrNull()?.message ?: return snapshot.agentActivityText
+    return if (latestMessage.role == ConversationRole.SYSTEM
+        && latestMessage.kind == ConversationKind.THINKING
+        && latestMessage.isStreaming
+    ) {
+        null
+    } else {
+        snapshot.agentActivityText
     }
 }
 

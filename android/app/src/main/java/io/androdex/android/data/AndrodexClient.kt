@@ -108,9 +108,11 @@ private const val trustedSessionResolveTimeoutMs = 8_000L
 private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
+private const val bestEffortThreadResumeTimeoutMs = 1_500L
 private const val secureSessionReadyTimeoutMs = 5_000L
 private const val logTag = "AndrodexClient"
 private const val trustedReconnectFailureThreshold = 3
+private const val stableRelayHostPrefix = "mac."
 
 internal enum class SecureSessionWaitPolicy {
     RECONNECT_FRIENDLY,
@@ -136,6 +138,17 @@ internal fun shouldWaitForSecureSessionReady(
         return false
     }
     return lifecycleTransitionInFlight || handshakeInProgress || socketAvailable
+}
+
+internal suspend fun <T> runBestEffortRequest(
+    timeoutMs: Long,
+    block: suspend () -> T,
+): T? {
+    return try {
+        withTimeout(timeoutMs) { block() }
+    } catch (_: TimeoutCancellationException) {
+        null
+    }
 }
 
 private class HostTransportInterruptedException(
@@ -280,15 +293,19 @@ class AndrodexClient(
     private fun reconnectCandidate(): PairingPayload? {
         val trusted = currentTrustedMacRecord() ?: return null
         val session = savedRelaySession
-        if (session != null && !looksLikeLegacyRelaySessionIdentifier(session.macDeviceId)) {
-            return session.toPairingPayload()
-        }
         if (session != null && trusted.macDeviceId != session.macDeviceId) {
             clearSavedRelaySession()
             emitPairingAvailability()
         }
-        val relayUrl = trusted.relayUrl ?: return null
-        val hostId = trusted.lastResolvedHostId ?: trusted.macDeviceId
+        if (
+            session != null &&
+            !looksLikeLegacyRelaySessionIdentifier(session.macDeviceId, session.hostId) &&
+            isStableRelayHostIdForMacDeviceId(session.hostId, trusted.macDeviceId)
+        ) {
+            return session.toPairingPayload()
+        }
+        val relayUrl = trusted.relayUrl ?: session?.relayUrl ?: return null
+        val hostId = stableRelayHostId(trusted.macDeviceId) ?: return null
         return PairingPayload(
             version = pairingQrVersion,
             relay = relayUrl,
@@ -1246,7 +1263,7 @@ class AndrodexClient(
 
     private suspend fun resolveTrustedPairing(pairing: PairingPayload): TrustedSessionResolveResult {
         val phoneIdentity = requirePhoneIdentityForReconnect()
-        if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId)) {
+        if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId, pairing.routingId)) {
             return TrustedSessionResolveResult.RepairRequired(
                 "Trusted reconnect data is from an older live-session format. Open a fresh pairing payload from the host to repair this phone.",
             )
@@ -1441,7 +1458,14 @@ class AndrodexClient(
     ) {
         val params = JSONObject().put("threadId", threadId)
         try {
-            sendRequest("thread/resume", params, secureSessionWaitPolicy)
+            runBestEffortRequest(bestEffortThreadResumeTimeoutMs) {
+                sendRequest(
+                    method = "thread/resume",
+                    params = params,
+                    secureSessionWaitPolicy = secureSessionWaitPolicy,
+                    logTimeout = false,
+                )
+            }
         } catch (_: Throwable) {
         }
     }
@@ -1450,7 +1474,14 @@ class AndrodexClient(
         clientScope.launch {
             val params = JSONObject().put("threadId", threadId)
             try {
-                sendRequest("thread/resume", params)
+                runBestEffortRequest(bestEffortThreadResumeTimeoutMs) {
+                    sendRequest(
+                        method = "thread/resume",
+                        params = params,
+                        secureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+                        logTimeout = false,
+                    )
+                }
             } catch (error: Throwable) {
                 Log.w(logTag, "background thread/resume failed threadId=$threadId", error)
             }
@@ -2160,6 +2191,7 @@ class AndrodexClient(
         method: String,
         params: JSONObject?,
         secureSessionWaitPolicy: SecureSessionWaitPolicy,
+        logTimeout: Boolean = true,
     ): JSONObject {
         val requestId = UUID.randomUUID().toString()
         val request = JSONObject()
@@ -2181,7 +2213,9 @@ class AndrodexClient(
             withTimeout(timeoutForMethod(method)) { responseDeferred.await() }
         } catch (error: TimeoutCancellationException) {
             pendingResponses.remove(requestId)
-            Log.w(logTag, "request timeout method=$method id=$requestId")
+            if (logTimeout) {
+                Log.w(logTag, "request timeout method=$method id=$requestId")
+            }
             throw HostTransportInterruptedException(
                 "Timed out waiting for $method response from the host."
             )
@@ -3195,7 +3229,32 @@ internal fun looksLikeLegacyRelaySessionIdentifier(value: String?): Boolean {
     if (normalized.isEmpty()) {
         return false
     }
-    return runCatching { UUID.fromString(normalized) }.isSuccess
+    return false
+}
+
+internal fun stableRelayHostId(macDeviceId: String?): String? {
+    val normalizedMacDeviceId = macDeviceId?.trim().orEmpty()
+    if (normalizedMacDeviceId.isEmpty()) {
+        return null
+    }
+    return "$stableRelayHostPrefix$normalizedMacDeviceId"
+}
+
+internal fun isStableRelayHostIdForMacDeviceId(hostId: String?, macDeviceId: String?): Boolean {
+    val expectedHostId = stableRelayHostId(macDeviceId) ?: return false
+    return hostId?.trim() == expectedHostId
+}
+
+internal fun looksLikeLegacyRelaySessionIdentifier(
+    macDeviceId: String?,
+    routingId: String?,
+): Boolean {
+    val normalizedMacDeviceId = macDeviceId?.trim().orEmpty()
+    val normalizedRoutingId = routingId?.trim().orEmpty()
+    if (normalizedMacDeviceId.isEmpty() || normalizedRoutingId.isEmpty()) {
+        return false
+    }
+    return normalizedMacDeviceId == normalizedRoutingId
 }
 
 internal fun selectPreferredTrustedMacRecord(
@@ -3203,18 +3262,34 @@ internal fun selectPreferredTrustedMacRecord(
     preferredDeviceId: String?,
     savedRelaySession: SavedRelaySession?,
 ): TrustedMacRecord? {
+    val legacySavedSessionDeviceId = savedRelaySession
+        ?.takeIf { looksLikeLegacyRelaySessionIdentifier(it.macDeviceId, it.hostId) }
+        ?.macDeviceId
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
     val normalizedPreferredDeviceId = preferredDeviceId?.trim()?.takeIf { it.isNotEmpty() }
-    if (normalizedPreferredDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(normalizedPreferredDeviceId)) {
-        records[normalizedPreferredDeviceId]?.let { return it }
+    if (normalizedPreferredDeviceId != null) {
+        records[normalizedPreferredDeviceId]
+            ?.takeUnless {
+                it.macDeviceId == legacySavedSessionDeviceId ||
+                    looksLikeLegacyRelaySessionIdentifier(it.macDeviceId, it.lastResolvedHostId)
+            }
+            ?.let { return it }
     }
 
     val savedSessionDeviceId = savedRelaySession?.macDeviceId?.trim()?.takeIf { it.isNotEmpty() }
-    if (savedSessionDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(savedSessionDeviceId)) {
+    if (
+        savedSessionDeviceId != null &&
+        !looksLikeLegacyRelaySessionIdentifier(savedSessionDeviceId, savedRelaySession.hostId)
+    ) {
         records[savedSessionDeviceId]?.let { return it }
     }
 
     records.values
-        .filterNot { looksLikeLegacyRelaySessionIdentifier(it.macDeviceId) }
+        .filterNot {
+            it.macDeviceId == legacySavedSessionDeviceId ||
+                looksLikeLegacyRelaySessionIdentifier(it.macDeviceId, it.lastResolvedHostId)
+        }
         .maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
         ?.let { return it }
 

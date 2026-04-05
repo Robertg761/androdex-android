@@ -108,9 +108,19 @@ function createBridgeSecureTransport({
     }
   }
 
-  function queueOutboundApplicationMessage(payloadText, sendWireMessage) {
+  function queueOutboundApplicationMessage(payloadText, sendWireMessage, options = {}) {
     const normalizedPayload = normalizeNonEmptyString(payloadText);
     if (!normalizedPayload) {
+      return;
+    }
+    const allowPreResume = options?.allowPreResume === true;
+
+    const liveSessionSender = activeSession?.sendWireMessage;
+    const effectiveSendWireMessage = typeof liveSessionSender === "function"
+      ? liveSessionSender
+      : sendWireMessage;
+    if (allowPreResume && activeSession && typeof effectiveSendWireMessage === "function") {
+      sendLiveEnvelope(normalizedPayload, effectiveSendWireMessage);
       return;
     }
 
@@ -124,10 +134,6 @@ function createBridgeSecureTransport({
     outboundBufferBytes += bufferEntry.sizeBytes;
     trimOutboundBuffer();
 
-    const liveSessionSender = activeSession?.sendWireMessage;
-    const effectiveSendWireMessage = typeof liveSessionSender === "function"
-      ? liveSessionSender
-      : sendWireMessage;
     if (activeSession?.isResumed && typeof effectiveSendWireMessage === "function") {
       sendBufferedEntry(bufferEntry, effectiveSendWireMessage);
     }
@@ -535,19 +541,9 @@ function createBridgeSecureTransport({
       return false;
     }
 
-    const envelope = encryptEnvelopePayload(
-      {
-        bridgeOutboundSeq: entry.bridgeOutboundSeq,
-        payloadText: entry.payloadText,
-      },
-      activeSession.macToPhoneKey,
-      SECURE_SENDER_MAC,
-      activeSession.nextOutboundCounter,
-      stableHostId,
-      activeSession.keyEpoch
-    );
-    activeSession.nextOutboundCounter += 1;
-    return sendWireMessage(JSON.stringify(envelope)) !== false;
+    return sendLiveEnvelope(entry.payloadText, sendWireMessage, {
+      bridgeOutboundSeq: entry.bridgeOutboundSeq,
+    });
   }
 
   function replayableOutboundEntries(lastAppliedBridgeOutboundSeq) {
@@ -580,6 +576,26 @@ function createBridgeSecureTransport({
     isSecureChannelReady,
     queueOutboundApplicationMessage,
   };
+
+  function sendLiveEnvelope(payloadText, sendWireMessage, { bridgeOutboundSeq = null } = {}) {
+    if (!activeSession || typeof sendWireMessage !== "function") {
+      return false;
+    }
+
+    const payloadObject = bridgeOutboundSeq == null
+      ? { payloadText }
+      : { bridgeOutboundSeq, payloadText };
+    const envelope = encryptEnvelopePayload(
+      payloadObject,
+      activeSession.macToPhoneKey,
+      SECURE_SENDER_MAC,
+      activeSession.nextOutboundCounter,
+      stableHostId,
+      activeSession.keyEpoch
+    );
+    activeSession.nextOutboundCounter += 1;
+    return sendWireMessage(JSON.stringify(envelope)) !== false;
+  }
 }
 
 function debugSecureLog(message) {

@@ -819,6 +819,65 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun openThread_whileRunning_deduplicatesMirroredAssistantHistoryAgainstLiveReply() = runTest {
+        val now = System.currentTimeMillis()
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Keep the bridge terminal open.",
+                        createdAtEpochMs = now + 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    ),
+                    ConversationMessage(
+                        id = "history-assistant-2",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Keep the bridge terminal open.",
+                        createdAtEpochMs = now + 1_001L,
+                        turnId = "turn-1",
+                        itemId = "assistant-2",
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        service.processClientUpdate(
+            ClientUpdate.AssistantCompleted(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                text = "Keep the bridge terminal open.",
+            )
+        )
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val assistantMessages = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.role == ConversationRole.ASSISTANT && it.kind == ConversationKind.CHAT }
+        assertEquals(1, assistantMessages.size)
+        assertEquals("Keep the bridge terminal open.", assistantMessages.single().text)
+    }
+
+    @Test
     fun openThread_reselectingVisibleHydratedThreadSkipsSecondHistoryLoad() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(

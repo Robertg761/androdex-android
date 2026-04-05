@@ -60,6 +60,8 @@ Androdex does **not** run Codex on the phone itself.
 - Android-native git workflows for host-side status, diff summary, commit, push, pull, branch switch/create, and managed worktree actions with Remodex-style safety prompts
 - approval prompts on Android
 - reconnect from a saved pairing
+- trusted reconnect survives normal app updates, force-stop/app-switcher relaunch, and launchd service restarts as long as the phone still has its local trust state
+- saved reconnect now uses a stable logical host route, so the phone no longer depends on an old live relay session id surviving a daemon restart
 - model, access mode, service-tier, and per-thread runtime controls on Android
 - native thread fork actions on Android when the host bridge/runtime supports them
 - native thread maintenance actions on Android for context compaction, rollback, and background-terminal cleanup when the host bridge/runtime supports them
@@ -186,6 +188,7 @@ Use this after host-side changes to make sure the macOS host service and Android
 6. On an idle thread with history, confirm Android thread maintenance actions can compact context, roll back the last turn, and clean background terminals when the connected host advertises support. `thread/shellCommand` is still intentionally not exposed on Android.
 7. Attach photos from the camera and gallery, confirm the 4-image limit, verify loading and failure tiles behave correctly, and confirm restored queued drafts keep their previews.
 8. Restart the launchd service or reconnect the phone and confirm the saved pairing, active workspace, and active-run stop state recover cleanly.
+9. Force-stop or swipe away the Android app, reopen it, and confirm it resolves the trusted host again without showing the repair pairing flow.
 
 ## Commands
 
@@ -219,11 +222,13 @@ Tails the rollout log for a thread in real time.
 
 ```text
 [Android client]
-        <-> paired relay WebSocket session keyed by hostId <->
+        <-> paired relay WebSocket session keyed by stable hostId <->
 [androdex macOS bridge service on host computer]
         <-> stdin/stdout JSON-RPC <->
 [codex app-server]
 ```
+
+The bridge can still use a fresh internal relay session on each launch, but the Android client reconnects through a durable public host route derived from the trusted Mac identity. That lets the phone survive host restarts without treating a dead live-session id as a lost pairing.
 
 The desktop Codex app can still read persisted sessions from `~/.codex/sessions` when available, but it is not a true live subscriber to phone-authored runs.
 

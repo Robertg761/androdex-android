@@ -83,6 +83,7 @@ Your webhook is responsible for the final handoff to FCM or your own notificatio
 Androdex uses the relay as a transport hop, not as a trusted application server.
 
 - The pairing QR gives the mobile client the host identity public key plus a short-lived bootstrap token.
+- The phone reconnects through a stable public host route derived from the trusted Mac device id, while the bridge can still rotate its private relay transport session underneath.
 - The mobile client and bridge perform a signed handshake, derive shared AES-256-GCM keys with X25519 + HKDF-SHA256, and then encrypt application payloads end to end.
 - The relay can still observe connection metadata and the plaintext secure control messages needed to establish the encrypted session.
 - The relay does not receive plaintext Androdex application payloads after the secure session is active.
@@ -90,6 +91,7 @@ Androdex uses the relay as a transport hop, not as a trusted application server.
 ## Protocol Notes
 
 - path: `/relay/{hostId}`
+- `hostId` is a durable logical host route for Android reconnects; the relay maps it to the current live Mac transport session
 - required header: `x-role: mac` or `x-role: android`
 - close code `4000`: invalid session or role
 - close code `4001`: previous Mac connection replaced

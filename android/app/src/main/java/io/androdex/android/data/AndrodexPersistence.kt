@@ -76,14 +76,22 @@ open class AndrodexPersistence internal constructor(
     }
 
     fun saveSavedRelaySession(savedRelaySession: SavedRelaySession) {
-        secureStore.writeString(KEY_SAVED_RELAY_SESSION, savedRelaySession.toJson().toString())
-        secureStore.writeString(KEY_LAST_APPLIED_SEQ, savedRelaySession.lastAppliedBridgeOutboundSeq.toString())
+        secureStore.writeString(
+            KEY_SAVED_RELAY_SESSION,
+            savedRelaySession.toJson().toString(),
+            synchronously = true,
+        )
+        secureStore.writeString(
+            KEY_LAST_APPLIED_SEQ,
+            savedRelaySession.lastAppliedBridgeOutboundSeq.toString(),
+            synchronously = true,
+        )
     }
 
     fun clearSavedRelaySession() {
-        secureStore.remove(KEY_SAVED_RELAY_SESSION)
-        secureStore.remove(KEY_PAIRING)
-        secureStore.remove(KEY_LAST_APPLIED_SEQ)
+        secureStore.remove(KEY_SAVED_RELAY_SESSION, synchronously = true)
+        secureStore.remove(KEY_PAIRING, synchronously = true)
+        secureStore.remove(KEY_LAST_APPLIED_SEQ, synchronously = true)
     }
 
     fun loadPhoneIdentity(): PhoneIdentityState? {
@@ -92,11 +100,15 @@ open class AndrodexPersistence internal constructor(
     }
 
     fun savePhoneIdentity(identityState: PhoneIdentityState) {
-        secureStore.writeString(KEY_PHONE_IDENTITY, identityState.toJson().toString())
+        secureStore.writeString(
+            KEY_PHONE_IDENTITY,
+            identityState.toJson().toString(),
+            synchronously = true,
+        )
     }
 
     fun clearPhoneIdentity() {
-        secureStore.remove(KEY_PHONE_IDENTITY)
+        secureStore.remove(KEY_PHONE_IDENTITY, synchronously = true)
     }
 
     fun loadTrustedMacRegistry(): TrustedMacRegistry {
@@ -105,11 +117,15 @@ open class AndrodexPersistence internal constructor(
     }
 
     fun saveTrustedMacRegistry(registry: TrustedMacRegistry) {
-        secureStore.writeString(KEY_TRUSTED_MACS, registry.toJson().toString())
+        secureStore.writeString(
+            KEY_TRUSTED_MACS,
+            registry.toJson().toString(),
+            synchronously = true,
+        )
     }
 
     fun clearTrustedMacRegistry() {
-        secureStore.remove(KEY_TRUSTED_MACS)
+        secureStore.remove(KEY_TRUSTED_MACS, synchronously = true)
     }
 
     fun loadLastTrustedMacDeviceId(): String? {
@@ -119,9 +135,13 @@ open class AndrodexPersistence internal constructor(
     fun saveLastTrustedMacDeviceId(value: String?) {
         val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
         if (normalized == null) {
-            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
+            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID, synchronously = true)
         } else {
-            secureStore.writeString(KEY_LAST_TRUSTED_MAC_DEVICE_ID, normalized)
+            secureStore.writeString(
+                KEY_LAST_TRUSTED_MAC_DEVICE_ID,
+                normalized,
+                synchronously = true,
+            )
         }
     }
 

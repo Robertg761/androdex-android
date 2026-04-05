@@ -4,8 +4,11 @@ import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.TrustedMacRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
 
 class AndrodexClientSecureTransportTest {
     @Test
@@ -90,6 +93,25 @@ class AndrodexClientSecureTransportTest {
                 waitPolicy = SecureSessionWaitPolicy.FAIL_FAST,
             )
         )
+    }
+
+    @Test
+    fun runBestEffortRequest_returnsNullWhenRequestTimesOut() = runTest {
+        val result = runBestEffortRequest(timeoutMs = 50) {
+            delay(5_000)
+            "slow-result"
+        }
+
+        assertNull(result)
+    }
+
+    @Test
+    fun runBestEffortRequest_returnsResultWhenRequestCompletesQuickly() = runTest {
+        val result = runBestEffortRequest(timeoutMs = 50) {
+            "ok"
+        }
+
+        assertEquals("ok", result)
     }
 
     @Test

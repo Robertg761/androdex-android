@@ -38,15 +38,25 @@ class SecureStore(context: Context) {
         )
     }
 
-    fun writeString(key: String, value: String) {
+    fun writeString(key: String, value: String, synchronously: Boolean = false) {
         val encrypted = synchronized(cryptoLock) {
             runCryptoOperationWithRetry { encrypt(value) }
         }
-        preferences.edit().putString(key, encrypted).apply()
+        val editor = preferences.edit().putString(key, encrypted)
+        if (synchronously) {
+            editor.commit()
+        } else {
+            editor.apply()
+        }
     }
 
-    fun remove(key: String) {
-        preferences.edit().remove(key).apply()
+    fun remove(key: String, synchronously: Boolean = false) {
+        val editor = preferences.edit().remove(key)
+        if (synchronously) {
+            editor.commit()
+        } else {
+            editor.apply()
+        }
     }
 
     private fun encrypt(plaintext: String): String {

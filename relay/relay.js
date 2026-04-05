@@ -14,6 +14,7 @@ const CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL = 4004;
 const MAC_ABSENCE_GRACE_MS = 15_000;
 const TRUSTED_SESSION_RESOLVE_TAG = "androdex-trusted-session-resolve-v1";
 const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
+const STABLE_RELAY_HOST_PREFIX = "mac.";
 
 // In-memory host registry for one live host daemon and one live mobile client per host id.
 const sessions = new Map();
@@ -46,8 +47,11 @@ function setupRelay(
   wss.on("connection", (ws, req) => {
     const urlPath = normalizeRelayPath(req.url || "");
     const match = urlPath.match(/^\/relay\/([^/?]+)/);
-    const sessionId = match?.[1];
+    const requestedSessionId = normalizeNonEmptyString(match?.[1]);
     const role = normalizeRole(req.headers["x-role"]);
+    const sessionId = role === "mobile"
+      ? resolveMobileConnectionSessionId(requestedSessionId)
+      : requestedSessionId;
 
     if (!sessionId || (role !== "mac" && role !== "mobile")) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
@@ -384,7 +388,7 @@ function resolveTrustedMacSession({
     macDeviceId: normalizedMacDeviceId,
     macIdentityPublicKey: liveSession.macIdentityPublicKey,
     displayName: liveSession.displayName || null,
-    sessionId: liveSession.sessionId,
+    sessionId: stableRelayHostIdForMacDeviceId(normalizedMacDeviceId),
   };
 }
 
@@ -427,6 +431,42 @@ function hasAuthenticatedMacSession(sessionId, notificationSecret) {
 
 function hasLiveSession(sessionId) {
   return hasActiveMacSession(sessionId);
+}
+
+function stableRelayHostIdForMacDeviceId(macDeviceId) {
+  const normalizedMacDeviceId = normalizeNonEmptyString(macDeviceId);
+  if (!normalizedMacDeviceId) {
+    return "";
+  }
+  return `${STABLE_RELAY_HOST_PREFIX}${normalizedMacDeviceId}`;
+}
+
+function macDeviceIdFromStableRelayHostId(hostId) {
+  const normalizedHostId = normalizeNonEmptyString(hostId);
+  if (!normalizedHostId.startsWith(STABLE_RELAY_HOST_PREFIX)) {
+    return "";
+  }
+
+  return normalizeNonEmptyString(normalizedHostId.slice(STABLE_RELAY_HOST_PREFIX.length));
+}
+
+function resolveMobileConnectionSessionId(requestedSessionId) {
+  const normalizedRequestedSessionId = normalizeNonEmptyString(requestedSessionId);
+  if (!normalizedRequestedSessionId) {
+    return "";
+  }
+
+  const macDeviceId = macDeviceIdFromStableRelayHostId(normalizedRequestedSessionId);
+  if (!macDeviceId) {
+    return normalizedRequestedSessionId;
+  }
+
+  const liveSession = liveSessionsByMacDeviceId.get(macDeviceId);
+  if (!liveSession || !hasActiveMacSession(liveSession.sessionId)) {
+    return "";
+  }
+
+  return liveSession.sessionId;
 }
 
 function registerLiveMacSession(macRegistration) {

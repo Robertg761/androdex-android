@@ -23,6 +23,7 @@ const { createNotificationsHandler } = require("./notifications-handler");
 const {
   loadOrCreateBridgeDeviceState,
   resolveBridgeRelaySession,
+  stableRelayHostIdForMacDeviceId,
 } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
@@ -41,6 +42,9 @@ const RELAY_WATCHDOG_PING_INTERVAL_MS = 10_000;
 // healthy sessions are not torn down between server pings.
 const RELAY_WATCHDOG_STALE_AFTER_MS = 45_000;
 const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
+const CODEX_INITIALIZE_REQUEST_TIMEOUT_MS = 3_000;
+const CODEX_INITIALIZE_RETRY_COUNT = 3;
+const CODEX_INITIALIZE_RETRY_DELAY_MS = 250;
 
 function startBridge({
   config: explicitConfig = null,
@@ -68,6 +72,7 @@ function startBridge({
   const relaySession = resolveBridgeRelaySession(deviceState);
   deviceState = relaySession.deviceState;
   const sessionId = relaySession.sessionId;
+  const stableHostId = stableRelayHostIdForMacDeviceId(deviceState.macDeviceId) || sessionId;
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const notificationSecret = randomBytes(24).toString("hex");
 
@@ -99,9 +104,12 @@ function startBridge({
   let watchedContextUsageKey = null;
   let lastContextUsageHint = null;
   let supportsNativeTokenUsageUpdates = false;
+  let lastBridgeManagedInitializeParams = null;
+  let bridgeRecoveryInitializePromise = null;
+  const pendingBridgeRecoveryRequestsById = new Map();
 
   const secureTransport = createBridgeSecureTransport({
-    hostId: sessionId,
+    hostId: stableHostId,
     sessionId,
     relayUrl: relayBaseUrl,
     deviceState,
@@ -134,6 +142,13 @@ function startBridge({
     },
     requestIdPrefix: `androdex-bridge-${sessionId}`,
   });
+  const codexInitializeRpcClient = createCodexRpcClient({
+    sendToCodex(message) {
+      workspaceRuntime.sendToCodex(message);
+    },
+    requestTimeoutMs: CODEX_INITIALIZE_REQUEST_TIMEOUT_MS,
+    requestIdPrefix: `androdex-bridge-init-${sessionId}`,
+  });
   const desktopRefresher = new CodexDesktopRefresher({
     enabled: config.refreshEnabled,
     debounceMs: config.refreshDebounceMs,
@@ -146,15 +161,20 @@ function startBridge({
     onBeforeTransportShutdown() {
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
+      pendingBridgeRecoveryRequestsById.clear();
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       supportsNativeTokenUsageUpdates = false;
+      bridgeRecoveryInitializePromise = null;
+      codexInitializeRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge initialize completed."));
       codexRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge RPC completed."));
       codexHandshakeState = "cold";
     },
     onBeforeTransportStart() {
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
+      pendingBridgeRecoveryRequestsById.clear();
+      bridgeRecoveryInitializePromise = null;
       codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
       supportsNativeTokenUsageUpdates = false;
     },
@@ -174,6 +194,9 @@ function startBridge({
       });
     },
     onTransportMessage(message) {
+      if (recoverForwardedRequestAfterColdCodexResponse(message)) {
+        return;
+      }
       const forwardedRequestTiming = resolveForwardedRequestTiming(
         message,
         forwardedRequestTimingsById,
@@ -194,6 +217,9 @@ function startBridge({
         sendApplicationResponse(forwardedInitializeResponse.message);
         return;
       }
+      if (codexInitializeRpcClient.handleCodexMessage(message)) {
+        return;
+      }
       if (codexRpcClient.handleCodexMessage(message)) {
         return;
       }
@@ -210,6 +236,8 @@ function startBridge({
       desktopRefresher.handleTransportReset();
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
+      pendingBridgeRecoveryRequestsById.clear();
+      bridgeRecoveryInitializePromise = null;
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       codexHandshakeState = "cold";
@@ -267,7 +295,7 @@ function startBridge({
   function getStatus() {
     return {
       sessionId,
-      hostId: sessionId,
+      hostId: stableHostId,
       macDeviceId: deviceState.macDeviceId,
       relayUrl: relayBaseUrl,
       relayStatus: lastConnectionStatus || "disconnected",
@@ -503,14 +531,14 @@ function startBridge({
     });
   }
 
-  function sendApplicationResponse(rawMessage) {
+  function sendApplicationResponse(rawMessage, options = {}) {
     secureTransport.queueOutboundApplicationMessage(rawMessage, (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(wireMessage);
         return true;
       }
       return false;
-    });
+    }, options);
   }
 
   function sendRelayRegistrationUpdate(nextDeviceState = deviceState) {
@@ -674,6 +702,7 @@ function startBridge({
 
     if (method === "initialize" && parsed.id != null) {
       console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
+      lastBridgeManagedInitializeParams = cloneJsonObject(parsed.params) || {};
       if (!workspaceRuntime.hasActiveWorkspace()) {
         sendApplicationResponse(JSON.stringify({
           id: parsed.id,
@@ -681,28 +710,14 @@ function startBridge({
             bridgeManaged: true,
             workspaceActive: false,
           },
-        }));
+        }), { allowPreResume: true });
         return true;
       }
 
-      if (codexHandshakeState === "warm") {
-        sendApplicationResponse(createBridgeManagedInitializeSuccessResponse(parsed.id));
-        return true;
-      }
-
-      forwardedInitializeRequestIds.add(String(parsed.id));
-      try {
-        workspaceRuntime.sendToCodex(rawMessage);
-      } catch (error) {
-        forwardedInitializeRequestIds.delete(String(parsed.id));
-        sendApplicationResponse(JSON.stringify({
-          id: parsed.id,
-          error: {
-            code: -32000,
-            message: normalizeNonEmptyString(error?.message) || "The host is not ready yet.",
-          },
-        }));
-      }
+      sendApplicationResponse(
+        createBridgeManagedInitializeSuccessResponse(parsed.id),
+        { allowPreResume: true },
+      );
       return true;
     }
 
@@ -834,6 +849,26 @@ function startBridge({
     });
   }
 
+  async function sendCodexInitializeRequest(params) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= CODEX_INITIALIZE_RETRY_COUNT; attempt += 1) {
+      try {
+        return await codexInitializeRpcClient.sendRequest("initialize", params);
+      } catch (error) {
+        if (isAlreadyInitializedError(error?.message)) {
+          return null;
+        }
+        lastError = error;
+        if (!isCodexInitializeRetryableError(error) || attempt >= CODEX_INITIALIZE_RETRY_COUNT) {
+          throw error;
+        }
+        await delay(CODEX_INITIALIZE_RETRY_DELAY_MS);
+      }
+    }
+
+    throw lastError || new Error("Codex initialize failed.");
+  }
+
   async function shutdown() {
     if (isShuttingDown) {
       return;
@@ -844,6 +879,8 @@ function startBridge({
     clearBridgeStatusHeartbeat();
     forwardedInitializeRequestIds.clear();
     forwardedRequestTimingsById.clear();
+    pendingBridgeRecoveryRequestsById.clear();
+    bridgeRecoveryInitializePromise = null;
     stopContextUsageWatcher({ clearHint: false });
 
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -852,6 +889,57 @@ function startBridge({
     socket = null;
     await workspaceRuntime.shutdown();
     setTimeout(() => process.exit(0), 100);
+  }
+
+  function recoverForwardedRequestAfterColdCodexResponse(rawMessage) {
+    const replayableRequest = resolveForwardedRequestReplay(
+      rawMessage,
+      forwardedRequestTimingsById,
+    );
+    if (!replayableRequest) {
+      return false;
+    }
+
+    if (!workspaceRuntime.hasActiveWorkspace() || !lastBridgeManagedInitializeParams) {
+      return false;
+    }
+
+    pendingBridgeRecoveryRequestsById.set(replayableRequest.requestId, replayableRequest);
+    if (!bridgeRecoveryInitializePromise) {
+      bridgeRecoveryInitializePromise = sendCodexInitializeRequest(lastBridgeManagedInitializeParams)
+        .catch((error) => {
+          if (isAlreadyInitializedError(error?.message)) {
+            return null;
+          }
+          throw error;
+      }).then(() => {
+          codexHandshakeState = "warm";
+          const queuedRequests = [...pendingBridgeRecoveryRequestsById.values()];
+          pendingBridgeRecoveryRequestsById.clear();
+          for (const request of queuedRequests) {
+            workspaceRuntime.sendToCodex(request.rawMessage);
+          }
+      }).catch((error) => {
+          const detail = normalizeNonEmptyString(error?.message)
+            || "The host runtime could not recover its initialize state.";
+          const queuedRequests = [...pendingBridgeRecoveryRequestsById.values()];
+          pendingBridgeRecoveryRequestsById.clear();
+          for (const request of queuedRequests) {
+            forwardedRequestTimingsById.delete(request.requestId);
+            sendApplicationResponse(JSON.stringify({
+              id: request.requestId,
+              error: {
+                code: -32000,
+                message: detail,
+              },
+            }));
+          }
+      }).finally(() => {
+          bridgeRecoveryInitializePromise = null;
+      });
+    }
+
+    return true;
   }
 }
 
@@ -974,6 +1062,7 @@ function rememberForwardedRequestTiming(
     method: context.method,
     threadId: context.threadId || "",
     startedAt: now,
+    rawMessage,
   });
 }
 
@@ -1003,6 +1092,33 @@ function resolveForwardedRequestTiming(
     threadId: timing.threadId,
     durationMs: Math.max(0, now - timing.startedAt),
     errorMessage: normalizeNonEmptyString(parsed?.error?.message),
+  };
+}
+
+function resolveForwardedRequestReplay(
+  rawMessage,
+  forwardedRequestTimingsById,
+) {
+  if (!forwardedRequestTimingsById) {
+    return null;
+  }
+
+  const parsed = safeParseJSON(rawMessage);
+  const responseId = parsed?.id;
+  if (responseId == null || !isNotInitializedError(parsed?.error?.message)) {
+    return null;
+  }
+
+  const replayableRequest = forwardedRequestTimingsById.get(String(responseId));
+  if (!replayableRequest?.rawMessage) {
+    return null;
+  }
+
+  return {
+    requestId: String(responseId),
+    method: replayableRequest.method,
+    threadId: replayableRequest.threadId,
+    rawMessage: replayableRequest.rawMessage,
   };
 }
 
@@ -1050,6 +1166,30 @@ function isAlreadyInitializedError(message) {
   return normalizeNonEmptyString(message).toLowerCase().includes("already initialized");
 }
 
+function isCodexInitializeRetryableError(error) {
+  return error?.code === "codex_rpc_timeout";
+}
+
+function isNotInitializedError(message) {
+  return normalizeNonEmptyString(message).toLowerCase().includes("not initialized");
+}
+
+function delay(durationMs) {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function cloneJsonObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
 function buildMacRegistrationHeaders(deviceState) {
   const registration = buildMacRegistration(deviceState);
   const headers = {
@@ -1079,6 +1219,7 @@ module.exports = {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
   rememberForwardedRequestTiming,
+  resolveForwardedRequestReplay,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,

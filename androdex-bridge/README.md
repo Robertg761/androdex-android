@@ -130,6 +130,8 @@ If your npm account requires write-time 2FA, rerun the publish command with `--o
 3. From Android, open an existing thread and create a new one to confirm the remote client flow still works end to end.
 4. If desktop refresh is enabled, verify phone-authored thread activity refreshes the host Codex desktop without hijacking the normal thread list or workspace context.
 5. Restart the launchd service or reconnect the phone and confirm the saved pairing and active workspace recover without losing host-local state.
+6. Force-stop or swipe away the Android app, reopen it, and confirm the phone resolves the trusted host again instead of falling back to the repair-pairing screen.
+7. Restart the bridge while the phone still has a saved pairing and confirm reconnect uses the stable host route instead of getting stranded on the previous live relay session id.
 
 ## Project status
 

@@ -148,9 +148,110 @@ test("relay server resolves the current trusted host session for the paired mobi
 
   assert.equal(resolveResponse.statusCode, 200);
   assert.equal(resolveResponse.body.ok, true);
-  assert.equal(resolveResponse.body.sessionId, sessionId);
+  assert.equal(resolveResponse.body.sessionId, stableRelayHostId(macDeviceId));
   assert.equal(resolveResponse.body.macDeviceId, macDeviceId);
   assert.equal(resolveResponse.body.macIdentityPublicKey, macIdentityPublicKey);
+});
+
+test("relay server routes stable host ids across mac restarts", async (t) => {
+  const { publicKey: macPublicKey } = generateKeyPairSync("ed25519");
+  const { privateKey: phonePrivateKey, publicKey: phonePublicKey } = generateKeyPairSync("ed25519");
+  const macPublicJwk = macPublicKey.export({ format: "jwk" });
+  const phonePublicJwk = phonePublicKey.export({ format: "jwk" });
+  const macIdentityPublicKey = base64UrlToBase64(macPublicJwk.x);
+  const phoneIdentityPublicKey = base64UrlToBase64(phonePublicJwk.x);
+  const macDeviceId = "mac-stable";
+  const phoneDeviceId = "phone-stable";
+  const stableHostId = stableRelayHostId(macDeviceId);
+
+  const { server, wss } = createRelayServer();
+  const sockets = [];
+  t.after(() => {
+    for (const socket of sockets) {
+      try {
+        socket.close();
+      } catch {
+        // Best effort only.
+      }
+    }
+    wss.close();
+    server.close();
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  const firstMacSocket = new WebSocket(`ws://127.0.0.1:${port}/relay/session-first`, {
+    headers: {
+      "x-role": "mac",
+      "x-notification-secret": "secret-stable-first",
+      "x-mac-device-id": macDeviceId,
+      "x-mac-identity-public-key": macIdentityPublicKey,
+      "x-machine-name": "stable-host",
+      "x-trusted-phone-device-id": phoneDeviceId,
+      "x-trusted-phone-public-key": phoneIdentityPublicKey,
+    },
+  });
+  sockets.push(firstMacSocket);
+  await waitForOpen(firstMacSocket);
+
+  const firstMobileSocket = new WebSocket(`ws://127.0.0.1:${port}/relay/${stableHostId}`, {
+    headers: {
+      "x-role": "mobile",
+    },
+  });
+  sockets.push(firstMobileSocket);
+  await waitForOpen(firstMobileSocket);
+
+  const firstRelayMessage = waitForMessage(firstMacSocket);
+  firstMobileSocket.send("hello-first");
+  assert.equal(await firstRelayMessage, "hello-first");
+
+  firstMobileSocket.close();
+  await waitForClose(firstMobileSocket);
+  firstMacSocket.close();
+  await waitForClose(firstMacSocket);
+
+  const secondMacSocket = new WebSocket(`ws://127.0.0.1:${port}/relay/session-second`, {
+    headers: {
+      "x-role": "mac",
+      "x-notification-secret": "secret-stable-second",
+      "x-mac-device-id": macDeviceId,
+      "x-mac-identity-public-key": macIdentityPublicKey,
+      "x-machine-name": "stable-host",
+      "x-trusted-phone-device-id": phoneDeviceId,
+      "x-trusted-phone-public-key": phoneIdentityPublicKey,
+    },
+  });
+  sockets.push(secondMacSocket);
+  await waitForOpen(secondMacSocket);
+
+  const resolveResponse = await requestJson({
+    method: "POST",
+    port,
+    path: "/v1/trusted/session/resolve",
+    body: signedResolveRequest({
+      macDeviceId,
+      phoneDeviceId,
+      phoneIdentityPublicKey,
+      phonePrivateKey,
+    }),
+  });
+
+  assert.equal(resolveResponse.statusCode, 200);
+  assert.equal(resolveResponse.body.sessionId, stableHostId);
+
+  const secondMobileSocket = new WebSocket(`ws://127.0.0.1:${port}/relay/${stableHostId}`, {
+    headers: {
+      "x-role": "mobile",
+    },
+  });
+  sockets.push(secondMobileSocket);
+  await waitForOpen(secondMobileSocket);
+
+  const secondRelayMessage = waitForMessage(secondMacSocket);
+  secondMobileSocket.send("hello-second");
+  assert.equal(await secondRelayMessage, "hello-second");
 });
 
 function requestJson({ method, port, path, body }) {
@@ -191,6 +292,25 @@ function waitForOpen(socket) {
   });
 }
 
+function waitForClose(socket) {
+  return new Promise((resolve) => {
+    if (socket.readyState === WebSocket.CLOSED) {
+      resolve();
+      return;
+    }
+    socket.once("close", resolve);
+  });
+}
+
+function waitForMessage(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (data) => {
+      resolve(typeof data === "string" ? data : data.toString("utf8"));
+    });
+    socket.once("error", reject);
+  });
+}
+
 function buildTrustedResolveTranscript({
   macDeviceId,
   phoneDeviceId,
@@ -206,6 +326,41 @@ function buildTrustedResolveTranscript({
     encodeLengthPrefixedUTF8(nonce),
     encodeLengthPrefixedUTF8(String(timestamp)),
   ]);
+}
+
+function signedResolveRequest({
+  macDeviceId,
+  phoneDeviceId,
+  phoneIdentityPublicKey,
+  phonePrivateKey,
+}) {
+  const nonce = "resolve-nonce";
+  const timestamp = Date.now();
+  const transcriptBytes = buildTrustedResolveTranscript({
+    macDeviceId,
+    phoneDeviceId,
+    phoneIdentityPublicKey,
+    nonce,
+    timestamp,
+  });
+  const signature = sign(
+    null,
+    transcriptBytes,
+    phonePrivateKey
+  ).toString("base64");
+
+  return {
+    macDeviceId,
+    phoneDeviceId,
+    phoneIdentityPublicKey,
+    nonce,
+    timestamp,
+    signature,
+  };
+}
+
+function stableRelayHostId(macDeviceId) {
+  return `mac.${macDeviceId}`;
 }
 
 function encodeLengthPrefixedUTF8(value) {

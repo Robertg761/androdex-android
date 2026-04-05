@@ -3336,11 +3336,12 @@ private fun mergeThreadMessages(
             return@measure existing
         }
 
+        val normalizedIncoming = deduplicateMirroredHistoryChatMessages(incoming)
         val merged = if (keepStreamingRows) existing.toMutableList() else mutableListOf()
         val originalExistingCount = merged.size
         val consumedOriginalExistingIndexes = mutableSetOf<Int>()
         val mergeLookup = ThreadMessageMergeLookup(merged, originalExistingCount)
-        incoming.forEach { incomingMessage ->
+        normalizedIncoming.forEach { incomingMessage ->
             val existingIndex = mergeLookup.findMatchingIndex(
                 incoming = incomingMessage,
                 merged = merged,
@@ -3362,6 +3363,60 @@ private fun mergeThreadMessages(
         }
         merged.sortedBy { it.createdAtEpochMs }
     }
+}
+
+private data class MirroredHistoryChatKey(
+    val threadId: String,
+    val role: ConversationRole,
+    val turnId: String,
+    val text: String,
+    val attachmentsSignature: String,
+)
+
+private fun deduplicateMirroredHistoryChatMessages(
+    messages: List<ConversationMessage>,
+): List<ConversationMessage> {
+    if (messages.size < 2) {
+        return messages
+    }
+
+    val deduplicated = mutableListOf<ConversationMessage>()
+    val indexByKey = linkedMapOf<MirroredHistoryChatKey, Int>()
+    messages.forEach { message ->
+        val key = mirroredHistoryChatKey(message)
+        if (key == null) {
+            deduplicated += message
+            return@forEach
+        }
+
+        val existingIndex = indexByKey[key]
+        if (existingIndex == null) {
+            indexByKey[key] = deduplicated.size
+            deduplicated += message
+            return@forEach
+        }
+
+        deduplicated[existingIndex] = mergeMatchedMessage(
+            existing = deduplicated[existingIndex],
+            incoming = message,
+            keepStreamingRows = false,
+        )
+    }
+    return deduplicated
+}
+
+private fun mirroredHistoryChatKey(message: ConversationMessage): MirroredHistoryChatKey? {
+    if (message.kind != ConversationKind.CHAT) {
+        return null
+    }
+    val turnId = message.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return MirroredHistoryChatKey(
+        threadId = message.threadId,
+        role = message.role,
+        turnId = turnId,
+        text = message.text,
+        attachmentsSignature = attachmentSignature(message.attachments),
+    )
 }
 
 private class ThreadMessageMergeLookup(
