@@ -12,7 +12,7 @@ This folder collects the repo-managed assets and notes needed to submit Androdex
 ## Current app build facts
 
 - package name: `io.androdex.android`
-- current version: `0.2.0` (`versionCode 12`)
+- current version: `0.2.1` (`versionCode 13`)
 - release artifact for Play: `android/app/build/outputs/bundle/release/app-release.aab`
 - target privacy policy URL: `https://androdex.xyz/privacy-policy/`
 
