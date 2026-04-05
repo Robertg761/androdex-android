@@ -63,6 +63,7 @@ import io.androdex.android.ui.shared.remodexExpandHorizontally
 import io.androdex.android.ui.shared.remodexFadeIn
 import io.androdex.android.ui.shared.remodexFadeOut
 import io.androdex.android.ui.shared.RemodexIconButton
+import io.androdex.android.ui.shared.remodexBottomSafeAreaPadding
 import io.androdex.android.ui.shared.RemodexSearchField
 import io.androdex.android.ui.shared.RemodexSelectionRow
 import io.androdex.android.ui.shared.remodexPressedState
@@ -675,6 +676,7 @@ private fun SidebarFooter(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .remodexBottomSafeAreaPadding()
             .padding(
                 start = geometry.spacing4,
                 end = geometry.spacing4,

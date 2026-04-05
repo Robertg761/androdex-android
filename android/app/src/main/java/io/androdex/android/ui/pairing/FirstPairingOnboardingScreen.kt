@@ -52,6 +52,7 @@ import io.androdex.android.ui.shared.LandingBackdrop
 import io.androdex.android.ui.shared.RemodexButton
 import io.androdex.android.ui.shared.RemodexButtonStyle
 import io.androdex.android.ui.shared.RemodexGroupedSurface
+import io.androdex.android.ui.shared.remodexBottomSafeAreaPadding
 import io.androdex.android.ui.state.FirstPairingOnboardingUiState
 import io.androdex.android.ui.theme.RemodexTheme
 import kotlinx.coroutines.delay
@@ -382,6 +383,7 @@ private fun OnboardingBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.groupedBackground.copy(alpha = 0.96f))
+            .remodexBottomSafeAreaPadding()
             .padding(
                 start = geometry.pageHorizontalPadding,
                 end = geometry.pageHorizontalPadding,

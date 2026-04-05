@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
@@ -120,6 +119,7 @@ import io.androdex.android.ui.shared.RemodexInputFieldVariant
 import io.androdex.android.ui.shared.RemodexPill
 import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.ThreadMaintenanceConfirmationDialog
+import io.androdex.android.ui.shared.remodexBottomSafeAreaInsets
 import io.androdex.android.ui.shared.remodexExpandVertically
 import io.androdex.android.ui.shared.remodexFadeIn
 import io.androdex.android.ui.shared.remodexFadeOut
@@ -457,6 +457,7 @@ internal fun ThreadTimelineScreen(
     val gitAffordance = remember(state.git) { buildGitAffordanceUiState(state.git) }
 
     Scaffold(
+        contentWindowInsets = remodexBottomSafeAreaInsets(),
         topBar = {
             ThreadHeader(
                 title = state.title,
@@ -709,7 +710,6 @@ internal fun ThreadTimelineScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .navigationBarsPadding()
                     .padding(bottom = geometry.spacing10),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(geometry.spacing10),

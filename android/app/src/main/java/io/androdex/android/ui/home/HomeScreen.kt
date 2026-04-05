@@ -44,6 +44,7 @@ import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.RemodexSelectionRow
 import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
+import io.androdex.android.ui.shared.remodexBottomSafeAreaInsets
 import io.androdex.android.ui.state.HomeScreenUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
 import io.androdex.android.ui.state.ThreadListEmptyStateUiState
@@ -79,7 +80,7 @@ internal fun HomeScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+        contentWindowInsets = remodexBottomSafeAreaInsets(),
         topBar = {
             Column {
                 HomeTopBar(
