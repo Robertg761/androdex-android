@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Androdex</title>
-    <meta name="description" content="Androdex is in closed beta. Request access to the Android remote client for host-local Codex workflows." />
+    <meta name="description" content="Androdex is in closed beta. Join the tester group and opt into the Android beta on Google Play." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
@@ -19,7 +19,7 @@
           <span>Androdex</span>
         </a>
         <nav class="site-nav">
-          <a href="#beta">Request Access</a>
+          <a href="#beta">Request Beta Access</a>
           <a href="/privacy-policy/">Privacy</a>
           <a href="https://github.com/Robertg761/androdex" target="_blank" rel="noopener">GitHub</a>
         </nav>
@@ -27,12 +27,71 @@
 
       <main>
         <section class="hero">
-          <span class="eyebrow">Closed Beta</span>
-          <h1 class="hero-title">Host-local Codex workflows.<br />Controlled from Android.</h1>
-          <p class="hero-subtitle">
-            Use your Android phone to control Codex running on your own computer, with secure pairing and relay-backed remote access when you need it.
-          </p>
-          <p class="hero-note">Current setup: macOS host bridge, Android client.</p>
+          <div class="hero-copy">
+            <span class="eyebrow">Closed Beta</span>
+            <h1 class="hero-title">Host-local Codex workflows.<br />Controlled from Android.</h1>
+            <p class="hero-subtitle">
+              Use your Android phone to control Codex running on your own computer, with secure pairing and relay-backed remote access when you need it.
+            </p>
+            <p class="hero-note">Current setup: macOS host bridge, Android client.</p>
+            <div class="hero-actions">
+              <a class="btn btn-solid" href="#beta">Request to Join Beta</a>
+            </div>
+          </div>
+
+          <div class="hero-visual" aria-hidden="true">
+            <div class="visual-beam"></div>
+            <div class="workstation-card">
+              <div class="workstation-bar">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="terminal-window">
+                <div class="terminal-line"><span class="line-prompt">$</span> codex --project androdex</div>
+                <div class="terminal-line line-muted">pairing session active</div>
+                <div class="terminal-line line-highlight">relay attached when needed</div>
+                <div class="terminal-line line-muted">workspace stays on host</div>
+              </div>
+              <div class="workstation-footer">
+                <span>macOS host</span>
+                <span>secure bridge online</span>
+              </div>
+            </div>
+
+            <div class="phone-card">
+              <div class="phone-screen">
+                <div class="phone-header">
+                  <span class="phone-dot"></span>
+                  <span class="phone-title">Androdex</span>
+                </div>
+                <div class="phone-thread">
+                  <div class="bubble bubble-assistant">Pairing complete. Thread resumed.</div>
+                  <div class="bubble bubble-user">Join beta on Google Play</div>
+                  <div class="bubble bubble-assistant">Host-local session ready.</div>
+                </div>
+                <div class="phone-status">
+                  <span class="status-chip">Connected</span>
+                  <span class="status-chip">Android client</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-strip" aria-label="Core qualities">
+          <div class="stat-card">
+            <span class="stat-label">Execution model</span>
+            <strong>Runs on your computer</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Control surface</span>
+            <strong>Android remote client</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Access model</span>
+            <strong>Closed beta via Google Group + Play</strong>
+          </div>
         </section>
 
         <section class="features">
@@ -57,33 +116,47 @@
 
         <section id="beta" class="waitlist-section">
           <div class="waitlist-header">
-            <h2>Join the Waitlist</h2>
-            <p>We are currently reviewing requests manually to ensure early stability. Leave your details below.</p>
+            <h2>Join the Closed Beta</h2>
+            <p>There is no manual approval queue now. Join the tester group first, then opt into the Google Play beta with the same Google account.</p>
           </div>
-          
-          <form id="beta-request-form" class="waitlist-form" action="https://formspree.io/f/mlgolebk" method="post" novalidate>
-            <input type="hidden" name="subject" value="Androdex closed beta request from {{email}}" />
-            <div class="sr-only" aria-hidden="true">
-              <label for="company_site">Leave this field empty</label>
-              <input id="company_site" name="_gotcha" type="text" tabindex="-1" autocomplete="off" />
-            </div>
-            
-            <div class="form-row">
-              <div class="form-group">
-                <input id="name" name="name" type="text" placeholder="Name" required />
+
+          <div class="beta-steps" aria-label="Closed beta join steps">
+            <article class="beta-step">
+              <div class="beta-step-number">1</div>
+              <div class="beta-step-content">
+                <h3>Join the Tester Group</h3>
+                <p>Become a member of the Google Group used to manage closed-beta access.</p>
+                <a
+                  class="btn btn-solid"
+                  href="https://groups.google.com/g/androdex-testers"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Join Google Group
+                </a>
               </div>
-              <div class="form-group">
-                <input id="email" name="email" type="email" placeholder="Email Address" required />
+            </article>
+
+            <article class="beta-step">
+              <div class="beta-step-number">2</div>
+              <div class="beta-step-content">
+                <h3>Opt Into the Play Test</h3>
+                <p>After joining the Google Group, open the Play beta link and complete the tester opt-in.</p>
+                <a
+                  class="btn btn-secondary"
+                  href="https://play.google.com/apps/testing/io.androdex.android"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Continue to Google Play
+                </a>
               </div>
-            </div>
-            
-            <div class="form-group">
-              <textarea id="use_case" name="use_case" rows="1" placeholder="How do you plan to use Androdex?" required></textarea>
-            </div>
-            
-            <button type="submit" class="btn">Submit Request</button>
-            <p id="form-status" class="form-status" aria-live="polite"></p>
-          </form>
+            </article>
+          </div>
+
+          <p class="beta-fine-print">
+            Use the same Google account for both steps. If Google Play says you do not have access yet, wait a minute after joining the group and try the Play link again.
+          </p>
         </section>
       </main>
 
@@ -95,6 +168,5 @@
         </div>
       </footer>
     </div>
-    <script src="/app.js"></script>
   </body>
 </html>
