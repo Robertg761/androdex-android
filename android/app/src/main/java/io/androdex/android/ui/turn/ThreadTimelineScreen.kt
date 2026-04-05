@@ -2157,7 +2157,6 @@ private fun ExecutionBubble(message: ConversationMessage) {
     val execution = remember(message) { message.execution ?: fallbackExecutionContent(message) }
     val normalizedStatus = execution.status.trim().lowercase()
     val isRunning = normalizedStatus == "running" || normalizedStatus == "in_progress"
-    val isFailed = normalizedStatus == "failed" || normalizedStatus == "error"
     val tone = executionStatusTone(execution.status)
     val titleStyle = if (execution.kind == ExecutionKind.COMMAND) {
         MaterialTheme.typography.bodyMedium.copy(fontFamily = RemodexMonoFontFamily)
@@ -2167,8 +2166,8 @@ private fun ExecutionBubble(message: ConversationMessage) {
     val hasDetails = execution.summary?.isNotBlank() == true
         || execution.details.isNotEmpty()
         || execution.output?.isNotBlank() == true
-    var expanded by remember(message.id) {
-        mutableStateOf(message.isStreaming || isFailed)
+    var expanded by rememberSaveable(message.id) {
+        mutableStateOf(false)
     }
 
     TimelineSystemCard {
@@ -2235,7 +2234,9 @@ private fun ExecutionBubble(message: ConversationMessage) {
                     color = tone.accent,
                     trackColor = colors.selectedRowFill,
                 )
-            } else if (hasDetails) {
+            }
+
+            if (hasDetails) {
                 Text(
                     text = if (expanded) "Hide details" else "Show details",
                     style = MaterialTheme.typography.labelSmall,
