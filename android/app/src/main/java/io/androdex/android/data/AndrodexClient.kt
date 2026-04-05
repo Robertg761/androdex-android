@@ -4,6 +4,7 @@ import android.util.Log
 import io.androdex.android.crypto.aesGcmDecrypt
 import io.androdex.android.crypto.aesGcmEncrypt
 import io.androdex.android.crypto.buildClientAuthTranscript
+import io.androdex.android.crypto.buildLegacyTranscriptBytesWithoutRecoveryFields
 import io.androdex.android.crypto.buildTranscriptBytes
 import io.androdex.android.crypto.buildTrustedSessionRecoverTranscript
 import io.androdex.android.crypto.buildTrustedSessionResolveTranscript
@@ -1713,32 +1714,31 @@ class AndrodexClient(
                 expiresAtForTranscript = serverHello.optLong("expiresAtForTranscript"),
             )
         }
-        val requestedNextRecoveryIdentityPublicKey = trustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
-            ?: bootstrapRecoveryPayload?.recoveryIdentityPublicKey
-            ?: ""
-        var transcriptBytes = buildHandshakeTranscript(requestedNextRecoveryIdentityPublicKey)
-
-        val macSignature = decodeBase64(serverHello.optString("macSignature"))
-        var signatureValid = verifyEd25519(
-            publicKeyBase64 = serverHello.optString("macIdentityPublicKey"),
-            payload = transcriptBytes,
-            signature = macSignature,
+        val verificationResult = resolveVerifiedServerHelloSignature(
+            expectedSessionId = routingId,
+            protocolVersion = protocolVersion,
+            handshakeMode = serverHello.optString("handshakeMode"),
+            keyEpoch = serverHello.optInt("keyEpoch"),
+            macDeviceId = pairing.macDeviceId,
+            trustedPhoneDeviceId = trustedRecovery?.trustedPhoneDeviceId.orEmpty(),
+            phoneDeviceId = phoneIdentity.phoneDeviceId,
+            macIdentityPublicKey = serverHello.optString("macIdentityPublicKey"),
+            trustedRecoveryPublicKey = trustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
+            phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
+            requestedNextRecoveryIdentityPublicKey = trustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
+                ?: bootstrapRecoveryPayload?.recoveryIdentityPublicKey
+                ?: "",
+            bootstrapRecoveryRequested = handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null,
+            macEphemeralPublicKey = serverHello.optString("macEphemeralPublicKey"),
+            phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+            clientNonce = clientNonce,
+            serverNonce = decodeBase64(serverHello.optString("serverNonce")),
+            expiresAtForTranscript = serverHello.optLong("expiresAtForTranscript"),
+            macSignature = decodeBase64(serverHello.optString("macSignature")),
         )
-        if (!signatureValid && handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null) {
-            val legacyTranscriptBytes = buildHandshakeTranscript("")
-            signatureValid = verifyEd25519(
-                publicKeyBase64 = serverHello.optString("macIdentityPublicKey"),
-                payload = legacyTranscriptBytes,
-                signature = macSignature,
-            )
-            if (signatureValid) {
-                transcriptBytes = legacyTranscriptBytes
-                pendingBootstrapRecoveryAcceptedByBridge = false
-            }
-        } else if (signatureValid && handshakeMode == handshakeModeQrBootstrap && bootstrapRecoveryPayload != null) {
-            pendingBootstrapRecoveryAcceptedByBridge = true
-        }
-        if (!signatureValid) {
+        val transcriptBytes = verificationResult?.transcriptBytes
+        pendingBootstrapRecoveryAcceptedByBridge = verificationResult?.bootstrapRecoveryAcceptedByBridge == true
+        if (transcriptBytes == null) {
             emitTerminalConnectionUpdate(
                 ClientUpdate.Connection(
                     ConnectionStatus.RECONNECT_REQUIRED,
@@ -1868,55 +1868,28 @@ class AndrodexClient(
                 continue
             }
             val isLegacyMatch = if (echoedNonce.isBlank()) {
-                val transcript = buildTranscriptBytes(
-                    sessionId = expectedSessionId,
+                resolveVerifiedServerHelloSignature(
+                    expectedSessionId = expectedSessionId,
                     protocolVersion = hello.optInt("protocolVersion"),
                     handshakeMode = hello.optString("handshakeMode"),
                     keyEpoch = hello.optInt("keyEpoch"),
-                    macDeviceId = hello.optString("macDeviceId"),
+                    macDeviceId = expectedMacDeviceId,
                     trustedPhoneDeviceId = pendingTrustedRecovery?.trustedPhoneDeviceId.orEmpty(),
                     phoneDeviceId = phoneIdentity.phoneDeviceId,
                     macIdentityPublicKey = hello.optString("macIdentityPublicKey"),
                     trustedRecoveryPublicKey = pendingTrustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
                     phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
-                    nextRecoveryIdentityPublicKey = pendingTrustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
+                    requestedNextRecoveryIdentityPublicKey = pendingTrustedRecovery?.nextRecoveryPayload?.recoveryIdentityPublicKey
                         ?: pendingBootstrapRecoveryPayload?.recoveryIdentityPublicKey
                         ?: "",
+                    bootstrapRecoveryRequested = pendingBootstrapRecoveryPayload != null,
                     macEphemeralPublicKey = hello.optString("macEphemeralPublicKey"),
                     phoneEphemeralPublicKey = phoneEphemeralPublicKey,
                     clientNonce = clientNonce,
                     serverNonce = decodeBase64(hello.optString("serverNonce")),
                     expiresAtForTranscript = hello.optLong("expiresAtForTranscript"),
-                )
-                verifyEd25519(
-                    publicKeyBase64 = hello.optString("macIdentityPublicKey"),
-                    payload = transcript,
-                    signature = decodeBase64(hello.optString("macSignature")),
-                ) || (
-                    pendingBootstrapRecoveryPayload != null
-                        && verifyEd25519(
-                            publicKeyBase64 = hello.optString("macIdentityPublicKey"),
-                            payload = buildTranscriptBytes(
-                                sessionId = expectedSessionId,
-                                protocolVersion = hello.optInt("protocolVersion"),
-                                handshakeMode = hello.optString("handshakeMode"),
-                                keyEpoch = hello.optInt("keyEpoch"),
-                                macDeviceId = hello.optString("macDeviceId"),
-                                trustedPhoneDeviceId = pendingTrustedRecovery?.trustedPhoneDeviceId.orEmpty(),
-                                phoneDeviceId = phoneIdentity.phoneDeviceId,
-                                macIdentityPublicKey = hello.optString("macIdentityPublicKey"),
-                                trustedRecoveryPublicKey = pendingTrustedRecovery?.trustedRecoveryPayload?.recoveryIdentityPublicKey.orEmpty(),
-                                phoneIdentityPublicKey = phoneIdentity.phoneIdentityPublicKey,
-                                nextRecoveryIdentityPublicKey = "",
-                                macEphemeralPublicKey = hello.optString("macEphemeralPublicKey"),
-                                phoneEphemeralPublicKey = phoneEphemeralPublicKey,
-                                clientNonce = clientNonce,
-                                serverNonce = decodeBase64(hello.optString("serverNonce")),
-                                expiresAtForTranscript = hello.optLong("expiresAtForTranscript"),
-                            ),
-                            signature = decodeBase64(hello.optString("macSignature")),
-                        )
-                    )
+                    macSignature = decodeBase64(hello.optString("macSignature")),
+                ) != null
             } else {
                 true
             }
@@ -3595,6 +3568,111 @@ internal data class SecureHandshakePlan(
     val handshakeMode: String,
     val expectedMacIdentityPublicKey: String,
 )
+
+internal data class VerifiedServerHelloSignature(
+    val transcriptBytes: ByteArray,
+    val bootstrapRecoveryAcceptedByBridge: Boolean,
+)
+
+internal fun resolveVerifiedServerHelloSignature(
+    expectedSessionId: String,
+    protocolVersion: Int,
+    handshakeMode: String,
+    keyEpoch: Int,
+    macDeviceId: String,
+    trustedPhoneDeviceId: String,
+    phoneDeviceId: String,
+    macIdentityPublicKey: String,
+    trustedRecoveryPublicKey: String,
+    phoneIdentityPublicKey: String,
+    requestedNextRecoveryIdentityPublicKey: String,
+    bootstrapRecoveryRequested: Boolean,
+    macEphemeralPublicKey: String,
+    phoneEphemeralPublicKey: String,
+    clientNonce: ByteArray,
+    serverNonce: ByteArray,
+    expiresAtForTranscript: Long,
+    macSignature: ByteArray,
+): VerifiedServerHelloSignature? {
+    val verificationCandidates = buildList {
+        add(
+            VerifiedServerHelloSignature(
+                transcriptBytes = buildTranscriptBytes(
+                    sessionId = expectedSessionId,
+                    protocolVersion = protocolVersion,
+                    handshakeMode = handshakeMode,
+                    keyEpoch = keyEpoch,
+                    macDeviceId = macDeviceId,
+                    trustedPhoneDeviceId = trustedPhoneDeviceId,
+                    phoneDeviceId = phoneDeviceId,
+                    macIdentityPublicKey = macIdentityPublicKey,
+                    trustedRecoveryPublicKey = trustedRecoveryPublicKey,
+                    phoneIdentityPublicKey = phoneIdentityPublicKey,
+                    nextRecoveryIdentityPublicKey = requestedNextRecoveryIdentityPublicKey,
+                    macEphemeralPublicKey = macEphemeralPublicKey,
+                    phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+                    clientNonce = clientNonce,
+                    serverNonce = serverNonce,
+                    expiresAtForTranscript = expiresAtForTranscript,
+                ),
+                bootstrapRecoveryAcceptedByBridge = bootstrapRecoveryRequested && requestedNextRecoveryIdentityPublicKey.isNotEmpty(),
+            )
+        )
+        if (bootstrapRecoveryRequested && requestedNextRecoveryIdentityPublicKey.isNotEmpty()) {
+            add(
+                VerifiedServerHelloSignature(
+                    transcriptBytes = buildTranscriptBytes(
+                        sessionId = expectedSessionId,
+                        protocolVersion = protocolVersion,
+                        handshakeMode = handshakeMode,
+                        keyEpoch = keyEpoch,
+                        macDeviceId = macDeviceId,
+                        trustedPhoneDeviceId = trustedPhoneDeviceId,
+                        phoneDeviceId = phoneDeviceId,
+                        macIdentityPublicKey = macIdentityPublicKey,
+                        trustedRecoveryPublicKey = trustedRecoveryPublicKey,
+                        phoneIdentityPublicKey = phoneIdentityPublicKey,
+                        nextRecoveryIdentityPublicKey = "",
+                        macEphemeralPublicKey = macEphemeralPublicKey,
+                        phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+                        clientNonce = clientNonce,
+                        serverNonce = serverNonce,
+                        expiresAtForTranscript = expiresAtForTranscript,
+                    ),
+                    bootstrapRecoveryAcceptedByBridge = false,
+                )
+            )
+        }
+        add(
+            VerifiedServerHelloSignature(
+                transcriptBytes = buildLegacyTranscriptBytesWithoutRecoveryFields(
+                    sessionId = expectedSessionId,
+                    protocolVersion = protocolVersion,
+                    handshakeMode = handshakeMode,
+                    keyEpoch = keyEpoch,
+                    macDeviceId = macDeviceId,
+                    phoneDeviceId = phoneDeviceId,
+                    macIdentityPublicKey = macIdentityPublicKey,
+                    phoneIdentityPublicKey = phoneIdentityPublicKey,
+                    macEphemeralPublicKey = macEphemeralPublicKey,
+                    phoneEphemeralPublicKey = phoneEphemeralPublicKey,
+                    clientNonce = clientNonce,
+                    serverNonce = serverNonce,
+                    expiresAtForTranscript = expiresAtForTranscript,
+                ),
+                bootstrapRecoveryAcceptedByBridge = false,
+            )
+        )
+    }
+
+    return verificationCandidates.firstOrNull { candidate ->
+        verifyEd25519(
+            publicKeyBase64 = macIdentityPublicKey,
+            payload = candidate.transcriptBytes,
+            signature = macSignature,
+        )
+    }
+}
 
 internal fun resolveSecureHandshakePlan(
     pairing: PairingPayload,

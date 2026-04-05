@@ -93,6 +93,39 @@ fun buildTranscriptBytes(
     }.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
 }
 
+fun buildLegacyTranscriptBytesWithoutRecoveryFields(
+    sessionId: String,
+    protocolVersion: Int,
+    handshakeMode: String,
+    keyEpoch: Int,
+    macDeviceId: String,
+    phoneDeviceId: String,
+    macIdentityPublicKey: String,
+    phoneIdentityPublicKey: String,
+    macEphemeralPublicKey: String,
+    phoneEphemeralPublicKey: String,
+    clientNonce: ByteArray,
+    serverNonce: ByteArray,
+    expiresAtForTranscript: Long,
+): ByteArray {
+    return buildList {
+        add(encodeLengthPrefixedUtf8(secureHandshakeTag))
+        add(encodeLengthPrefixedUtf8(sessionId))
+        add(encodeLengthPrefixedUtf8(protocolVersion.toString()))
+        add(encodeLengthPrefixedUtf8(handshakeMode))
+        add(encodeLengthPrefixedUtf8(keyEpoch.toString()))
+        add(encodeLengthPrefixedUtf8(macDeviceId))
+        add(encodeLengthPrefixedUtf8(phoneDeviceId))
+        add(encodeLengthPrefixedBuffer(decodeBase64(macIdentityPublicKey)))
+        add(encodeLengthPrefixedBuffer(decodeBase64(phoneIdentityPublicKey)))
+        add(encodeLengthPrefixedBuffer(decodeBase64(macEphemeralPublicKey)))
+        add(encodeLengthPrefixedBuffer(decodeBase64(phoneEphemeralPublicKey)))
+        add(encodeLengthPrefixedBuffer(clientNonce))
+        add(encodeLengthPrefixedBuffer(serverNonce))
+        add(encodeLengthPrefixedUtf8(expiresAtForTranscript.toString()))
+    }.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
+}
+
 fun buildClientAuthTranscript(transcriptBytes: ByteArray): ByteArray {
     return transcriptBytes + encodeLengthPrefixedUtf8(secureHandshakeLabel)
 }
