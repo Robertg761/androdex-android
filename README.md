@@ -244,7 +244,7 @@ On Windows, the bridge also includes a desktop refresh workaround for phone-auth
 
 ## Project Structure
 
-For a detailed ownership map of the whole repository, see [Docs/repo-map.md](Docs/repo-map.md).
+For a detailed ownership map of the whole repository, see [Docs/repo-map.md](Docs/repo-map.md). For the docs index, see [Docs/README.md](Docs/README.md). Local codebase guides also live in [android/README.md](android/README.md) and [androdex-bridge/src/README.md](androdex-bridge/src/README.md).
 
 ```text
 androdex/

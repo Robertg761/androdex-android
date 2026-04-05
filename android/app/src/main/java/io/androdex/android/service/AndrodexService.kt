@@ -71,6 +71,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
 private const val savedReconnectRetryDelayMs = 5_000L
+private const val appBackgroundGraceMs = 20_000L
 private const val executionReloadMergeWindowMs = 5_000L
 private const val minimumThreadListLoadingVisibleMs = 350L
 private const val slowThreadLoadLogThresholdMs = 400L
@@ -170,10 +171,12 @@ class AndrodexService(
     private val repository: AndrodexRepositoryContract,
     private val scope: CoroutineScope,
     private val threadTimelinePersistenceDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val appBackgroundGraceDelayMs: Long = appBackgroundGraceMs,
 ) {
     private var appInForeground = false
     private var savedReconnectInFlight = false
     private var savedReconnectRetryJob: Job? = null
+    private var backgroundGraceJob: Job? = null
     private var suppressSavedReconnect = false
     private val threadCollectionRequestMutex = Mutex()
     private val threadHydrationRequestMutex = Mutex()
@@ -259,6 +262,8 @@ class AndrodexService(
     }
 
     fun onAppForegrounded() {
+        backgroundGraceJob?.cancel()
+        backgroundGraceJob = null
         appInForeground = true
         reconnectSavedIfAvailable()
         scope.launch {
@@ -267,8 +272,18 @@ class AndrodexService(
     }
 
     fun onAppBackgrounded() {
-        appInForeground = false
-        cancelSavedReconnectRetry()
+        backgroundGraceJob?.cancel()
+        backgroundGraceJob = scope.launch {
+            delay(appBackgroundGraceDelayMs)
+            appInForeground = false
+            cancelSavedReconnectRetry()
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (backgroundGraceJob === job) {
+                    backgroundGraceJob = null
+                }
+            }
+        }
     }
 
     fun beginFreshPairingScan() {
@@ -362,6 +377,34 @@ class AndrodexService(
             if (isFreshPairing) {
                 failFreshPairingAttempt()
             }
+            throw error
+        }
+    }
+
+    suspend fun connectWithRecoveryPayload(rawPayload: String) {
+        suppressSavedReconnect = true
+        cancelSavedReconnectRetry()
+        resetThreadSessionState(
+            isLoadingThreadList = false,
+            preservePendingNotificationTarget = true,
+        )
+        stateFlow.update {
+            it.copy(
+                freshPairingAttempt = FreshPairingAttemptState(stage = FreshPairingStage.CONNECTING),
+            )
+        }
+        try {
+            runCatching {
+                repository.disconnect(clearSavedPairing = false)
+            }
+            repository.connectWithRecoveryPayload(rawPayload)
+            restorePersistedThreadTimelinesForCurrentScope(force = true)
+            suppressSavedReconnect = false
+            stateFlow.update { it.copy(freshPairingAttempt = null) }
+            refreshThreadsInternal()
+            loadWorkspaceState()
+        } catch (error: Throwable) {
+            failFreshPairingAttempt()
             throw error
         }
     }

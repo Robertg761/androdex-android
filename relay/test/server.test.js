@@ -254,6 +254,89 @@ test("relay server routes stable host ids across mac restarts", async (t) => {
   assert.equal(await secondRelayMessage, "hello-second");
 });
 
+test("relay server accepts the previous trusted recovery credential during recovery rotation", async (t) => {
+  const { publicKey: macPublicKey } = generateKeyPairSync("ed25519");
+  const { privateKey: previousRecoveryPrivateKey, publicKey: previousRecoveryPublicKey } = generateKeyPairSync("ed25519");
+  const { publicKey: currentRecoveryPublicKey } = generateKeyPairSync("ed25519");
+  const macPublicJwk = macPublicKey.export({ format: "jwk" });
+  const previousRecoveryPublicJwk = previousRecoveryPublicKey.export({ format: "jwk" });
+  const currentRecoveryPublicJwk = currentRecoveryPublicKey.export({ format: "jwk" });
+  const macIdentityPublicKey = base64UrlToBase64(macPublicJwk.x);
+  const previousRecoveryIdentityPublicKey = base64UrlToBase64(previousRecoveryPublicJwk.x);
+  const currentRecoveryIdentityPublicKey = base64UrlToBase64(currentRecoveryPublicJwk.x);
+  const macDeviceId = "mac-recover";
+  const phoneDeviceId = "phone-recover";
+  const sessionId = "session-recover";
+
+  const { server, wss } = createRelayServer();
+  const sockets = [];
+  t.after(() => {
+    for (const socket of sockets) {
+      try {
+        socket.close();
+      } catch {
+        // Best effort only.
+      }
+    }
+    wss.close();
+    server.close();
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  const macSocket = new WebSocket(`ws://127.0.0.1:${port}/relay/${sessionId}`, {
+    headers: {
+      "x-role": "mac",
+      "x-notification-secret": "secret-recover",
+      "x-mac-device-id": macDeviceId,
+      "x-mac-identity-public-key": macIdentityPublicKey,
+      "x-machine-name": "recover-host",
+      "x-trusted-phone-device-id": phoneDeviceId,
+      "x-trusted-phone-public-key": "unused-for-recovery-route",
+      "x-trusted-phone-recovery-public-key": currentRecoveryIdentityPublicKey,
+      "x-trusted-phone-previous-recovery-public-key": previousRecoveryIdentityPublicKey,
+    },
+  });
+  sockets.push(macSocket);
+  await waitForOpen(macSocket);
+
+  const nonce = "recover-nonce";
+  const timestamp = Date.now();
+  const transcriptBytes = buildTrustedRecoverTranscript({
+    macDeviceId,
+    phoneDeviceId,
+    recoveryIdentityPublicKey: previousRecoveryIdentityPublicKey,
+    nonce,
+    timestamp,
+  });
+  const signature = sign(
+    null,
+    transcriptBytes,
+    previousRecoveryPrivateKey
+  ).toString("base64");
+
+  const recoverResponse = await requestJson({
+    method: "POST",
+    port,
+    path: "/v1/trusted/session/recover",
+    body: {
+      macDeviceId,
+      phoneDeviceId,
+      recoveryIdentityPublicKey: previousRecoveryIdentityPublicKey,
+      nonce,
+      timestamp,
+      signature,
+    },
+  });
+
+  assert.equal(recoverResponse.statusCode, 200);
+  assert.equal(recoverResponse.body.ok, true);
+  assert.equal(recoverResponse.body.sessionId, sessionId);
+  assert.equal(recoverResponse.body.macDeviceId, macDeviceId);
+  assert.equal(recoverResponse.body.macIdentityPublicKey, macIdentityPublicKey);
+});
+
 function requestJson({ method, port, path, body }) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -361,6 +444,23 @@ function signedResolveRequest({
 
 function stableRelayHostId(macDeviceId) {
   return `mac.${macDeviceId}`;
+}
+
+function buildTrustedRecoverTranscript({
+  macDeviceId,
+  phoneDeviceId,
+  recoveryIdentityPublicKey,
+  nonce,
+  timestamp,
+}) {
+  return Buffer.concat([
+    encodeLengthPrefixedUTF8("androdex-trusted-session-recover-v1"),
+    encodeLengthPrefixedUTF8(macDeviceId),
+    encodeLengthPrefixedUTF8(phoneDeviceId),
+    encodeLengthPrefixedBuffer(Buffer.from(recoveryIdentityPublicKey, "base64")),
+    encodeLengthPrefixedUTF8(nonce),
+    encodeLengthPrefixedUTF8(String(timestamp)),
+  ]);
 }
 
 function encodeLengthPrefixedUTF8(value) {

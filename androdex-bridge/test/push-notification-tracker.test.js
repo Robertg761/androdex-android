@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createPushNotificationTracker } = require("../src/push-notification-tracker");
-const { createNotificationsHandler } = require("../src/notifications-handler");
+const { createPushNotificationTracker } = require("../src/notifications/tracker");
+const { createNotificationsHandler } = require("../src/notifications/handler");
 
 test("notifications handler routes Android push registration to the push service", async () => {
   const registrations = [];

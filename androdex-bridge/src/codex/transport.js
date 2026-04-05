@@ -1,4 +1,4 @@
-// FILE: codex-transport.js
+// FILE: codex/transport.js
 // Purpose: Abstracts the Codex-side transport so the bridge can talk to either a spawned app-server or an existing WebSocket endpoint.
 // Layer: CLI helper
 // Exports: createCodexTransport

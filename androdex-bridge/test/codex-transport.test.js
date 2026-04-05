@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const {
   createCodexLaunchPlan,
   shutdownCodexProcess,
-} = require("../src/codex-transport");
+} = require("../src/codex/transport");
 
 test("createCodexLaunchPlan launches codex app-server in the selected workspace", () => {
   const launchPlan = createCodexLaunchPlan({

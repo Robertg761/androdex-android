@@ -14,6 +14,7 @@ import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.RecoveryPayload
 import io.androdex.android.model.SavedRelaySession
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SubagentAction
@@ -28,10 +29,15 @@ import java.util.Base64
 
 open class AndrodexPersistence internal constructor(
     private val secureStore: SecureStore,
+    private val durableTrustPreferences: SharedPreferences? = null,
     private val timelineCachePreferences: SharedPreferences? = null,
 ) {
     constructor(context: Context) : this(
         secureStore = SecureStore(context),
+        durableTrustPreferences = context.applicationContext.getSharedPreferences(
+            DURABLE_TRUST_PREFS_NAME,
+            Context.MODE_PRIVATE,
+        ),
         timelineCachePreferences = context.applicationContext.getSharedPreferences(
             THREAD_TIMELINE_CACHE_PREFS_NAME,
             Context.MODE_PRIVATE,
@@ -95,53 +101,72 @@ open class AndrodexPersistence internal constructor(
     }
 
     fun loadPhoneIdentity(): PhoneIdentityState? {
-        val raw = secureStore.readString(KEY_PHONE_IDENTITY) ?: return null
+        val raw = readDurableTrustString(KEY_PHONE_IDENTITY) ?: return null
         return runCatching { PhoneIdentityState.fromJson(JSONObject(raw)) }.getOrNull()
     }
 
     fun savePhoneIdentity(identityState: PhoneIdentityState) {
-        secureStore.writeString(
-            KEY_PHONE_IDENTITY,
-            identityState.toJson().toString(),
-            synchronously = true,
-        )
+        writeDurableTrustString(KEY_PHONE_IDENTITY, identityState.toJson().toString())
     }
 
     fun clearPhoneIdentity() {
-        secureStore.remove(KEY_PHONE_IDENTITY, synchronously = true)
+        removeDurableTrustString(KEY_PHONE_IDENTITY)
     }
 
     fun loadTrustedMacRegistry(): TrustedMacRegistry {
-        val raw = secureStore.readString(KEY_TRUSTED_MACS) ?: return TrustedMacRegistry.empty
+        val raw = readDurableTrustString(KEY_TRUSTED_MACS) ?: return TrustedMacRegistry.empty
         return runCatching { TrustedMacRegistry.fromJson(JSONObject(raw)) }.getOrDefault(TrustedMacRegistry.empty)
     }
 
     fun saveTrustedMacRegistry(registry: TrustedMacRegistry) {
-        secureStore.writeString(
-            KEY_TRUSTED_MACS,
-            registry.toJson().toString(),
-            synchronously = true,
-        )
+        writeDurableTrustString(KEY_TRUSTED_MACS, registry.toJson().toString())
     }
 
     fun clearTrustedMacRegistry() {
-        secureStore.remove(KEY_TRUSTED_MACS, synchronously = true)
+        removeDurableTrustString(KEY_TRUSTED_MACS)
+    }
+
+    fun loadRecoveryPayloadRegistry(): Map<String, RecoveryPayload> {
+        val raw = readDurableTrustString(KEY_TRUSTED_RECOVERY_PAYLOADS) ?: return emptyMap()
+        val payload = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+        val decoded = linkedMapOf<String, RecoveryPayload>()
+        val keys = payload.keys()
+        while (keys.hasNext()) {
+            val key = keys.next().trim()
+            if (key.isEmpty()) {
+                continue
+            }
+            val recoveryPayload = payload.optJSONObject(key)?.let(RecoveryPayload::fromJson) ?: continue
+            decoded[key] = recoveryPayload
+        }
+        return decoded
+    }
+
+    fun saveRecoveryPayloadRegistry(registry: Map<String, RecoveryPayload>) {
+        if (registry.isEmpty()) {
+            removeDurableTrustString(KEY_TRUSTED_RECOVERY_PAYLOADS)
+            return
+        }
+        val payload = JSONObject()
+        registry.forEach { (macDeviceId, recoveryPayload) ->
+            val normalizedMacDeviceId = macDeviceId.trim()
+            if (normalizedMacDeviceId.isNotEmpty()) {
+                payload.put(normalizedMacDeviceId, recoveryPayload.toJson())
+            }
+        }
+        writeDurableTrustString(KEY_TRUSTED_RECOVERY_PAYLOADS, payload.toString())
     }
 
     fun loadLastTrustedMacDeviceId(): String? {
-        return secureStore.readString(KEY_LAST_TRUSTED_MAC_DEVICE_ID)?.trim()?.takeIf { it.isNotEmpty() }
+        return readDurableTrustString(KEY_LAST_TRUSTED_MAC_DEVICE_ID)?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     fun saveLastTrustedMacDeviceId(value: String?) {
         val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
         if (normalized == null) {
-            secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID, synchronously = true)
+            removeDurableTrustString(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         } else {
-            secureStore.writeString(
-                KEY_LAST_TRUSTED_MAC_DEVICE_ID,
-                normalized,
-                synchronously = true,
-            )
+            writeDurableTrustString(KEY_LAST_TRUSTED_MAC_DEVICE_ID, normalized)
         }
     }
 
@@ -149,6 +174,7 @@ open class AndrodexPersistence internal constructor(
         clearSavedRelaySession()
         clearPhoneIdentity()
         clearTrustedMacRegistry()
+        saveRecoveryPayloadRegistry(emptyMap())
         saveLastTrustedMacDeviceId(null)
         clearAllPersistedThreadTimelines()
         startupReport = SecureStateStartupReport()
@@ -311,6 +337,7 @@ open class AndrodexPersistence internal constructor(
         val pairingState = secureStore.readStringState(KEY_PAIRING)
         val phoneIdentityState = secureStore.readStringState(KEY_PHONE_IDENTITY)
         val trustedMacState = secureStore.readStringState(KEY_TRUSTED_MACS)
+        val trustedRecoveryPayloadsState = secureStore.readStringState(KEY_TRUSTED_RECOVERY_PAYLOADS)
         val lastTrustedMacDeviceIdState = secureStore.readStringState(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         val lastAppliedSeqState = secureStore.readStringState(KEY_LAST_APPLIED_SEQ)
         val selectedModelState = secureStore.readStringState(KEY_SELECTED_MODEL_ID)
@@ -319,12 +346,23 @@ open class AndrodexPersistence internal constructor(
         val selectedServiceTierState = secureStore.readStringState(KEY_SELECTED_SERVICE_TIER)
         val threadRuntimeOverridesState = secureStore.readStringState(KEY_THREAD_RUNTIME_OVERRIDES)
 
+        val repairedPhoneIdentity = repairDurableTrustFromBackupIfNeeded(KEY_PHONE_IDENTITY, phoneIdentityState)
+        val repairedTrustedMacRegistry = repairDurableTrustFromBackupIfNeeded(KEY_TRUSTED_MACS, trustedMacState)
+        val repairedTrustedRecoveryPayloads =
+            repairDurableTrustFromBackupIfNeeded(KEY_TRUSTED_RECOVERY_PAYLOADS, trustedRecoveryPayloadsState)
+        val repairedLastTrustedMacDeviceId =
+            repairDurableTrustFromBackupIfNeeded(KEY_LAST_TRUSTED_MAC_DEVICE_ID, lastTrustedMacDeviceIdState)
+
         val savedRelaySessionUnreadable = savedRelaySessionState.isUnreadable
             || (pairingState.isUnreadable && !savedRelaySessionState.wasPresent)
             || (lastAppliedSeqState.isUnreadable && (savedRelaySessionState.wasPresent || pairingState.wasPresent))
-        val phoneIdentityUnreadable = phoneIdentityState.isUnreadable
-        val trustedMacUnreadable = trustedMacState.isUnreadable
-        val lastTrustedMacUnreadable = lastTrustedMacDeviceIdState.isUnreadable
+        val phoneIdentityUnreadable = phoneIdentityState.isUnreadable && !repairedPhoneIdentity
+        val trustedMacUnreadable = (
+            trustedMacState.isUnreadable && !repairedTrustedMacRegistry
+        ) || (
+            trustedRecoveryPayloadsState.isUnreadable && !repairedTrustedRecoveryPayloads
+        )
+        val lastTrustedMacUnreadable = lastTrustedMacDeviceIdState.isUnreadable && !repairedLastTrustedMacDeviceId
 
         if (savedRelaySessionUnreadable) {
             clearSavedRelaySession()
@@ -360,6 +398,45 @@ open class AndrodexPersistence internal constructor(
                 trustedMacUnreadable = trustedMacUnreadable,
             ),
         )
+    }
+
+    private fun readDurableTrustString(key: String): String? {
+        val secureValue = secureStore.readString(key)?.trim()?.takeIf { it.isNotEmpty() }
+        if (secureValue != null) {
+            return secureValue
+        }
+        val backupValue = durableTrustPreferences?.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
+        if (backupValue != null) {
+            secureStore.writeString(key, backupValue)
+        }
+        return backupValue
+    }
+
+    private fun writeDurableTrustString(key: String, value: String) {
+        secureStore.writeString(key, value, synchronously = true)
+        durableTrustPreferences?.edit()?.putString(key, value)?.apply()
+    }
+
+    private fun removeDurableTrustString(key: String) {
+        secureStore.remove(key, synchronously = true)
+        durableTrustPreferences?.edit()?.remove(key)?.apply()
+    }
+
+    private fun repairDurableTrustFromBackupIfNeeded(
+        key: String,
+        state: SecureStore.SecureReadState,
+    ): Boolean {
+        val backupValue = durableTrustPreferences?.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
+        if (state.isUnreadable) {
+            secureStore.remove(key)
+        }
+        if (backupValue == null) {
+            return false
+        }
+        if (state.value == null) {
+            secureStore.writeString(key, backupValue)
+        }
+        return state.isUnreadable
     }
 
     private fun migrateLegacySavedPairingIfNeeded() {
@@ -401,12 +478,14 @@ open class AndrodexPersistence internal constructor(
     }
 
     private companion object {
+        const val DURABLE_TRUST_PREFS_NAME = "androdex.durable_trust"
         const val THREAD_TIMELINE_CACHE_PREFS_NAME = "androdex.thread_timelines"
         const val KEY_THREAD_TIMELINE_CACHE_SCOPES = "thread_timeline_cache_scopes"
         const val KEY_PAIRING = "pairing_payload"
         const val KEY_SAVED_RELAY_SESSION = "saved_relay_session"
         const val KEY_PHONE_IDENTITY = "phone_identity"
         const val KEY_TRUSTED_MACS = "trusted_macs"
+        const val KEY_TRUSTED_RECOVERY_PAYLOADS = "trusted_recovery_payloads"
         const val KEY_LAST_TRUSTED_MAC_DEVICE_ID = "last_trusted_mac_device_id"
         const val KEY_LAST_APPLIED_SEQ = "last_applied_bridge_outbound_seq"
         const val KEY_SELECTED_MODEL_ID = "selected_model_id"

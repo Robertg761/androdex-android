@@ -2,7 +2,7 @@
 // Purpose: Runs Codex locally, bridges relay traffic, and coordinates desktop refreshes for Codex.app.
 // Layer: CLI service
 // Exports: startBridge
-// Depends on: ws, crypto, os, ./qr, ./codex-desktop-refresher, ./workspace-runtime, ./rollout-watch, ./runtime-compat
+// Depends on: ws, crypto, os, ./pairing/qr, ./codex-desktop-refresher, ./workspace/runtime, ./rollout/watch, ./runtime-compat
 
 const WebSocket = require("ws");
 const { randomBytes } = require("crypto");
@@ -11,25 +11,26 @@ const {
   CodexDesktopRefresher,
   readBridgeConfig,
 } = require("./codex-desktop-refresher");
-const { createCodexRpcClient } = require("./codex-rpc-client");
-const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
-const { printQR } = require("./qr");
+const { createCodexRpcClient } = require("./codex/rpc-client");
+const { createThreadRolloutActivityWatcher } = require("./rollout/watch");
+const { printQR } = require("./pairing/qr");
 const { rememberActiveThread } = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
 const { composeSanitizedAuthStatusFromSettledResults } = require("./account-status");
 const { handleThreadContextRequest } = require("./thread-context-handler");
-const { handleWorkspaceRequest } = require("./workspace-handler");
-const { createNotificationsHandler } = require("./notifications-handler");
+const { handleWorkspaceRequest } = require("./workspace/handler");
+const { createNotificationsHandler } = require("./notifications/handler");
 const {
+  getTrustedPhoneRecoveryIdentities,
   loadOrCreateBridgeDeviceState,
   resolveBridgeRelaySession,
   stableRelayHostIdForMacDeviceId,
-} = require("./secure-device-state");
-const { createBridgeSecureTransport } = require("./secure-transport");
-const { createPushNotificationServiceClient } = require("./push-notification-service-client");
-const { createPushNotificationTracker } = require("./push-notification-tracker");
-const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
-const { createWorkspaceRuntime } = require("./workspace-runtime");
+} = require("./pairing/device-state");
+const { createBridgeSecureTransport } = require("./pairing/secure-transport");
+const { createPushNotificationServiceClient } = require("./notifications/service-client");
+const { createPushNotificationTracker } = require("./notifications/tracker");
+const { createRolloutLiveMirrorController } = require("./rollout/live-mirror");
+const { createWorkspaceRuntime } = require("./workspace/runtime");
 const {
   extractBridgeMessageContext,
   normalizeLegacyAndroidRpcMessage,
@@ -88,6 +89,9 @@ function startBridge({
   let lastConnectionStatus = null;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
+  let lastInitializeParams = null;
+  let pendingAutoWarmPromise = null;
+  let pendingColdStartMessages = [];
   const relaySanitizedResponseMethodsById = new Map();
   const relaySanitizedRequestMethods = new Set([
     "thread/read",
@@ -116,6 +120,13 @@ function startBridge({
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
       sendRelayRegistrationUpdate(nextDeviceState);
+    },
+    onRecoveryProvisioning(recoveryPayload) {
+      if (!recoveryPayload) {
+        return;
+      }
+      console.log("\nRecovery payload (save this somewhere safe for remote reinstall recovery):");
+      console.log(`${JSON.stringify(recoveryPayload)}\n`);
     },
   });
   const pushServiceClient = createPushNotificationServiceClient({
@@ -162,6 +173,7 @@ function startBridge({
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
       pendingBridgeRecoveryRequestsById.clear();
+      rejectPendingColdStartMessages("The host session restarted before it finished warming up.");
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       supportsNativeTokenUsageUpdates = false;
@@ -169,6 +181,7 @@ function startBridge({
       codexInitializeRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge initialize completed."));
       codexRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge RPC completed."));
       codexHandshakeState = "cold";
+      pendingAutoWarmPromise = null;
     },
     onBeforeTransportStart() {
       forwardedInitializeRequestIds.clear();
@@ -177,6 +190,7 @@ function startBridge({
       bridgeRecoveryInitializePromise = null;
       codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
       supportsNativeTokenUsageUpdates = false;
+      pendingAutoWarmPromise = null;
     },
     onTransportError({ error, currentCwd }) {
       if (config.codexEndpoint) {
@@ -238,9 +252,11 @@ function startBridge({
       forwardedRequestTimingsById.clear();
       pendingBridgeRecoveryRequestsById.clear();
       bridgeRecoveryInitializePromise = null;
+      rejectPendingColdStartMessages("The host session restarted before it finished warming up.");
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       codexHandshakeState = "cold";
+      pendingAutoWarmPromise = null;
     },
   });
 
@@ -483,7 +499,87 @@ function startBridge({
       forwardedRequestTimingsById,
     );
     rememberThreadFromMessage("android", normalizedMessage);
+    if (queueMessageUntilCodexWarm(normalizedMessage)) {
+      return;
+    }
     workspaceRuntime.sendToCodex(normalizedMessage);
+  }
+
+  function queueMessageUntilCodexWarm(rawMessage) {
+    if (!shouldQueueMessageUntilCodexWarm({
+      rawMessage,
+      codexHandshakeState,
+      lastInitializeParams,
+    })) {
+      return false;
+    }
+
+    pendingColdStartMessages.push(rawMessage);
+    ensureCodexWarmAfterTransportReset();
+    return true;
+  }
+
+  function ensureCodexWarmAfterTransportReset() {
+    if (pendingAutoWarmPromise) {
+      return pendingAutoWarmPromise;
+    }
+
+    codexHandshakeState = "warming";
+    pendingAutoWarmPromise = codexRpcClient.sendRequest("initialize", lastInitializeParams)
+      .then(() => {
+        codexHandshakeState = "warm";
+        flushPendingColdStartMessages();
+      })
+      .catch((error) => {
+        if (isAlreadyInitializedError(error?.message)) {
+          codexHandshakeState = "warm";
+          flushPendingColdStartMessages();
+          return;
+        }
+
+        codexHandshakeState = "cold";
+        rejectPendingColdStartMessages(
+          normalizeNonEmptyString(error?.message) || "The host is not ready yet."
+        );
+      })
+      .finally(() => {
+        pendingAutoWarmPromise = null;
+      });
+    return pendingAutoWarmPromise;
+  }
+
+  function flushPendingColdStartMessages() {
+    if (pendingColdStartMessages.length === 0) {
+      return;
+    }
+
+    const queuedMessages = pendingColdStartMessages;
+    pendingColdStartMessages = [];
+    for (const queuedMessage of queuedMessages) {
+      workspaceRuntime.sendToCodex(queuedMessage);
+    }
+  }
+
+  function rejectPendingColdStartMessages(message) {
+    if (pendingColdStartMessages.length === 0) {
+      return;
+    }
+
+    const queuedMessages = pendingColdStartMessages;
+    pendingColdStartMessages = [];
+    for (const queuedMessage of queuedMessages) {
+      const parsed = safeParseJSON(queuedMessage);
+      if (parsed?.id == null) {
+        continue;
+      }
+      sendApplicationResponse(JSON.stringify({
+        id: parsed.id,
+        error: {
+          code: -32000,
+          message,
+        },
+      }));
+    }
   }
 
   function handleBridgeManagedAccountRequest(rawMessage, sendResponse) {
@@ -701,6 +797,9 @@ function startBridge({
     }
 
     if (method === "initialize" && parsed.id != null) {
+      lastInitializeParams = parsed?.params && typeof parsed.params === "object" && !Array.isArray(parsed.params)
+        ? parsed.params
+        : {};
       console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
       lastBridgeManagedInitializeParams = cloneJsonObject(parsed.params) || {};
       if (!workspaceRuntime.hasActiveWorkspace()) {
@@ -1190,6 +1289,27 @@ function cloneJsonObject(value) {
   }
 }
 
+function shouldQueueMessageUntilCodexWarm({
+  rawMessage,
+  codexHandshakeState,
+  lastInitializeParams,
+}) {
+  if (codexHandshakeState === "warm") {
+    return false;
+  }
+  if (!lastInitializeParams || typeof lastInitializeParams !== "object") {
+    return false;
+  }
+
+  const parsed = safeParseJSON(rawMessage);
+  if (!parsed || parsed.id == null) {
+    return false;
+  }
+
+  const method = normalizeNonEmptyString(parsed.method);
+  return method !== "initialize" && method !== "initialized";
+}
+
 function buildMacRegistrationHeaders(deviceState) {
   const registration = buildMacRegistration(deviceState);
   const headers = {
@@ -1200,18 +1320,33 @@ function buildMacRegistrationHeaders(deviceState) {
   if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
     headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
     headers["x-trusted-phone-public-key"] = registration.trustedPhonePublicKey;
+    if (registration.trustedPhoneRecoveryPublicKey) {
+      headers["x-trusted-phone-recovery-public-key"] = registration.trustedPhoneRecoveryPublicKey;
+    }
+    if (registration.trustedPhonePreviousRecoveryPublicKey) {
+      headers["x-trusted-phone-previous-recovery-public-key"] = registration.trustedPhonePreviousRecoveryPublicKey;
+    }
   }
   return headers;
 }
 
 function buildMacRegistration(deviceState) {
   const trustedPhoneEntry = Object.entries(deviceState?.trustedPhones || {})[0] || null;
+  const trustedPhoneRecoveryIdentities = trustedPhoneEntry
+    ? getTrustedPhoneRecoveryIdentities(deviceState, trustedPhoneEntry[0])
+    : [];
   return {
     macDeviceId: normalizeNonEmptyString(deviceState?.macDeviceId),
     macIdentityPublicKey: normalizeNonEmptyString(deviceState?.macIdentityPublicKey),
     displayName: normalizeNonEmptyString(os.hostname()),
     trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
     trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
+    trustedPhoneRecoveryPublicKey: normalizeNonEmptyString(
+      trustedPhoneRecoveryIdentities[0]?.recoveryIdentityPublicKey
+    ),
+    trustedPhonePreviousRecoveryPublicKey: normalizeNonEmptyString(
+      trustedPhoneRecoveryIdentities[1]?.recoveryIdentityPublicKey
+    ),
   };
 }
 
@@ -1224,5 +1359,6 @@ module.exports = {
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  shouldQueueMessageUntilCodexWarm,
   startBridge,
 };

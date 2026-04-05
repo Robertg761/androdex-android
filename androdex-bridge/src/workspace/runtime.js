@@ -1,13 +1,13 @@
-// FILE: workspace-runtime.js
+// FILE: workspace/runtime.js
 // Purpose: Owns workspace selection, persisted workspace state, and local Codex transport lifecycle.
 // Layer: CLI helper
 // Exports: createWorkspaceRuntime
-// Depends on: fs, path, ./codex-transport, ./daemon-state
+// Depends on: fs, path, ../codex/transport, ../daemon-state
 
 const fs = require("fs");
 const path = require("path");
-const { createCodexTransport } = require("./codex-transport");
-const { readDaemonConfig, writeDaemonConfig } = require("./daemon-state");
+const { createCodexTransport } = require("../codex/transport");
+const { readDaemonConfig, writeDaemonConfig } = require("../daemon-state");
 
 const MAX_RECENT_WORKSPACES = 25;
 

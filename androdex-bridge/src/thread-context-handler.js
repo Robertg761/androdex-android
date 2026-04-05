@@ -2,9 +2,9 @@
 // Purpose: Serves on-demand thread context-window usage reads from local Codex rollout files.
 // Layer: Bridge handler
 // Exports: handleThreadContextRequest
-// Depends on: ./rollout-watch
+// Depends on: ./rollout/watch
 
-const { readLatestContextWindowUsage } = require("./rollout-watch");
+const { readLatestContextWindowUsage } = require("./rollout/watch");
 
 function handleThreadContextRequest(rawMessage, sendResponse) {
   let parsed;

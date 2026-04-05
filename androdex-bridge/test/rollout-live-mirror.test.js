@@ -8,7 +8,7 @@ const { setTimeout: wait } = require("node:timers/promises");
 const {
   createRolloutLiveMirrorController,
   isDesktopRolloutOrigin,
-} = require("../src/rollout-live-mirror");
+} = require("../src/rollout/live-mirror");
 
 test("desktop-origin active runs replay thinking and exec command activity on resume", async (t) => {
   const { homeDir } = createTemporaryRolloutHome({

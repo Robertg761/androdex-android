@@ -10,6 +10,7 @@ const {
   setupRelay,
   getRelayStats,
   hasAuthenticatedMacSession,
+  resolveTrustedMacRecoverySession,
   resolveTrustedMacSession,
 } = require("./relay");
 const {
@@ -95,6 +96,10 @@ function createServer({
 
     if (req.method === "POST" && pathname === "/v1/trusted/session/resolve") {
       return handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
+    }
+
+    if (req.method === "POST" && pathname === "/v1/trusted/session/recover") {
+      return handleJSONRoute(req, res, async (body) => resolveTrustedMacRecoverySession(body));
     }
 
     writeJson(res, 404, { ok: false, error: "Not found" });

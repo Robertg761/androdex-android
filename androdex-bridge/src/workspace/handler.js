@@ -1,16 +1,16 @@
-// FILE: workspace-handler.js
+// FILE: workspace/handler.js
 // Purpose: Executes workspace-scoped reverse patch previews/applies without touching unrelated repo changes.
 // Layer: Bridge handler
 // Exports: handleWorkspaceRequest
-// Depends on: child_process, fs, os, path, ./git-handler
+// Depends on: child_process, fs, os, path, ../git-handler
 
 const { execFile } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { promisify } = require("util");
-const { gitStatus } = require("./git-handler");
-const { createWorkspaceBrowser } = require("./workspace-browser");
+const { gitStatus } = require("../git-handler");
+const { createWorkspaceBrowser } = require("./browser");
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;

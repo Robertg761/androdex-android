@@ -1,4 +1,4 @@
-// FILE: notifications-handler.js
+// FILE: notifications/handler.js
 // Purpose: Intercepts notifications/push/* bridge RPCs and forwards Android device registration to the configured push service.
 // Layer: Bridge handler
 // Exports: createNotificationsHandler

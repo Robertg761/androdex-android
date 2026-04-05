@@ -13,6 +13,7 @@ const CLOSE_CODE_MOBILE_REPLACED = 4003;
 const CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL = 4004;
 const MAC_ABSENCE_GRACE_MS = 15_000;
 const TRUSTED_SESSION_RESOLVE_TAG = "androdex-trusted-session-resolve-v1";
+const TRUSTED_SESSION_RECOVER_TAG = "androdex-trusted-session-recover-v1";
 const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
 const STABLE_RELAY_HOST_PREFIX = "mac.";
 
@@ -392,6 +393,80 @@ function resolveTrustedMacSession({
   };
 }
 
+function resolveTrustedMacRecoverySession({
+  macDeviceId,
+  phoneDeviceId,
+  recoveryIdentityPublicKey,
+  timestamp,
+  nonce,
+  signature,
+  now = Date.now(),
+} = {}) {
+  const normalizedMacDeviceId = normalizeNonEmptyString(macDeviceId);
+  const normalizedPhoneDeviceId = normalizeNonEmptyString(phoneDeviceId);
+  const normalizedRecoveryIdentityPublicKey = normalizeNonEmptyString(recoveryIdentityPublicKey);
+  const normalizedNonce = normalizeNonEmptyString(nonce);
+  const normalizedSignature = normalizeNonEmptyString(signature);
+  const normalizedTimestamp = Number(timestamp);
+
+  if (
+    !normalizedMacDeviceId
+    || !normalizedPhoneDeviceId
+    || !normalizedRecoveryIdentityPublicKey
+    || !normalizedNonce
+    || !normalizedSignature
+    || !Number.isFinite(normalizedTimestamp)
+  ) {
+    throw createRelayError(400, "invalid_request", "The trusted-session recovery request is missing required fields.");
+  }
+
+  if (Math.abs(now - normalizedTimestamp) > TRUSTED_SESSION_RESOLVE_SKEW_MS) {
+    throw createRelayError(401, "resolve_request_expired", "This trusted-session recovery request has expired.");
+  }
+
+  pruneUsedResolveNonces(now);
+  const nonceKey = `${normalizedMacDeviceId}|${normalizedPhoneDeviceId}|recover|${normalizedNonce}`;
+  if (usedResolveNonces.has(nonceKey)) {
+    throw createRelayError(409, "resolve_request_replayed", "This trusted-session recovery request was already used.");
+  }
+
+  const liveSession = liveSessionsByMacDeviceId.get(normalizedMacDeviceId);
+  if (!liveSession || !hasActiveMacSession(liveSession.sessionId)) {
+    throw createRelayError(404, "session_unavailable", "The trusted host is offline right now.");
+  }
+
+  if (
+    liveSession.trustedPhoneDeviceId !== normalizedPhoneDeviceId
+    || !liveSession.trustedPhoneRecoveryPublicKeys.includes(normalizedRecoveryIdentityPublicKey)
+  ) {
+    throw createRelayError(403, "recovery_not_trusted", "This recovery credential is not trusted for the requested host.");
+  }
+
+  const transcriptBytes = buildTrustedSessionRecoverBytes({
+    macDeviceId: normalizedMacDeviceId,
+    phoneDeviceId: normalizedPhoneDeviceId,
+    recoveryIdentityPublicKey: normalizedRecoveryIdentityPublicKey,
+    nonce: normalizedNonce,
+    timestamp: normalizedTimestamp,
+  });
+  if (!verifyTrustedSessionResolveSignature(
+    normalizedRecoveryIdentityPublicKey,
+    transcriptBytes,
+    normalizedSignature
+  )) {
+    throw createRelayError(403, "invalid_signature", "The trusted-session recovery signature is invalid.");
+  }
+
+  usedResolveNonces.set(nonceKey, now + TRUSTED_SESSION_RESOLVE_SKEW_MS);
+  return {
+    ok: true,
+    macDeviceId: normalizedMacDeviceId,
+    macIdentityPublicKey: liveSession.macIdentityPublicKey,
+    displayName: liveSession.displayName || null,
+    sessionId: liveSession.sessionId,
+  };
+}
+
 // Exposes lightweight runtime stats for health/status endpoints.
 function getRelayStats() {
   let totalClients = 0;
@@ -506,10 +581,19 @@ function readMacRegistrationHeaders(headers, sessionId) {
     displayName: readHeaderString(headers["x-machine-name"]),
     trustedPhoneDeviceId: readHeaderString(headers["x-trusted-phone-device-id"]),
     trustedPhonePublicKey: readHeaderString(headers["x-trusted-phone-public-key"]),
+    trustedPhoneRecoveryPublicKey: readHeaderString(headers["x-trusted-phone-recovery-public-key"]),
+    trustedPhonePreviousRecoveryPublicKey: readHeaderString(headers["x-trusted-phone-previous-recovery-public-key"]),
   }, sessionId);
 }
 
 function normalizeMacRegistration(registration, sessionId) {
+  const trustedPhoneRecoveryPublicKeys = normalizeStringList([
+    registration?.trustedPhoneRecoveryPublicKey,
+    registration?.trustedPhonePreviousRecoveryPublicKey,
+    ...(Array.isArray(registration?.trustedPhoneRecoveryPublicKeys)
+      ? registration.trustedPhoneRecoveryPublicKeys
+      : []),
+  ]);
   return {
     sessionId,
     macDeviceId: normalizeNonEmptyString(registration?.macDeviceId),
@@ -517,6 +601,9 @@ function normalizeMacRegistration(registration, sessionId) {
     displayName: normalizeNonEmptyString(registration?.displayName),
     trustedPhoneDeviceId: normalizeNonEmptyString(registration?.trustedPhoneDeviceId),
     trustedPhonePublicKey: normalizeNonEmptyString(registration?.trustedPhonePublicKey),
+    trustedPhoneRecoveryPublicKey: trustedPhoneRecoveryPublicKeys[0] || "",
+    trustedPhonePreviousRecoveryPublicKey: trustedPhoneRecoveryPublicKeys[1] || "",
+    trustedPhoneRecoveryPublicKeys,
   };
 }
 
@@ -532,6 +619,23 @@ function buildTrustedSessionResolveBytes({
     encodeLengthPrefixedUTF8(macDeviceId),
     encodeLengthPrefixedUTF8(phoneDeviceId),
     encodeLengthPrefixedData(Buffer.from(phoneIdentityPublicKey, "base64")),
+    encodeLengthPrefixedUTF8(nonce),
+    encodeLengthPrefixedUTF8(String(timestamp)),
+  ]);
+}
+
+function buildTrustedSessionRecoverBytes({
+  macDeviceId,
+  phoneDeviceId,
+  recoveryIdentityPublicKey,
+  nonce,
+  timestamp,
+}) {
+  return Buffer.concat([
+    encodeLengthPrefixedUTF8(TRUSTED_SESSION_RECOVER_TAG),
+    encodeLengthPrefixedUTF8(macDeviceId),
+    encodeLengthPrefixedUTF8(phoneDeviceId),
+    encodeLengthPrefixedData(Buffer.from(recoveryIdentityPublicKey, "base64")),
     encodeLengthPrefixedUTF8(nonce),
     encodeLengthPrefixedUTF8(String(timestamp)),
   ]);
@@ -596,6 +700,18 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function normalizeStringList(values) {
+  const deduped = [];
+  for (const value of values) {
+    const normalized = normalizeNonEmptyString(value);
+    if (!normalized || deduped.includes(normalized)) {
+      continue;
+    }
+    deduped.push(normalized);
+  }
+  return deduped;
+}
+
 function createRelayError(status, code, message) {
   return Object.assign(new Error(message), {
     status,
@@ -620,6 +736,7 @@ module.exports = {
   hasAuthenticatedMacSession,
   hasLiveSession,
   getRelayStats,
+  resolveTrustedMacRecoverySession,
   resolveTrustedMacSession,
   setupRelay,
 };

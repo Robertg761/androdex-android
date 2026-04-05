@@ -56,6 +56,15 @@ androdex watch [threadId]
 - handles git and workspace actions on the host machine, including branch/worktree management and reverse-patch safety checks
 - keeps the local Codex desktop app aligned with phone-authored thread activity when desktop refresh is enabled
 
+## Pairing And Trust Model
+
+- The bridge has a durable host identity under `~/.androdex` and pairing is anchored to that identity, not just to a transient relay session.
+- Initial QR pairing now registers a phone-owned recovery credential. The bridge stores only the public recovery identity needed for later verification.
+- Trusted reconnect resolves a fresh live relay session for an already trusted phone instead of treating every reconnect like first-time pairing.
+- Trusted recovery/rekey lets a reinstalled Android app rotate to a new phone install identity after proving possession of the existing recovery credential.
+- During recovery rotation, the bridge keeps the previous recovery identity as a fallback so an interrupted rotation does not strand the device immediately.
+- The bridge also replays Android `initialize` state after host-side transport restarts so thread reads do not fail with `Not initialized` just because the host session came back before the client reinitialized.
+
 ## Environment variables
 
 `androdex` accepts `ANDRODEX_*` variables.
@@ -103,6 +112,17 @@ npm install
 npm start
 ```
 
+## Internal Structure
+
+The bridge source is grouped by responsibility so changes are easier to place without mixing unrelated concerns:
+
+- `src/codex/`: Codex process transport and JSON-RPC client helpers
+- `src/pairing/`: QR output, trusted-device persistence, and secure bridge transport
+- `src/notifications/`: push registration handling, dedupe, service client, and completion tracking
+- `src/rollout/`: rollout watching and live-mirror helpers
+- `src/workspace/`: workspace browsing, activation, and reverse-patch workflows
+- `src/`: top-level orchestration and shared helpers such as `bridge.js`, `git-handler.js`, `daemon-state.js`, and `macos-launch-agent.js`
+
 ## Release
 
 Publish the npm package from this directory, not from the repository root:
@@ -130,8 +150,8 @@ If your npm account requires write-time 2FA, rerun the publish command with `--o
 3. From Android, open an existing thread and create a new one to confirm the remote client flow still works end to end.
 4. If desktop refresh is enabled, verify phone-authored thread activity refreshes the host Codex desktop without hijacking the normal thread list or workspace context.
 5. Restart the launchd service or reconnect the phone and confirm the saved pairing and active workspace recover without losing host-local state.
-6. Force-stop or swipe away the Android app, reopen it, and confirm the phone resolves the trusted host again instead of falling back to the repair-pairing screen.
-7. Restart the bridge while the phone still has a saved pairing and confirm reconnect uses the stable host route instead of getting stranded on the previous live relay session id.
+6. Force-close the Android app from the app switcher, reopen it, and confirm trusted reconnect resolves the trusted host again instead of falling back to the repair-pairing screen or a stale live relay session id.
+7. If you touch recovery logic, test a reinstall/rekey path and confirm the trusted host survives without requiring a new QR when the recovery payload is still available.
 
 ## Project status
 

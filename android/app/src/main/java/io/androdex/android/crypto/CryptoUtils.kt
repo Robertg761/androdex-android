@@ -2,6 +2,7 @@ package io.androdex.android.crypto
 
 import android.util.Base64
 import io.androdex.android.model.PhoneIdentityState
+import io.androdex.android.model.RecoveryPayload
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
@@ -34,15 +35,37 @@ fun generatePhoneIdentityState(): PhoneIdentityState {
     )
 }
 
+fun generateRecoveryPayload(
+    relay: String,
+    macDeviceId: String,
+    macIdentityPublicKey: String,
+    phoneDeviceId: String,
+): RecoveryPayload {
+    val privateKey = Ed25519PrivateKeyParameters(secureRandom)
+    val publicKey = privateKey.generatePublicKey()
+    return RecoveryPayload(
+        version = 1,
+        relay = relay,
+        macDeviceId = macDeviceId,
+        macIdentityPublicKey = macIdentityPublicKey,
+        phoneDeviceId = phoneDeviceId,
+        recoveryIdentityPrivateKey = encodeBase64(privateKey.encoded),
+        recoveryIdentityPublicKey = encodeBase64(publicKey.encoded),
+    )
+}
+
 fun buildTranscriptBytes(
     sessionId: String,
     protocolVersion: Int,
     handshakeMode: String,
     keyEpoch: Int,
     macDeviceId: String,
+    trustedPhoneDeviceId: String = "",
     phoneDeviceId: String,
     macIdentityPublicKey: String,
+    trustedRecoveryPublicKey: String = "",
     phoneIdentityPublicKey: String,
+    nextRecoveryIdentityPublicKey: String = "",
     macEphemeralPublicKey: String,
     phoneEphemeralPublicKey: String,
     clientNonce: ByteArray,
@@ -56,9 +79,12 @@ fun buildTranscriptBytes(
         add(encodeLengthPrefixedUtf8(handshakeMode))
         add(encodeLengthPrefixedUtf8(keyEpoch.toString()))
         add(encodeLengthPrefixedUtf8(macDeviceId))
+        add(encodeLengthPrefixedUtf8(trustedPhoneDeviceId))
         add(encodeLengthPrefixedUtf8(phoneDeviceId))
         add(encodeLengthPrefixedBuffer(decodeBase64(macIdentityPublicKey)))
+        add(encodeLengthPrefixedBuffer(decodeBase64(trustedRecoveryPublicKey)))
         add(encodeLengthPrefixedBuffer(decodeBase64(phoneIdentityPublicKey)))
+        add(encodeLengthPrefixedBuffer(decodeBase64(nextRecoveryIdentityPublicKey)))
         add(encodeLengthPrefixedBuffer(decodeBase64(macEphemeralPublicKey)))
         add(encodeLengthPrefixedBuffer(decodeBase64(phoneEphemeralPublicKey)))
         add(encodeLengthPrefixedBuffer(clientNonce))
@@ -83,6 +109,23 @@ fun buildTrustedSessionResolveTranscript(
         add(encodeLengthPrefixedUtf8(macDeviceId))
         add(encodeLengthPrefixedUtf8(phoneDeviceId))
         add(encodeLengthPrefixedBuffer(decodeBase64(phoneIdentityPublicKey)))
+        add(encodeLengthPrefixedUtf8(nonce))
+        add(encodeLengthPrefixedUtf8(timestamp.toString()))
+    }.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
+}
+
+fun buildTrustedSessionRecoverTranscript(
+    macDeviceId: String,
+    phoneDeviceId: String,
+    recoveryIdentityPublicKey: String,
+    nonce: String,
+    timestamp: Long,
+): ByteArray {
+    return buildList {
+        add(encodeLengthPrefixedUtf8("androdex-trusted-session-recover-v1"))
+        add(encodeLengthPrefixedUtf8(macDeviceId))
+        add(encodeLengthPrefixedUtf8(phoneDeviceId))
+        add(encodeLengthPrefixedBuffer(decodeBase64(recoveryIdentityPublicKey)))
         add(encodeLengthPrefixedUtf8(nonce))
         add(encodeLengthPrefixedUtf8(timestamp.toString()))
     }.fold(ByteArray(0)) { acc, chunk -> acc + chunk }

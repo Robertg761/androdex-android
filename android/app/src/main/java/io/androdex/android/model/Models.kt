@@ -114,6 +114,55 @@ data class SavedRelaySession(
     }
 }
 
+data class RecoveryPayload(
+    val version: Int,
+    val relay: String,
+    val macDeviceId: String,
+    val macIdentityPublicKey: String,
+    val phoneDeviceId: String,
+    val recoveryIdentityPublicKey: String,
+    val recoveryIdentityPrivateKey: String,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("v", version)
+        .put("relay", relay)
+        .put("macDeviceId", macDeviceId)
+        .put("macIdentityPublicKey", macIdentityPublicKey)
+        .put("phoneDeviceId", phoneDeviceId)
+        .put("recoveryIdentityPublicKey", recoveryIdentityPublicKey)
+        .put("recoveryIdentityPrivateKey", recoveryIdentityPrivateKey)
+
+    companion object {
+        fun fromJson(json: JSONObject): RecoveryPayload? {
+            val relay = json.optString("relay").trim()
+            val macDeviceId = json.optString("macDeviceId").trim()
+            val macIdentityPublicKey = json.optString("macIdentityPublicKey").trim()
+            val phoneDeviceId = json.optString("phoneDeviceId").trim()
+            val recoveryIdentityPublicKey = json.optString("recoveryIdentityPublicKey").trim()
+            val recoveryIdentityPrivateKey = json.optString("recoveryIdentityPrivateKey").trim()
+            if (
+                relay.isEmpty()
+                || macDeviceId.isEmpty()
+                || macIdentityPublicKey.isEmpty()
+                || phoneDeviceId.isEmpty()
+                || recoveryIdentityPublicKey.isEmpty()
+                || recoveryIdentityPrivateKey.isEmpty()
+            ) {
+                return null
+            }
+            return RecoveryPayload(
+                version = json.optInt("v", 1),
+                relay = relay,
+                macDeviceId = macDeviceId,
+                macIdentityPublicKey = macIdentityPublicKey,
+                phoneDeviceId = phoneDeviceId,
+                recoveryIdentityPublicKey = recoveryIdentityPublicKey,
+                recoveryIdentityPrivateKey = recoveryIdentityPrivateKey,
+            )
+        }
+    }
+}
+
 data class PhoneIdentityState(
     val phoneDeviceId: String,
     val phoneIdentityPrivateKey: String,

@@ -84,9 +84,12 @@ Androdex uses the relay as a transport hop, not as a trusted application server.
 
 - The pairing QR gives the mobile client the host identity public key plus a short-lived bootstrap token.
 - The phone reconnects through a stable public host route derived from the trusted Mac device id, while the bridge can still rotate its private relay transport session underneath.
+- The phone generates and retains its own recovery credential from first pairing onward. The relay never needs the private recovery key.
 - The mobile client and bridge perform a signed handshake, derive shared AES-256-GCM keys with X25519 + HKDF-SHA256, and then encrypt application payloads end to end.
 - The relay can still observe connection metadata and the plaintext secure control messages needed to establish the encrypted session.
 - The relay does not receive plaintext Androdex application payloads after the secure session is active.
+- Trusted reconnect and trusted recovery both terminate at relay HTTP endpoints that only resolve or rotate live-session access after verifying signed proofs from the phone against stored public trust material.
+- During recovery rotation, the relay accepts the current recovery public key and the previous fallback key so an interrupted rekey does not immediately lock the phone out.
 
 ## Protocol Notes
 
@@ -101,6 +104,8 @@ Androdex uses the relay as a transport hop, not as a trusted application server.
 Optional HTTP endpoints:
 
 - `GET /healthz`
+- `POST /v1/trusted/session/resolve`
+- `POST /v1/trusted/session/recover`
 - `POST /v1/push/session/register-device`
 - `POST /v1/push/session/notify-completion`
 

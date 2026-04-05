@@ -1,13 +1,13 @@
-// FILE: rollout-watch.js
+// FILE: rollout/watch.js
 // Purpose: Shared rollout-file lookup/watch helpers for CLI inspection, desktop refresh, and usage fallbacks.
 // Layer: CLI helper
 // Exports: watchThreadRollout, createThreadRolloutActivityWatcher
-// Depends on: fs, os, path, ./session-state
+// Depends on: fs, os, path, ../session-state
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { readLastActiveThread } = require("./session-state");
+const { readLastActiveThread } = require("../session-state");
 
 const DEFAULT_WATCH_INTERVAL_MS = 1_000;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 5_000;

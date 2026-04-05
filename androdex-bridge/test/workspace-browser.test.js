@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-const { arePathsEqual, createWorkspaceBrowser } = require("../src/workspace-browser");
+const { arePathsEqual, createWorkspaceBrowser } = require("../src/workspace/browser");
 
 test("arePathsEqual keeps macOS path comparisons case-sensitive", () => {
   assert.equal(arePathsEqual("/Users/rober/Work", "/users/rober/work", "darwin"), false);

@@ -1778,6 +1778,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     override fun startupNotice(): String? = startupNotice
 
     override suspend fun connectWithPairingPayload(rawPayload: String) = Unit
+    override suspend fun connectWithRecoveryPayload(rawPayload: String) = Unit
 
     override suspend fun reconnectSaved(): Boolean {
         reconnectSavedCalls += 1
