@@ -84,6 +84,9 @@ function startBridge({
   let lastConnectionStatus = null;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
+  let lastInitializeParams = null;
+  let pendingAutoWarmPromise = null;
+  let pendingColdStartMessages = [];
   const relaySanitizedResponseMethodsById = new Map();
   const relaySanitizedRequestMethods = new Set([
     "thread/read",
@@ -154,17 +157,20 @@ function startBridge({
     onBeforeTransportShutdown() {
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
+      rejectPendingColdStartMessages("The host session restarted before it finished warming up.");
       stopContextUsageWatcher({ clearHint: false });
       rolloutLiveMirror?.stopAll();
       supportsNativeTokenUsageUpdates = false;
       codexRpcClient.rejectAllPending(new Error("The active Codex workspace closed before the bridge RPC completed."));
       codexHandshakeState = "cold";
+      pendingAutoWarmPromise = null;
     },
     onBeforeTransportStart() {
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
       codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
       supportsNativeTokenUsageUpdates = false;
+      pendingAutoWarmPromise = null;
     },
     onTransportError({ error, currentCwd }) {
       if (config.codexEndpoint) {
@@ -218,9 +224,11 @@ function startBridge({
       desktopRefresher.handleTransportReset();
       forwardedInitializeRequestIds.clear();
       forwardedRequestTimingsById.clear();
+      rejectPendingColdStartMessages("The host session restarted before it finished warming up.");
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       codexHandshakeState = "cold";
+      pendingAutoWarmPromise = null;
     },
   });
 
@@ -463,7 +471,87 @@ function startBridge({
       forwardedRequestTimingsById,
     );
     rememberThreadFromMessage("android", normalizedMessage);
+    if (queueMessageUntilCodexWarm(normalizedMessage)) {
+      return;
+    }
     workspaceRuntime.sendToCodex(normalizedMessage);
+  }
+
+  function queueMessageUntilCodexWarm(rawMessage) {
+    if (!shouldQueueMessageUntilCodexWarm({
+      rawMessage,
+      codexHandshakeState,
+      lastInitializeParams,
+    })) {
+      return false;
+    }
+
+    pendingColdStartMessages.push(rawMessage);
+    ensureCodexWarmAfterTransportReset();
+    return true;
+  }
+
+  function ensureCodexWarmAfterTransportReset() {
+    if (pendingAutoWarmPromise) {
+      return pendingAutoWarmPromise;
+    }
+
+    codexHandshakeState = "warming";
+    pendingAutoWarmPromise = codexRpcClient.sendRequest("initialize", lastInitializeParams)
+      .then(() => {
+        codexHandshakeState = "warm";
+        flushPendingColdStartMessages();
+      })
+      .catch((error) => {
+        if (isAlreadyInitializedError(error?.message)) {
+          codexHandshakeState = "warm";
+          flushPendingColdStartMessages();
+          return;
+        }
+
+        codexHandshakeState = "cold";
+        rejectPendingColdStartMessages(
+          normalizeNonEmptyString(error?.message) || "The host is not ready yet."
+        );
+      })
+      .finally(() => {
+        pendingAutoWarmPromise = null;
+      });
+    return pendingAutoWarmPromise;
+  }
+
+  function flushPendingColdStartMessages() {
+    if (pendingColdStartMessages.length === 0) {
+      return;
+    }
+
+    const queuedMessages = pendingColdStartMessages;
+    pendingColdStartMessages = [];
+    for (const queuedMessage of queuedMessages) {
+      workspaceRuntime.sendToCodex(queuedMessage);
+    }
+  }
+
+  function rejectPendingColdStartMessages(message) {
+    if (pendingColdStartMessages.length === 0) {
+      return;
+    }
+
+    const queuedMessages = pendingColdStartMessages;
+    pendingColdStartMessages = [];
+    for (const queuedMessage of queuedMessages) {
+      const parsed = safeParseJSON(queuedMessage);
+      if (parsed?.id == null) {
+        continue;
+      }
+      sendApplicationResponse(JSON.stringify({
+        id: parsed.id,
+        error: {
+          code: -32000,
+          message,
+        },
+      }));
+    }
   }
 
   function handleBridgeManagedAccountRequest(rawMessage, sendResponse) {
@@ -681,6 +769,9 @@ function startBridge({
     }
 
     if (method === "initialize" && parsed.id != null) {
+      lastInitializeParams = parsed?.params && typeof parsed.params === "object" && !Array.isArray(parsed.params)
+        ? parsed.params
+        : {};
       console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
       if (!workspaceRuntime.hasActiveWorkspace()) {
         sendApplicationResponse(JSON.stringify({
@@ -1058,6 +1149,27 @@ function isAlreadyInitializedError(message) {
   return normalizeNonEmptyString(message).toLowerCase().includes("already initialized");
 }
 
+function shouldQueueMessageUntilCodexWarm({
+  rawMessage,
+  codexHandshakeState,
+  lastInitializeParams,
+}) {
+  if (codexHandshakeState === "warm") {
+    return false;
+  }
+  if (!lastInitializeParams || typeof lastInitializeParams !== "object") {
+    return false;
+  }
+
+  const parsed = safeParseJSON(rawMessage);
+  if (!parsed || parsed.id == null) {
+    return false;
+  }
+
+  const method = normalizeNonEmptyString(parsed.method);
+  return method !== "initialize" && method !== "initialized";
+}
+
 function buildMacRegistrationHeaders(deviceState) {
   const registration = buildMacRegistration(deviceState);
   const headers = {
@@ -1106,5 +1218,6 @@ module.exports = {
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  shouldQueueMessageUntilCodexWarm,
   startBridge,
 };

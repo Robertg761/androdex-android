@@ -51,6 +51,18 @@ This directory contains the Android Studio project for the Androdex client.
 - For user-visible Android UI work, check the parity/reference docs in
   [`Docs/remodex-visual-reference/README.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/README.md).
 
+## Pairing And Reconnect Model
+
+- The Android app now treats the trusted host relationship as durable state, not as a disposable live relay session.
+- [`data/AndrodexPersistence.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexPersistence.kt)
+  stores the phone identity, trusted Mac registry, and recovery payloads separately from the throwaway saved relay session.
+- [`data/AndrodexClient.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexClient.kt)
+  owns three distinct paths:
+  fresh QR bootstrap, trusted reconnect to resolve a fresh live session, and trusted recovery/rekey after reinstall.
+- Recovery credentials are phone-owned from first pairing onward. The bridge and relay only receive the public trust material needed to verify reconnect or rekey requests.
+- Cold-start reconnect matters just as much as foreground/background reconnect. Force-stop, app-switcher removal, and process death should still come back through trusted reconnect rather than pushing the user into a fake “pair again” state.
+- Legacy reconnect compatibility checks must distinguish real `macDeviceId` values from older live-session identifiers. If you touch reconnect selection or repair heuristics, test force-stop plus relaunch on a real device.
+
 ## Related Docs
 
 - [`Docs/repo-map.md`](/Users/robert/Documents/Projects/androdex/Docs/repo-map.md)

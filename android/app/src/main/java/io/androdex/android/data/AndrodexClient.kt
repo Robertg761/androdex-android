@@ -304,7 +304,7 @@ class AndrodexClient(
     private fun reconnectCandidate(): PairingPayload? {
         val trusted = currentTrustedMacRecord() ?: return null
         val session = savedRelaySession
-        if (session != null && !looksLikeLegacyRelaySessionIdentifier(session.macDeviceId)) {
+        if (session != null && !looksLikeLegacyRelaySessionIdentifier(session.macDeviceId, session.hostId)) {
             return session.toPairingPayload()
         }
         if (session != null && trusted.macDeviceId != session.macDeviceId) {
@@ -1316,7 +1316,7 @@ class AndrodexClient(
 
     private suspend fun resolveTrustedPairing(pairing: PairingPayload): TrustedSessionResolveResult {
         val phoneIdentity = requirePhoneIdentityForReconnect()
-        if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId)) {
+        if (looksLikeLegacyRelaySessionIdentifier(pairing.macDeviceId, pairing.routingId)) {
             return TrustedSessionResolveResult.RepairRequired(
                 "Trusted reconnect data is from an older live-session format. Open a fresh pairing payload from the host to repair this phone.",
             )
@@ -3452,12 +3452,20 @@ internal fun shouldClearSavedRelaySessionForSocketClose(code: Int): Boolean {
     return code in setOf(4000, 4001, 4003)
 }
 
-internal fun looksLikeLegacyRelaySessionIdentifier(value: String?): Boolean {
-    val normalized = value?.trim().orEmpty()
-    if (normalized.isEmpty()) {
+internal fun looksLikeLegacyRelaySessionIdentifier(
+    value: String?,
+    hostId: String? = null,
+): Boolean {
+    val normalizedValue = value?.trim().orEmpty()
+    if (normalizedValue.isEmpty()) {
         return false
     }
-    return runCatching { UUID.fromString(normalized) }.isSuccess
+    val normalizedHostId = hostId?.trim().orEmpty()
+    return normalizedHostId.isNotEmpty() && normalizedValue == normalizedHostId
+}
+
+private fun looksLikeLegacyTrustedMacRecord(record: TrustedMacRecord): Boolean {
+    return looksLikeLegacyRelaySessionIdentifier(record.macDeviceId, record.lastResolvedHostId)
 }
 
 internal fun selectPreferredTrustedMacRecord(
@@ -3466,17 +3474,22 @@ internal fun selectPreferredTrustedMacRecord(
     savedRelaySession: SavedRelaySession?,
 ): TrustedMacRecord? {
     val normalizedPreferredDeviceId = preferredDeviceId?.trim()?.takeIf { it.isNotEmpty() }
-    if (normalizedPreferredDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(normalizedPreferredDeviceId)) {
-        records[normalizedPreferredDeviceId]?.let { return it }
+    if (normalizedPreferredDeviceId != null) {
+        records[normalizedPreferredDeviceId]
+            ?.takeUnless(::looksLikeLegacyTrustedMacRecord)
+            ?.let { return it }
     }
 
     val savedSessionDeviceId = savedRelaySession?.macDeviceId?.trim()?.takeIf { it.isNotEmpty() }
-    if (savedSessionDeviceId != null && !looksLikeLegacyRelaySessionIdentifier(savedSessionDeviceId)) {
+    if (
+        savedSessionDeviceId != null
+        && !looksLikeLegacyRelaySessionIdentifier(savedSessionDeviceId, savedRelaySession.hostId)
+    ) {
         records[savedSessionDeviceId]?.let { return it }
     }
 
     records.values
-        .filterNot { looksLikeLegacyRelaySessionIdentifier(it.macDeviceId) }
+        .filterNot(::looksLikeLegacyTrustedMacRecord)
         .maxByOrNull { it.lastUsedAtEpochMs ?: it.lastResolvedAtEpochMs ?: it.lastPairedAtEpochMs }
         ?.let { return it }
 

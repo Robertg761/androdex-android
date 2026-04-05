@@ -4,7 +4,7 @@
 // Exports: node:test suite
 // Depends on: node:test, node:assert/strict, crypto, ../src/pairing/secure-transport
 
-const test = require("node:test");
+const { after, test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   createCipheriv,
@@ -24,6 +24,16 @@ const {
   createBridgeSecureTransport,
   nonceForDirection,
 } = require("../src/pairing/secure-transport");
+
+const previousAllowSyntheticDeviceState = process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE;
+process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE = "1";
+after(() => {
+  if (previousAllowSyntheticDeviceState == null) {
+    delete process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE;
+  } else {
+    process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE = previousAllowSyntheticDeviceState;
+  }
+});
 
 test("secure transport rejects plaintext JSON-RPC before the secure handshake", () => {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");

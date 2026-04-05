@@ -18,6 +18,7 @@ let hasLoggedMismatch = false;
 
 function loadOrCreateBridgeDeviceState() {
   const fileRecord = readCanonicalFileStateRecord();
+  const backupRecord = readBackupFileStateRecord();
   const keychainRecord = readKeychainStateRecord();
 
   if (fileRecord.state) {
@@ -28,8 +29,13 @@ function loadOrCreateBridgeDeviceState() {
   if (fileRecord.error) {
     if (keychainRecord.state) {
       warnOnce("[androdex] Recovering the canonical device-state.json from the legacy Keychain pairing mirror.");
-      writeBridgeDeviceState(keychainRecord.state);
+      writeBridgeDeviceState(keychainRecord.state, { backupExisting: false });
       return keychainRecord.state;
+    }
+    if (backupRecord.state) {
+      warnOnce("[androdex] Recovering the canonical device-state.json from the last known-good backup.");
+      writeBridgeDeviceState(backupRecord.state, { backupExisting: false });
+      return backupRecord.state;
     }
     throw corruptedStateError("device-state.json", fileRecord.error);
   }
@@ -39,8 +45,13 @@ function loadOrCreateBridgeDeviceState() {
   }
 
   if (keychainRecord.state) {
-    writeBridgeDeviceState(keychainRecord.state);
+    writeBridgeDeviceState(keychainRecord.state, { backupExisting: false });
     return keychainRecord.state;
+  }
+
+  if (backupRecord.state) {
+    writeBridgeDeviceState(backupRecord.state, { backupExisting: false });
+    return backupRecord.state;
   }
 
   const nextState = createBridgeDeviceState();
@@ -50,10 +61,12 @@ function loadOrCreateBridgeDeviceState() {
 
 function resetBridgeDeviceState() {
   const removedCanonicalFile = deleteCanonicalFileState();
+  const removedBackupFile = deleteBackupFileState();
   const removedKeychainMirror = deleteKeychainStateString();
   return {
-    hadState: removedCanonicalFile || removedKeychainMirror,
+    hadState: removedCanonicalFile || removedBackupFile || removedKeychainMirror,
     removedCanonicalFile,
+    removedBackupFile,
     removedKeychainMirror,
   };
 }
@@ -155,22 +168,6 @@ function createBridgeDeviceState() {
   };
 }
 
-function readCanonicalFileStateRecord() {
-  const storeFile = resolveStoreFile();
-  if (!fs.existsSync(storeFile)) {
-    return { state: null, error: null };
-  }
-
-  try {
-    return {
-      state: normalizeBridgeDeviceState(JSON.parse(fs.readFileSync(storeFile, "utf8"))),
-      error: null,
-    };
-  } catch (error) {
-    return { state: null, error };
-  }
-}
-
 function readKeychainStateRecord() {
   const rawState = readKeychainStateString();
   if (!rawState) {
@@ -187,15 +184,18 @@ function readKeychainStateRecord() {
   }
 }
 
-function writeBridgeDeviceState(state) {
+function writeBridgeDeviceState(state, { backupExisting = true } = {}) {
   const serialized = JSON.stringify(state, null, 2);
-  writeCanonicalFileStateString(serialized);
+  writeCanonicalFileStateString(serialized, { backupExisting });
   writeKeychainStateString(serialized);
 }
 
-function writeCanonicalFileStateString(serialized) {
+function writeCanonicalFileStateString(serialized, { backupExisting = true } = {}) {
   const storeDir = resolveStoreDir();
   const storeFile = resolveStoreFile();
+  if (backupExisting) {
+    backupExistingCanonicalFile(storeFile, serialized);
+  }
   fs.mkdirSync(storeDir, { recursive: true });
   fs.writeFileSync(storeFile, serialized, { mode: 0o600 });
   try {
@@ -212,6 +212,10 @@ function resolveStoreDir() {
 function resolveStoreFile() {
   return normalizeNonEmptyString(process.env.ANDRODEX_DEVICE_STATE_FILE)
     || path.join(resolveStoreDir(), "device-state.json");
+}
+
+function resolveBackupFile() {
+  return path.join(resolveStoreDir(), "device-state.backup.json");
 }
 
 function readKeychainStateString() {
@@ -281,6 +285,17 @@ function deleteCanonicalFileState() {
   }
 }
 
+function deleteBackupFileState() {
+  const backupFile = resolveBackupFile();
+  const existed = fs.existsSync(backupFile);
+  try {
+    fs.rmSync(backupFile, { force: true });
+    return existed;
+  } catch {
+    return false;
+  }
+}
+
 function reconcileLegacyKeychainMirror(canonicalState, keychainRecord) {
   if (keychainRecord.error) {
     warnOnce("[androdex] Ignoring unreadable legacy Keychain pairing mirror; using canonical device-state.json.");
@@ -334,6 +349,9 @@ function normalizeBridgeDeviceState(rawState) {
   if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
     throw new Error("Bridge device state is incomplete");
   }
+  if (!allowsSyntheticDeviceState() && !isUuid(macDeviceId)) {
+    throw new Error("Bridge device state uses a non-persistent synthetic macDeviceId.");
+  }
 
   const trustedPhones = {};
   if (rawState?.trustedPhones && typeof rawState.trustedPhones === "object") {
@@ -342,6 +360,9 @@ function normalizeBridgeDeviceState(rawState) {
       const normalizedPublicKey = normalizeNonEmptyString(publicKey);
       if (!normalizedDeviceId || !normalizedPublicKey) {
         continue;
+      }
+      if (!allowsSyntheticDeviceState() && !isUuid(normalizedDeviceId)) {
+        throw new Error("Bridge device state uses a non-persistent synthetic trusted phone device id.");
       }
       trustedPhones[normalizedDeviceId] = normalizedPublicKey;
     }
@@ -478,6 +499,64 @@ function warnOnce(message) {
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function allowsSyntheticDeviceState() {
+  return normalizeNonEmptyString(process.env.ANDRODEX_ALLOW_SYNTHETIC_DEVICE_STATE) === "1";
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    normalizeNonEmptyString(value)
+  );
+}
+
+function readBackupFileStateRecord() {
+  return readStateFileRecord(resolveBackupFile());
+}
+
+function readCanonicalFileStateRecord() {
+  return readStateFileRecord(resolveStoreFile());
+}
+
+function readStateFileRecord(storeFile) {
+  if (!fs.existsSync(storeFile)) {
+    return { state: null, error: null };
+  }
+
+  try {
+    return {
+      state: normalizeBridgeDeviceState(JSON.parse(fs.readFileSync(storeFile, "utf8"))),
+      error: null,
+    };
+  } catch (error) {
+    return { state: null, error };
+  }
+}
+
+function backupExistingCanonicalFile(storeFile, nextSerializedState) {
+  if (!fs.existsSync(storeFile)) {
+    return;
+  }
+
+  let currentSerializedState = "";
+  try {
+    currentSerializedState = fs.readFileSync(storeFile, "utf8");
+  } catch {
+    return;
+  }
+  if (!currentSerializedState || currentSerializedState === nextSerializedState) {
+    return;
+  }
+
+  const backupFile = resolveBackupFile();
+  fs.mkdirSync(path.dirname(backupFile), { recursive: true });
+  fs.writeFileSync(backupFile, currentSerializedState, { mode: 0o600 });
+  try {
+    fs.chmodSync(backupFile, 0o600);
+  } catch {
+    // Best-effort only on filesystems that support POSIX modes.
+  }
 }
 
 function base64UrlToBase64(value) {
