@@ -21,6 +21,8 @@ This folder contains the macOS host bridge runtime used by the `androdex` CLI.
   notification RPC handling, dedupe, service client, and completion tracking
 - [`rollout/`](/Users/robert/Documents/Projects/androdex/androdex-bridge/src/rollout):
   rollout watch and live-mirror helpers
+- [`runtime/`](/Users/robert/Documents/Projects/androdex/androdex-bridge/src/runtime):
+  runtime-target selection, adapter seams, and shared launch configuration
 - [`workspace/`](/Users/robert/Documents/Projects/androdex/androdex-bridge/src/workspace):
   workspace browsing, activation, and reverse-patch flows
 

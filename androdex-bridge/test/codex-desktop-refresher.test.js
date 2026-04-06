@@ -26,6 +26,8 @@ test("readBridgeConfig keeps the public relay default and disables refresh unles
   });
 
   assert.equal(defaultConfig.relayUrl, "wss://relay.androdex.xyz/relay");
+  assert.equal(defaultConfig.runtimeTarget, "codex-native");
+  assert.equal(defaultConfig.runtimeProvider, "codex");
   assert.equal(defaultConfig.refreshEnabled, false);
   assert.equal(defaultConfig.refreshEnabledExplicit, false);
   assert.equal(defaultConfig.routeThreadTargets, false);

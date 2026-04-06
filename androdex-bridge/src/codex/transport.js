@@ -6,22 +6,33 @@
 
 const { spawn } = require("child_process");
 const WebSocket = require("ws");
+const { createRuntimeLaunchPlan } = require("../runtime/target-config");
 
 function createCodexTransport({
   endpoint = "",
   env = process.env,
   cwd = "",
+  runtimeTarget = "codex-native",
+  runtimeProvider = "",
   WebSocketImpl = WebSocket,
 } = {}) {
   if (endpoint) {
     return createWebSocketTransport({ endpoint, WebSocketImpl });
   }
 
-  return createSpawnTransport({ env, cwd });
+  return createSpawnTransport({
+    env,
+    cwd,
+    runtimeTarget: normalizeNonEmptyString(runtimeTarget) || normalizeNonEmptyString(runtimeProvider) || "codex-native",
+  });
 }
 
-function createSpawnTransport({ env, cwd }) {
-  const launch = createCodexLaunchPlan({ env, cwd });
+function createSpawnTransport({ env, cwd, runtimeTarget }) {
+  const launch = createRuntimeLaunchPlan({
+    kind: runtimeTarget,
+    env,
+    cwd,
+  });
   const codex = spawn(launch.command, launch.args, launch.options);
 
   let stdoutBuffer = "";
@@ -113,16 +124,11 @@ function createSpawnTransport({ env, cwd }) {
 }
 
 function createCodexLaunchPlan({ env = process.env, cwd = "" }) {
-  return {
-    command: "codex",
-    args: ["app-server"],
-    options: {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...env },
-      cwd: cwd || process.cwd(),
-    },
-    description: "`codex app-server`",
-  };
+  return createRuntimeLaunchPlan({
+    kind: "codex-native",
+    env,
+    cwd,
+  });
 }
 
 function shutdownCodexProcess(codex) {
@@ -142,6 +148,10 @@ function createCodexCloseError({ code, signal, stderrBuffer, launchDescription }
 function appendOutputBuffer(buffer, chunk) {
   const next = `${buffer}${chunk}`;
   return next.slice(-4_096);
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function isIgnorableStdinShutdownError(error) {

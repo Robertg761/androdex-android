@@ -120,6 +120,7 @@ The bridge source is grouped by responsibility so changes are easier to place wi
 - `src/pairing/`: QR output, trusted-device persistence, and secure bridge transport
 - `src/notifications/`: push registration handling, dedupe, service client, and completion tracking
 - `src/rollout/`: rollout watching and live-mirror helpers
+- `src/runtime/`: runtime-provider selection and shared launch configuration
 - `src/workspace/`: workspace browsing, activation, and reverse-patch workflows
 - `src/`: top-level orchestration and shared helpers such as `bridge.js`, `git-handler.js`, `daemon-state.js`, and `macos-launch-agent.js`
 

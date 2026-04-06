@@ -7,9 +7,14 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const { createThreadRolloutActivityWatcher } = require("./rollout/watch");
+const {
+  readRuntimeTargetKind,
+  resolveRuntimeTargetConfig,
+} = require("./runtime/target-config");
+const DEFAULT_DESKTOP_RUNTIME_TARGET = resolveRuntimeTargetConfig({ kind: "codex-native" });
+const DEFAULT_BUNDLE_ID = DEFAULT_DESKTOP_RUNTIME_TARGET.defaultBundleId;
+const DEFAULT_APP_PATH = DEFAULT_DESKTOP_RUNTIME_TARGET.defaultAppPath;
 
-const DEFAULT_BUNDLE_ID = "com.openai.codex";
-const DEFAULT_APP_PATH = "/Applications/Codex.app";
 const PUBLIC_DEFAULT_RELAY_URL = "wss://relay.androdex.xyz/relay";
 const DEFAULT_DEBOUNCE_MS = 1200;
 const DEFAULT_FALLBACK_NEW_THREAD_MS = 2_000;
@@ -599,7 +604,9 @@ class CodexDesktopRefresher {
 }
 
 function readBridgeConfig({ env = process.env } = {}) {
-  const codexEndpoint = readFirstDefinedEnv(["ANDRODEX_CODEX_ENDPOINT"], "", env);
+  const runtimeTarget = readRuntimeTargetKind({ env });
+  const runtimeTargetConfig = resolveRuntimeTargetConfig({ kind: runtimeTarget });
+  const codexEndpoint = readFirstDefinedEnv(runtimeTargetConfig.endpointEnvVars, "", env);
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
   const routeThreadTargets = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ROUTE_TO_THREAD"], env);
@@ -629,9 +636,15 @@ function readBridgeConfig({ env = process.env } = {}) {
       DEFAULT_DEBOUNCE_MS
     ),
     codexEndpoint,
+    runtimeTarget,
+    runtimeProvider: runtimeTargetConfig.legacyProviderKind,
     refreshCommand,
-    codexBundleId: readFirstDefinedEnv(["ANDRODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
-    codexAppPath: DEFAULT_APP_PATH,
+    codexBundleId: readFirstDefinedEnv(
+      runtimeTargetConfig.desktopBundleIdEnvVars,
+      runtimeTargetConfig.defaultBundleId,
+      env
+    ),
+    codexAppPath: runtimeTargetConfig.defaultAppPath,
     routeThreadTargets: routeThreadTargets == null ? DEFAULT_ROUTE_THREAD_TARGETS : routeThreadTargets,
   };
 }

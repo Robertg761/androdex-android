@@ -159,13 +159,13 @@ function startBridge({
     : null;
   const codexRpcClient = createCodexRpcClient({
     sendToCodex(message) {
-      workspaceRuntime.sendToCodex(message);
+      workspaceRuntime.sendToRuntime(message);
     },
     requestIdPrefix: `androdex-bridge-${sessionId}`,
   });
   const codexInitializeRpcClient = createCodexRpcClient({
     sendToCodex(message) {
-      workspaceRuntime.sendToCodex(message);
+      workspaceRuntime.sendToRuntime(message);
     },
     requestTimeoutMs: CODEX_INITIALIZE_REQUEST_TIMEOUT_MS,
     requestIdPrefix: `androdex-bridge-init-${sessionId}`,
@@ -206,7 +206,7 @@ function startBridge({
       if (config.codexEndpoint) {
         console.error(`[androdex] Failed to connect to Codex endpoint: ${config.codexEndpoint}`);
       } else {
-        console.error("[androdex] Failed to start `codex app-server` for the active workspace.");
+        console.error("[androdex] Failed to start the active host runtime for the selected workspace.");
       }
       console.error(error.message);
       publishBridgeStatus({
@@ -510,7 +510,7 @@ function startBridge({
       return;
     }
     try {
-      const didSend = workspaceRuntime.sendToCodex(normalizedMessage);
+      const didSend = workspaceRuntime.sendToRuntime(normalizedMessage);
       if (didSend === false) {
         const detail = "The host runtime transport is restarting. Retry the request once the session recovers.";
         console.warn(`[androdex] failed to forward request to Codex: ${detail}`);
@@ -595,7 +595,7 @@ function startBridge({
     const queuedMessages = pendingColdStartMessages;
     pendingColdStartMessages = [];
     for (const queuedMessage of queuedMessages) {
-      workspaceRuntime.sendToCodex(queuedMessage);
+      workspaceRuntime.sendToRuntime(queuedMessage);
     }
   }
 
@@ -1074,7 +1074,7 @@ function startBridge({
           const queuedRequests = [...pendingBridgeRecoveryRequestsById.values()];
           pendingBridgeRecoveryRequestsById.clear();
           for (const request of queuedRequests) {
-            workspaceRuntime.sendToCodex(request.rawMessage);
+            workspaceRuntime.sendToRuntime(request.rawMessage);
           }
       }).catch((error) => {
           const detail = normalizeNonEmptyString(error?.message)

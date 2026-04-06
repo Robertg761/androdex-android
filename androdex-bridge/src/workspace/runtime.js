@@ -1,12 +1,12 @@
 // FILE: workspace/runtime.js
-// Purpose: Owns workspace selection, persisted workspace state, and local Codex transport lifecycle.
+// Purpose: Owns workspace selection, persisted workspace state, and active host-runtime lifecycle.
 // Layer: CLI helper
 // Exports: createWorkspaceRuntime
-// Depends on: fs, path, ../codex/transport, ../daemon-state
+// Depends on: fs, path, ../runtime/adapter, ../daemon-state
 
 const fs = require("fs");
 const path = require("path");
-const { createCodexTransport } = require("../codex/transport");
+const { createRuntimeAdapter } = require("../runtime/adapter");
 const { readDaemonConfig, writeDaemonConfig } = require("../daemon-state");
 
 const MAX_RECENT_WORKSPACES = 25;
@@ -19,7 +19,7 @@ function createWorkspaceRuntime({
   onTransportError = null,
   onTransportMessage = null,
 } = {}) {
-  let codex = null;
+  let activeRuntime = null;
   let currentCwd = normalizeWorkspacePath(config?.activeCwd || "");
   let recentWorkspaces = normalizeRecentWorkspaces(config?.recentWorkspaces);
   let activationQueue = Promise.resolve();
@@ -28,10 +28,12 @@ function createWorkspaceRuntime({
   return {
     activateWorkspace,
     getCurrentCwd,
+    getRuntimeTarget,
     getStatus,
     getWorkspaceState,
     hasActiveWorkspace,
     restoreActiveWorkspace,
+    sendToRuntime,
     sendToCodex,
     shutdown,
   };
@@ -41,13 +43,18 @@ function createWorkspaceRuntime({
   }
 
   function hasActiveWorkspace() {
-    return Boolean(codex);
+    return Boolean(activeRuntime);
+  }
+
+  function getRuntimeTarget() {
+    return resolveConfiguredRuntimeTarget();
   }
 
   function getStatus() {
     return {
       currentCwd: currentCwd || null,
-      workspaceActive: Boolean(codex),
+      runtimeTarget: resolveConfiguredRuntimeTarget(),
+      workspaceActive: Boolean(activeRuntime),
     };
   }
 
@@ -58,12 +65,16 @@ function createWorkspaceRuntime({
     };
   }
 
-  function sendToCodex(message) {
-    if (!codex) {
-      throw new Error("No active Codex workspace on the host.");
+  function sendToRuntime(message) {
+    if (!activeRuntime) {
+      throw new Error("No active host runtime for the selected workspace.");
     }
 
-    return codex.send(message);
+    return activeRuntime.send(message);
+  }
+
+  function sendToCodex(message) {
+    return sendToRuntime(message);
   }
 
   async function restoreActiveWorkspace() {
@@ -98,43 +109,54 @@ function createWorkspaceRuntime({
       return getStatus();
     }
 
-    if (currentCwd === cwd && codex) {
+    if (currentCwd === cwd && activeRuntime) {
       return getStatus();
     }
 
     await shutdownTransport();
     currentCwd = cwd;
     rememberRecentWorkspace(cwd);
-    onBeforeTransportStart?.({ cwd });
+    onBeforeTransportStart?.({
+      cwd,
+      runtimeTarget: resolveConfiguredRuntimeTarget(),
+    });
 
-    const nextCodex = createCodexTransport({
+    const nextRuntime = createRuntimeAdapter({
       endpoint: config?.codexEndpoint,
       env: process.env,
       cwd,
+      targetKind: resolveConfiguredRuntimeTarget(),
     });
-    codex = nextCodex;
+    activeRuntime = nextRuntime;
 
-    nextCodex.onError((error) => {
-      if (codex !== nextCodex) {
+    nextRuntime.onError((error) => {
+      if (activeRuntime !== nextRuntime) {
         return;
       }
-      codex = null;
-      onTransportError?.({ error, currentCwd });
+      activeRuntime = null;
+      onTransportError?.({
+        error,
+        currentCwd,
+        runtimeTarget: resolveConfiguredRuntimeTarget(),
+      });
     });
 
-    nextCodex.onMessage((message) => {
-      if (codex !== nextCodex) {
+    nextRuntime.onMessage((message) => {
+      if (activeRuntime !== nextRuntime) {
         return;
       }
       onTransportMessage?.(message);
     });
 
-    nextCodex.onClose(() => {
-      if (codex !== nextCodex) {
+    nextRuntime.onClose(() => {
+      if (activeRuntime !== nextRuntime) {
         return;
       }
-      codex = null;
-      onTransportClose?.({ currentCwd });
+      activeRuntime = null;
+      onTransportClose?.({
+        currentCwd,
+        runtimeTarget: resolveConfiguredRuntimeTarget(),
+      });
     });
 
     return getStatus();
@@ -146,15 +168,18 @@ function createWorkspaceRuntime({
   }
 
   async function shutdownTransport() {
-    const activeCodex = codex;
-    codex = null;
-    await onBeforeTransportShutdown?.({ currentCwd });
-    if (!activeCodex) {
+    const runtime = activeRuntime;
+    activeRuntime = null;
+    await onBeforeTransportShutdown?.({
+      currentCwd,
+      runtimeTarget: resolveConfiguredRuntimeTarget(),
+    });
+    if (!runtime) {
       return;
     }
 
     try {
-      activeCodex.shutdown();
+      runtime.shutdown();
     } catch {
       // Ignore shutdown failures for stale transports.
     }
@@ -175,6 +200,12 @@ function createWorkspaceRuntime({
       activeCwd: normalized,
       recentWorkspaces: [...recentWorkspaces],
     });
+  }
+
+  function resolveConfiguredRuntimeTarget() {
+    return normalizeNonEmptyString(config?.runtimeTarget)
+      || normalizeNonEmptyString(config?.runtimeProvider)
+      || "codex-native";
   }
 }
 
