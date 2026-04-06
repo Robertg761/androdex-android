@@ -26,6 +26,7 @@ import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.HostRateLimitBucket
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
@@ -463,6 +464,32 @@ fun decodeHostAccountSnapshot(resultObject: JSONObject): HostAccountSnapshot? {
             "bridge_published_version",
         ),
         rateLimits = decodeHostRateLimitBuckets(resultObject),
+    )
+}
+
+fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
+    val runtimeTarget = resultObject.stringOrNull("runtimeTarget", "runtime_target")
+    val runtimeTargetDisplayName = resultObject.stringOrNull(
+        "runtimeTargetDisplayName",
+        "runtime_target_display_name",
+    )
+    val backendProvider = resultObject.stringOrNull("backendProvider", "backend_provider")
+    val backendProviderDisplayName = resultObject.stringOrNull(
+        "backendProviderDisplayName",
+        "backend_provider_display_name",
+    )
+    if (runtimeTarget == null
+        && runtimeTargetDisplayName == null
+        && backendProvider == null
+        && backendProviderDisplayName == null
+    ) {
+        return null
+    }
+    return HostRuntimeMetadata(
+        runtimeTarget = runtimeTarget,
+        runtimeTargetDisplayName = runtimeTargetDisplayName,
+        backendProvider = backendProvider,
+        backendProviderDisplayName = backendProviderDisplayName,
     )
 }
 

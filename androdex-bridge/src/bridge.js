@@ -20,6 +20,7 @@ const { composeSanitizedAuthStatusFromSettledResults } = require("./account-stat
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest } = require("./workspace/handler");
 const { createNotificationsHandler } = require("./notifications/handler");
+const { resolveRuntimeTargetConfig } = require("./runtime/target-config");
 const {
   getTrustedPhoneRecoveryIdentities,
   loadOrCreateBridgeDeviceState,
@@ -56,6 +57,9 @@ function startBridge({
   const config = {
     ...(explicitConfig || readBridgeConfig()),
   };
+  const configuredRuntimeTarget = resolveRuntimeTargetConfig({
+    kind: config.runtimeTarget || config.runtimeProvider || "codex-native",
+  });
   const relayBaseUrl = normalizeNonEmptyString(config.relayUrl).replace(/\/+$/, "");
   if (!relayBaseUrl) {
     console.error("[androdex] No relay URL configured.");
@@ -233,6 +237,10 @@ function startBridge({
       const forwardedInitializeResponse = resolveForwardedInitializeResponse(
         message,
         forwardedInitializeRequestIds,
+        buildBridgeRuntimeMetadata({
+          runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+          fallbackTargetConfig: configuredRuntimeTarget,
+        }),
       );
       if (forwardedInitializeResponse) {
         if (forwardedInitializeResponse.handshakeWarm) {
@@ -315,6 +323,10 @@ function startBridge({
   };
 
   function getStatus() {
+    const runtimeMetadata = buildBridgeRuntimeMetadata({
+      runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+      fallbackTargetConfig: configuredRuntimeTarget,
+    });
     return {
       sessionId,
       hostId: stableHostId,
@@ -324,6 +336,7 @@ function startBridge({
       currentCwd: workspaceRuntime.getCurrentCwd() || null,
       workspaceActive: workspaceRuntime.hasActiveWorkspace(),
       hasTrustedPhone: Object.keys(deviceState.trustedPhones || {}).length > 0,
+      ...runtimeMetadata,
     };
   }
 
@@ -873,7 +886,13 @@ function startBridge({
 
       maybeWarmCodexAfterBridgeInitialize();
       sendApplicationResponse(
-        createBridgeManagedInitializeSuccessResponse(parsed.id),
+        createBridgeManagedInitializeSuccessResponse(
+          parsed.id,
+          buildBridgeRuntimeMetadata({
+            runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+            fallbackTargetConfig: configuredRuntimeTarget,
+          }),
+        ),
         { allowPreResume: true },
       );
       return true;
@@ -998,10 +1017,16 @@ function startBridge({
   }
 
   function publishBridgeStatus(status) {
+    const runtimeMetadata = buildBridgeRuntimeMetadata({
+      runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+      fallbackTargetConfig: configuredRuntimeTarget,
+    });
     lastPublishedBridgeStatus = {
+      ...runtimeMetadata,
       ...status,
     };
     onBridgeStatus?.({
+      ...runtimeMetadata,
       ...status,
     });
   }
@@ -1306,7 +1331,7 @@ function logForwardedRequestToCodex(rawMessage, debugMethods) {
   );
 }
 
-function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeRequestIds) {
+function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeRequestIds, runtimeMetadata = null) {
   if (!forwardedInitializeRequestIds || typeof forwardedInitializeRequestIds.has !== "function") {
     return null;
   }
@@ -1326,7 +1351,7 @@ function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeReque
   if (parsed?.result != null || isAlreadyInitializedError(parsed?.error?.message)) {
     return {
       handshakeWarm: true,
-      message: createBridgeManagedInitializeSuccessResponse(responseId),
+      message: createBridgeManagedInitializeSuccessResponse(responseId, runtimeMetadata),
     };
   }
 
@@ -1336,14 +1361,30 @@ function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeReque
   };
 }
 
-function createBridgeManagedInitializeSuccessResponse(requestId) {
+function createBridgeManagedInitializeSuccessResponse(requestId, runtimeMetadata = null) {
   return JSON.stringify({
     id: requestId,
     result: {
       bridgeManaged: true,
       workspaceActive: true,
+      ...(runtimeMetadata || {}),
     },
   });
+}
+
+function buildBridgeRuntimeMetadata({
+  runtimeTarget = "",
+  fallbackTargetConfig = null,
+} = {}) {
+  const resolvedTargetConfig = runCatchingResolveRuntimeTargetConfig(runtimeTarget) || fallbackTargetConfig;
+  return {
+    runtimeTarget: resolvedTargetConfig?.kind || normalizeNonEmptyString(runtimeTarget) || null,
+    runtimeTargetDisplayName: resolvedTargetConfig?.displayName || null,
+    backendProvider: resolvedTargetConfig?.backendProviderKind || null,
+    backendProviderDisplayName: resolvedTargetConfig?.backendProviderKind
+      ? titleCaseProviderName(resolvedTargetConfig.backendProviderKind)
+      : null,
+  };
 }
 
 function shouldAllowPreResumeRelayResponse(rawMessage) {
@@ -1357,6 +1398,23 @@ function shouldAllowPreResumeRelayResponse(rawMessage) {
 
 function isAlreadyInitializedError(message) {
   return normalizeNonEmptyString(message).toLowerCase().includes("already initialized");
+}
+
+function runCatchingResolveRuntimeTargetConfig(kind) {
+  try {
+    return resolveRuntimeTargetConfig({ kind });
+  } catch {
+    return null;
+  }
+}
+
+function titleCaseProviderName(value) {
+  const normalized = normalizeNonEmptyString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
 }
 
 function isCodexInitializeRetryableError(error) {
@@ -1445,6 +1503,7 @@ function buildMacRegistration(deviceState) {
 }
 
 module.exports = {
+  createBridgeManagedInitializeSuccessResponse,
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
   logForwardedRequestToCodex,

@@ -16,6 +16,7 @@ import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.ModelOption
@@ -204,6 +205,12 @@ class AndrodexFeatureStateTest {
                 planType = "pro",
                 bridgeVersion = "1.1.3",
             ),
+            hostRuntimeMetadata = HostRuntimeMetadata(
+                runtimeTarget = "codex-native",
+                runtimeTargetDisplayName = "Codex Native",
+                backendProvider = "codex-native",
+                backendProviderDisplayName = "Codex Native",
+            ),
             activeWorkspacePath = "C:\\Projects\\Androdex",
             runningThreadIds = setOf("thread-1"),
             threads = listOf(
@@ -251,6 +258,8 @@ class AndrodexFeatureStateTest {
         assertEquals("Bridge Ready", route.state.bridgeStatus.title)
         assertEquals("Connected", route.state.bridgeStatus.statusLabel)
         assertEquals(SharedStatusTone.Success, route.state.bridgeStatus.tone)
+        assertEquals("Codex Native", route.state.bridgeStatus.runtimeTargetLabel)
+        assertEquals("Codex Native", route.state.bridgeStatus.backendProviderLabel)
         assertNotNull(route.state.trustedPair)
         assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
         assertEquals(SharedStatusTone.Success, route.state.hostAccount?.tone)

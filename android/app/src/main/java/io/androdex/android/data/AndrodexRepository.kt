@@ -159,8 +159,7 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override fun currentTrustedPairSnapshot(): TrustedPairSnapshot? = client.currentTrustedPairSnapshot()
 
-    override fun currentThreadTimelineScopeKey(): String? = client.currentTrustedPairSnapshot()?.deviceId
-        ?: client.currentFingerprint()
+    override fun currentThreadTimelineScopeKey(): String? = client.currentThreadTimelineScopeKey()
 
     override fun startupNotice(): String? = persistence.takeStartupNotice()
 
@@ -169,7 +168,17 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
     override fun startupConnectionDetail(): String? = client.startupConnectionDetail()
 
     override fun loadPersistedThreadTimelines(scopeKey: String?): Map<String, List<ConversationMessage>> {
-        return persistence.loadPersistedThreadTimelines(scopeKey)
+        val persisted = persistence.loadPersistedThreadTimelines(scopeKey)
+        if (persisted.isNotEmpty() || scopeKey == null) {
+            return persisted
+        }
+
+        val legacyScopeKey = client.currentLegacyThreadTimelineScopeKey()
+        if (legacyScopeKey.isNullOrEmpty() || legacyScopeKey == scopeKey) {
+            return persisted
+        }
+
+        return persistence.loadPersistedThreadTimelines(legacyScopeKey)
     }
 
     override fun savePersistedThreadTimeline(

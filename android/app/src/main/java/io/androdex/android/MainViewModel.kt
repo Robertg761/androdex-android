@@ -21,6 +21,7 @@ import io.androdex.android.model.GitOperationException
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.MAX_COMPOSER_IMAGE_ATTACHMENTS
 import io.androdex.android.model.ModelOption
@@ -71,6 +72,7 @@ data class AndrodexUiState(
     val hasSeenFirstPairingOnboarding: Boolean = false,
     val isFirstPairingOnboardingActive: Boolean = false,
     val hostAccountSnapshot: HostAccountSnapshot? = null,
+    val hostRuntimeMetadata: HostRuntimeMetadata? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -3090,6 +3092,7 @@ private fun applyServiceStateSnapshot(
         hasSeenFirstPairingOnboarding = current.hasSeenFirstPairingOnboarding || hasPairingIdentity,
         isFirstPairingOnboardingActive = current.isFirstPairingOnboardingActive && !hasPairingIdentity,
         hostAccountSnapshot = serviceState.hostAccountSnapshot,
+        hostRuntimeMetadata = serviceState.hostRuntimeMetadata,
         defaultRelayUrl = serviceState.defaultRelayUrl,
         connectionStatus = serviceState.connectionStatus,
         connectionDetail = serviceState.connectionDetail,

@@ -295,6 +295,13 @@ data class HostAccountSnapshot(
     val origin: HostAccountSnapshotOrigin = HostAccountSnapshotOrigin.BRIDGE_FALLBACK,
 )
 
+data class HostRuntimeMetadata(
+    val runtimeTarget: String? = null,
+    val runtimeTargetDisplayName: String? = null,
+    val backendProvider: String? = null,
+    val backendProviderDisplayName: String? = null,
+)
+
 data class HostRateLimitBucket(
     val name: String,
     val remaining: Int? = null,
@@ -855,6 +862,7 @@ sealed interface ClientUpdate {
         val status: ConnectionStatus,
         val detail: String? = null,
         val fingerprint: String? = null,
+        val runtimeMetadata: HostRuntimeMetadata? = null,
     ) : ClientUpdate
 
     data class PairingAvailability(
@@ -882,6 +890,7 @@ sealed interface ClientUpdate {
         val supportsThreadFork: Boolean,
         val collaborationModes: Set<CollaborationModeKind>,
         val threadRuntimeOverridesByThread: Map<String, ThreadRuntimeOverride>,
+        val runtimeMetadata: HostRuntimeMetadata? = null,
     ) : ClientUpdate
 
     data class AccountStatusLoaded(

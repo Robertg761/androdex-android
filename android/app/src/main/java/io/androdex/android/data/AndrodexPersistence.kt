@@ -239,11 +239,40 @@ open class AndrodexPersistence internal constructor(
     }
 
     fun loadThreadRuntimeOverrides(): Map<String, ThreadRuntimeOverride> {
-        return decodeThreadRuntimeOverridesSpec(secureStore.readString(KEY_THREAD_RUNTIME_OVERRIDES))
+        return loadThreadRuntimeOverrides(scopeKey = null)
     }
 
     fun saveThreadRuntimeOverrides(value: Map<String, ThreadRuntimeOverride>) {
-        val encoded = encodeThreadRuntimeOverridesSpec(value)
+        saveThreadRuntimeOverrides(scopeKey = null, value = value)
+    }
+
+    fun loadThreadRuntimeOverrides(scopeKey: String?): Map<String, ThreadRuntimeOverride> {
+        val bundle = decodeThreadRuntimeOverrideBundleSpec(secureStore.readString(KEY_THREAD_RUNTIME_OVERRIDES))
+        val normalizedScopeKey = normalizeThreadRuntimeOverrideScopeKey(scopeKey) ?: return bundle.legacyOverrides
+        return bundle.scopedOverridesByScopeKey[normalizedScopeKey].orEmpty()
+    }
+
+    fun saveThreadRuntimeOverrides(
+        scopeKey: String?,
+        value: Map<String, ThreadRuntimeOverride>,
+    ) {
+        val existingBundle = decodeThreadRuntimeOverrideBundleSpec(secureStore.readString(KEY_THREAD_RUNTIME_OVERRIDES))
+        val normalizedScopeKey = normalizeThreadRuntimeOverrideScopeKey(scopeKey)
+        val normalizedOverrides = normalizeThreadRuntimeOverrides(value)
+        val nextBundle = if (normalizedScopeKey == null) {
+            existingBundle.copy(legacyOverrides = normalizedOverrides)
+        } else {
+            existingBundle.copy(
+                scopedOverridesByScopeKey = existingBundle.scopedOverridesByScopeKey.toMutableMap().apply {
+                    if (normalizedOverrides.isEmpty()) {
+                        remove(normalizedScopeKey)
+                    } else {
+                        put(normalizedScopeKey, normalizedOverrides)
+                    }
+                }
+            )
+        }
+        val encoded = encodeThreadRuntimeOverrideBundleSpec(nextBundle)
         if (encoded == null) {
             secureStore.remove(KEY_THREAD_RUNTIME_OVERRIDES)
         } else {
@@ -572,21 +601,110 @@ internal fun decodeThreadRuntimeOverridesSpec(rawValue: String?): Map<String, Th
 }
 
 internal fun encodeThreadRuntimeOverridesSpec(value: Map<String, ThreadRuntimeOverride>): String? {
-    if (value.isEmpty()) {
+    val normalizedValue = normalizeThreadRuntimeOverrides(value)
+    if (normalizedValue.isEmpty()) {
         return null
     }
 
     val payload = JSONObject()
+    normalizedValue.forEach { (threadId, runtimeOverride) ->
+        payload.put(threadId, encodeThreadRuntimeOverrideSpec(runtimeOverride))
+    }
+
+    return payload.takeIf { it.length() > 0 }?.toString()
+}
+
+internal data class ThreadRuntimeOverrideBundleSpec(
+    val legacyOverrides: Map<String, ThreadRuntimeOverride> = emptyMap(),
+    val scopedOverridesByScopeKey: Map<String, Map<String, ThreadRuntimeOverride>> = emptyMap(),
+)
+
+internal fun decodeThreadRuntimeOverrideBundleSpec(rawValue: String?): ThreadRuntimeOverrideBundleSpec {
+    val normalizedRawValue = rawValue?.trim()?.takeIf { it.isNotEmpty() }
+        ?: return ThreadRuntimeOverrideBundleSpec()
+    val payload = runCatching { JSONObject(normalizedRawValue) }.getOrNull()
+        ?: return ThreadRuntimeOverrideBundleSpec()
+    val hasScopedPayload = payload.has("scopes") || payload.has("legacy") || payload.optInt("v", 0) >= 2
+    if (!hasScopedPayload) {
+        return ThreadRuntimeOverrideBundleSpec(
+            legacyOverrides = decodeThreadRuntimeOverridesSpec(normalizedRawValue),
+        )
+    }
+
+    val legacyOverrides = payload.optJSONObject("legacy")
+        ?.toString()
+        ?.let(::decodeThreadRuntimeOverridesSpec)
+        .orEmpty()
+    val scopedOverridesByScopeKey = linkedMapOf<String, Map<String, ThreadRuntimeOverride>>()
+    val scopesPayload = payload.optJSONObject("scopes") ?: JSONObject()
+    val scopeKeys = scopesPayload.keys()
+    while (scopeKeys.hasNext()) {
+        val scopeKey = normalizeThreadRuntimeOverrideScopeKey(scopeKeys.next()) ?: continue
+        val overrides = scopesPayload.optJSONObject(scopeKey)
+            ?.toString()
+            ?.let(::decodeThreadRuntimeOverridesSpec)
+            .orEmpty()
+        if (overrides.isNotEmpty()) {
+            scopedOverridesByScopeKey[scopeKey] = overrides
+        }
+    }
+    return ThreadRuntimeOverrideBundleSpec(
+        legacyOverrides = legacyOverrides,
+        scopedOverridesByScopeKey = scopedOverridesByScopeKey,
+    )
+}
+
+internal fun encodeThreadRuntimeOverrideBundleSpec(value: ThreadRuntimeOverrideBundleSpec): String? {
+    val normalizedLegacyOverrides = normalizeThreadRuntimeOverrides(value.legacyOverrides)
+    val normalizedScopedOverrides = value.scopedOverridesByScopeKey.mapNotNull { (scopeKey, overrides) ->
+        val normalizedScopeKey = normalizeThreadRuntimeOverrideScopeKey(scopeKey) ?: return@mapNotNull null
+        val normalizedOverrides = normalizeThreadRuntimeOverrides(overrides)
+        if (normalizedOverrides.isEmpty()) {
+            null
+        } else {
+            normalizedScopeKey to normalizedOverrides
+        }
+    }.toMap(linkedMapOf())
+
+    if (normalizedScopedOverrides.isEmpty()) {
+        return encodeThreadRuntimeOverridesSpec(normalizedLegacyOverrides)
+    }
+
+    val payload = JSONObject()
+        .put("v", 2)
+        .put("legacy", encodeThreadRuntimeOverridesPayload(normalizedLegacyOverrides))
+        .put("scopes", JSONObject().apply {
+            normalizedScopedOverrides.forEach { (scopeKey, overrides) ->
+                put(scopeKey, encodeThreadRuntimeOverridesPayload(overrides))
+            }
+        })
+
+    return payload.toString()
+}
+
+private fun normalizeThreadRuntimeOverrides(value: Map<String, ThreadRuntimeOverride>): Map<String, ThreadRuntimeOverride> {
+    if (value.isEmpty()) {
+        return emptyMap()
+    }
+
+    val normalized = linkedMapOf<String, ThreadRuntimeOverride>()
     value.forEach { (threadId, runtimeOverride) ->
         val normalizedThreadId = threadId.trim()
         val normalizedOverride = runtimeOverride.normalized()
         if (normalizedThreadId.isEmpty() || normalizedOverride == null) {
             return@forEach
         }
-        payload.put(normalizedThreadId, encodeThreadRuntimeOverrideSpec(normalizedOverride))
+        normalized[normalizedThreadId] = normalizedOverride
     }
+    return normalized
+}
 
-    return payload.takeIf { it.length() > 0 }?.toString()
+private fun encodeThreadRuntimeOverridesPayload(value: Map<String, ThreadRuntimeOverride>): JSONObject {
+    return JSONObject().apply {
+        value.forEach { (threadId, runtimeOverride) ->
+            put(threadId, encodeThreadRuntimeOverrideSpec(runtimeOverride))
+        }
+    }
 }
 
 private fun encodeThreadRuntimeOverrideSpec(value: ThreadRuntimeOverride): JSONObject {
@@ -661,6 +779,10 @@ internal fun encodePersistedStringListSpec(values: List<String>): String? {
 }
 
 private fun normalizeThreadTimelineScopeKey(value: String?): String? {
+    return value?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+private fun normalizeThreadRuntimeOverrideScopeKey(value: String?): String? {
     return value?.trim()?.takeIf { it.isNotEmpty() }
 }
 

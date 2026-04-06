@@ -255,6 +255,12 @@ internal fun BridgeStatusCard(
         },
     ) {
         SharedStatusBodyText(state.summary)
+        state.runtimeTargetLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Runtime", value = it)
+        }
+        state.backendProviderLabel?.takeIf { it.isNotBlank() }?.let {
+            SharedMetadataRow(label = "Backend", value = it)
+        }
         SharedMetadataRow(label = "Speed tiers", value = state.serviceTierMessage)
         SharedMetadataRow(label = "Thread forks", value = state.threadForkMessage)
         SharedMonospaceBlock(

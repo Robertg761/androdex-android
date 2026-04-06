@@ -8,6 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const WebSocket = require("ws");
 const {
+  createBridgeManagedInitializeSuccessResponse,
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
   logForwardedRequestToCodex,
@@ -20,6 +21,30 @@ const {
   shouldAllowPreResumeRelayResponse,
   shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
+
+test("createBridgeManagedInitializeSuccessResponse can include runtime-target metadata", () => {
+  assert.deepEqual(
+    JSON.parse(
+      createBridgeManagedInitializeSuccessResponse("req-init", {
+        runtimeTarget: "codex-native",
+        runtimeTargetDisplayName: "Codex Native",
+        backendProvider: "codex",
+        backendProviderDisplayName: "Codex",
+      })
+    ),
+    {
+      id: "req-init",
+      result: {
+        bridgeManaged: true,
+        workspaceActive: true,
+        runtimeTarget: "codex-native",
+        runtimeTargetDisplayName: "Codex Native",
+        backendProvider: "codex",
+        backendProviderDisplayName: "Codex",
+      },
+    }
+  );
+});
 
 test("sanitizeThreadHistoryImagesForRelay replaces inline history images with lightweight references", () => {
   const rawMessage = JSON.stringify({

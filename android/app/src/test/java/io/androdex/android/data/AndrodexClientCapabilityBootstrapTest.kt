@@ -24,6 +24,7 @@ class AndrodexClientCapabilityBootstrapTest {
                     data = null,
                 )
             }
+            JSONObject()
         }
 
         assertEquals(2, payloads.size)
@@ -57,6 +58,27 @@ class AndrodexClientCapabilityBootstrapTest {
         val decoded = decodeCollaborationModes(result)
 
         assertEquals(setOf(CollaborationModeKind.PLAN), decoded)
+    }
+
+    @Test
+    fun decodeHostRuntimeMetadata_readsBridgeManagedRuntimeIdentity() {
+        val result = JSONObject(
+            """
+            {
+              "runtimeTarget": "codex-native",
+              "runtimeTargetDisplayName": "Codex Native",
+              "backendProvider": "codex",
+              "backendProviderDisplayName": "Codex"
+            }
+            """.trimIndent()
+        )
+
+        val decoded = decodeHostRuntimeMetadata(result)
+
+        assertEquals("codex-native", decoded?.runtimeTarget)
+        assertEquals("Codex Native", decoded?.runtimeTargetDisplayName)
+        assertEquals("codex", decoded?.backendProvider)
+        assertEquals("Codex", decoded?.backendProviderDisplayName)
     }
 
     @Test

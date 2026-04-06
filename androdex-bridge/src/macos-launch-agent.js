@@ -196,6 +196,8 @@ function printMacOSBridgeServiceStatus(options = {}) {
   const status = getMacOSBridgeServiceStatus(options);
   const bridgeState = status.bridgeStatus?.state || "unknown";
   const connectionStatus = status.bridgeStatus?.connectionStatus || "unknown";
+  const runtimeTarget = status.bridgeStatus?.runtimeTarget || "unknown";
+  const backendProvider = status.bridgeStatus?.backendProvider || "unknown";
   const pairingCreatedAt = status.pairingSession?.createdAt || "none";
   console.log(`[androdex] Service label: ${status.label}`);
   console.log(`[androdex] Installed: ${status.installed ? "yes" : "no"}`);
@@ -203,6 +205,8 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[androdex] PID: ${status.launchdPid || status.bridgeStatus?.pid || "unknown"}`);
   console.log(`[androdex] Bridge state: ${bridgeState}`);
   console.log(`[androdex] Connection: ${connectionStatus}`);
+  console.log(`[androdex] Runtime target: ${runtimeTarget}`);
+  console.log(`[androdex] Backend provider: ${backendProvider}`);
   console.log(`[androdex] Trusted phone: ${status.hasTrustedPhone ? "yes" : "no"}`);
   console.log(`[androdex] Desktop refresh: ${status.refreshEnabled ? "enabled" : "disabled"}`);
   console.log(`[androdex] Pairing payload: ${pairingCreatedAt} (${status.pairingFreshness})`);

@@ -145,6 +145,8 @@ internal data class BridgeStatusUiState(
     val statusLabel: String,
     val tone: SharedStatusTone = SharedStatusTone.Neutral,
     val summary: String,
+    val runtimeTargetLabel: String? = null,
+    val backendProviderLabel: String? = null,
     val serviceTierMessage: String,
     val threadForkMessage: String,
     val updateCommand: String,
@@ -1165,6 +1167,16 @@ private fun FreshPairingAttemptState.toDetailMessage(): String {
 }
 
 private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
+    val runtimeTargetLabel = hostRuntimeMetadata?.runtimeTargetDisplayName
+        ?.takeIf { it.isNotBlank() }
+        ?: hostRuntimeMetadata?.runtimeTarget
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    val backendProviderLabel = hostRuntimeMetadata?.backendProviderDisplayName
+        ?.takeIf { it.isNotBlank() }
+        ?: hostRuntimeMetadata?.backendProvider
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     val title = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Bridge Ready"
         ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Connecting To Host"
@@ -1192,7 +1204,7 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         }
     }
     val summary = when (connectionStatus) {
-        ConnectionStatus.CONNECTED -> "Codex stays on the host machine. Android is acting as the paired remote control for threads, projects, approvals, and runtime changes."
+        ConnectionStatus.CONNECTED -> "The active runtime stays on the host machine. Android acts as the paired remote control for threads, projects, approvals, and runtime changes."
         ConnectionStatus.RETRYING_SAVED_PAIRING -> "Saved pairing is still present. Automatic reconnect stays available while the host or relay comes back."
         ConnectionStatus.TRUST_BLOCKED -> "The host may still be trusted, but this Android device cannot read its local trusted identity. Repair with a fresh QR code or forget the trusted host on this phone."
         ConnectionStatus.RECONNECT_REQUIRED -> "The trusted host record is still present, but this phone identity needs repair before secure reconnect can resume."
@@ -1200,15 +1212,17 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ConnectionStatus.DISCONNECTED -> if (trustedPairSnapshot != null && !trustedPairSnapshot.hasSavedRelaySession) {
             "The trusted host is still remembered. Resolve a fresh live relay session and reconnect without rescanning unless trust actually changed."
         } else {
-            "Pair this phone with a host bridge, then manage local Codex workspaces and runs from Android."
+            "Pair this phone with a host bridge, then manage host-local workspaces and runs from Android."
         }
-        else -> "Pair this phone with a host bridge, then manage local Codex workspaces and runs from Android."
+        else -> "Pair this phone with a host bridge, then manage host-local workspaces and runs from Android."
     }
     return BridgeStatusUiState(
         title = title,
         statusLabel = statusLabel,
         tone = connectionStatus.toSharedStatusTone(),
         summary = summary,
+        runtimeTargetLabel = runtimeTargetLabel,
+        backendProviderLabel = backendProviderLabel,
         serviceTierMessage = if (supportsServiceTier) {
             "Runtime speed tiers are available from Android."
         } else {

@@ -57,4 +57,57 @@ class AndrodexPersistenceRuntimeOverrideTest {
 
         assertTrue(decoded.isEmpty())
     }
+
+    @Test
+    fun encodeDecodeThreadRuntimeOverrideBundle_roundTripsScopedBuckets() {
+        val encoded = encodeThreadRuntimeOverrideBundleSpec(
+            ThreadRuntimeOverrideBundleSpec(
+                legacyOverrides = mapOf(
+                    "thread-legacy" to ThreadRuntimeOverride(
+                        reasoningEffort = "medium",
+                        serviceTierRawValue = null,
+                        overridesReasoning = true,
+                        overridesServiceTier = false,
+                    )
+                ),
+                scopedOverridesByScopeKey = mapOf(
+                    "host-1::codex-native" to mapOf(
+                        "thread-scoped" to ThreadRuntimeOverride(
+                            reasoningEffort = "high",
+                            serviceTierRawValue = "fast",
+                            overridesReasoning = true,
+                            overridesServiceTier = true,
+                        )
+                    )
+                ),
+            )
+        )
+
+        val decoded = decodeThreadRuntimeOverrideBundleSpec(encoded)
+
+        assertEquals(setOf("thread-legacy"), decoded.legacyOverrides.keys)
+        assertEquals(
+            setOf("thread-scoped"),
+            decoded.scopedOverridesByScopeKey["host-1::codex-native"]?.keys,
+        )
+    }
+
+    @Test
+    fun decodeThreadRuntimeOverrideBundle_preservesLegacyPayloadCompatibility() {
+        val encodedLegacy = encodeThreadRuntimeOverridesSpec(
+            mapOf(
+                "thread-1" to ThreadRuntimeOverride(
+                    reasoningEffort = "high",
+                    serviceTierRawValue = "fast",
+                    overridesReasoning = true,
+                    overridesServiceTier = true,
+                )
+            )
+        )
+
+        val decoded = decodeThreadRuntimeOverrideBundleSpec(encodedLegacy)
+
+        assertEquals(setOf("thread-1"), decoded.legacyOverrides.keys)
+        assertTrue(decoded.scopedOverridesByScopeKey.isEmpty())
+    }
 }

@@ -46,6 +46,7 @@ import io.androdex.android.model.GitWorktreeChangeTransferMode
 import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PairingPayload
@@ -247,9 +248,10 @@ class AndrodexClient(
     private var selectedReasoningEffort: String? = persistence.loadSelectedReasoningEffort()
     private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
     private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
-    private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides()
+    private var threadRuntimeOverridesByThread = loadThreadRuntimeOverridesForCurrentScope()
     private var collaborationModes: Set<CollaborationModeKind> = emptySet()
     private var hostAccountSnapshot: HostAccountSnapshot? = null
+    private var hostRuntimeMetadata: HostRuntimeMetadata? = null
     private var supportsServiceTier = true
     private var supportsThreadCompaction = true
     private var supportsThreadRollback = true
@@ -295,6 +297,53 @@ class AndrodexClient(
             displayName = trusted?.displayName,
             hasSavedRelaySession = session?.macDeviceId == deviceId,
         )
+    }
+
+    fun currentHostRuntimeMetadata(): HostRuntimeMetadata? = hostRuntimeMetadata
+
+    fun currentLegacyThreadTimelineScopeKey(): String? {
+        return currentTrustedPairSnapshot()?.deviceId ?: currentFingerprint()
+    }
+
+    fun currentThreadTimelineScopeKey(): String? {
+        val legacyScopeKey = currentLegacyThreadTimelineScopeKey() ?: return null
+        val runtimeTarget = hostRuntimeMetadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() } ?: return legacyScopeKey
+        return "$legacyScopeKey::$runtimeTarget"
+    }
+
+    private fun currentThreadRuntimeOverrideScopeCandidates(): List<String?> {
+        val candidates = mutableListOf<String?>()
+        val currentScopeKey = currentThreadTimelineScopeKey()
+        val legacyScopeKey = currentLegacyThreadTimelineScopeKey()
+        if (currentScopeKey != null) {
+            candidates += currentScopeKey
+        }
+        if (legacyScopeKey != null && legacyScopeKey != currentScopeKey) {
+            candidates += legacyScopeKey
+        }
+        candidates += null
+        return candidates
+    }
+
+    private fun loadThreadRuntimeOverridesForCurrentScope(): Map<String, ThreadRuntimeOverride> {
+        currentThreadRuntimeOverrideScopeCandidates().forEach { scopeKey ->
+            val overrides = persistence.loadThreadRuntimeOverrides(scopeKey)
+            if (overrides.isNotEmpty() || scopeKey == null) {
+                return overrides
+            }
+        }
+        return emptyMap()
+    }
+
+    private fun saveThreadRuntimeOverridesForCurrentScope() {
+        persistence.saveThreadRuntimeOverrides(
+            scopeKey = currentThreadTimelineScopeKey(),
+            value = threadRuntimeOverridesByThread,
+        )
+    }
+
+    private fun reloadThreadRuntimeOverridesForCurrentScope() {
+        threadRuntimeOverridesByThread = loadThreadRuntimeOverridesForCurrentScope()
     }
 
     private fun currentTrustedMacRecord(): TrustedMacRecord? {
@@ -1195,7 +1244,7 @@ class AndrodexClient(
         } else {
             threadRuntimeOverridesByThread = threadRuntimeOverridesByThread + (normalizedThreadId to normalizedOverride)
         }
-        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
+        saveThreadRuntimeOverridesForCurrentScope()
         emitRuntimeConfig()
     }
 
@@ -1328,6 +1377,7 @@ class AndrodexClient(
                     status = ConnectionStatus.CONNECTED,
                     detail = "Connected to ${pairing.routingId.take(8)}",
                     fingerprint = secureSession?.macIdentityPublicKey?.let(::fingerprint),
+                    runtimeMetadata = hostRuntimeMetadata,
                 )
             )
         }
@@ -1549,7 +1599,9 @@ class AndrodexClient(
 
     private suspend fun initializeSession() {
         Log.i(logTag, "initialize session start")
-        performInitializeSessionRequest { params -> sendRequest("initialize", params) }
+        val initializeResult = performInitializeSessionRequest { params -> sendRequest("initialize", params) }
+        hostRuntimeMetadata = decodeHostRuntimeMetadata(initializeResult) ?: hostRuntimeMetadata
+        reloadThreadRuntimeOverridesForCurrentScope()
         Log.i(logTag, "initialize session request completed")
         sendNotification("initialized", null)
         Log.i(logTag, "initialize session notification sent")
@@ -2730,6 +2782,7 @@ class AndrodexClient(
                 supportsThreadFork = supportsThreadFork,
                 collaborationModes = collaborationModes,
                 threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
+                runtimeMetadata = hostRuntimeMetadata,
             )
         )
     }
@@ -3248,7 +3301,7 @@ class AndrodexClient(
         } else {
             threadRuntimeOverridesByThread + (normalizedDestinationThreadId to sourceOverride)
         }
-        persistence.saveThreadRuntimeOverrides(threadRuntimeOverridesByThread)
+        saveThreadRuntimeOverridesForCurrentScope()
         emitRuntimeConfig()
     }
 
@@ -4110,15 +4163,15 @@ internal fun threadLifecycleUpdateForNotification(
 }
 
 internal suspend fun performInitializeSessionRequest(
-    sendInitializeRequest: suspend (JSONObject) -> Unit,
-) {
+    sendInitializeRequest: suspend (JSONObject) -> JSONObject,
+): JSONObject {
     try {
-        sendInitializeRequest(buildInitializePayload(includeCapabilities = true))
+        return sendInitializeRequest(buildInitializePayload(includeCapabilities = true))
     } catch (error: AndrodexClient.RpcException) {
         if (!shouldRetryInitializeWithoutCapabilities(error.message)) {
             throw error
         }
-        sendInitializeRequest(buildInitializePayload(includeCapabilities = false))
+        return sendInitializeRequest(buildInitializePayload(includeCapabilities = false))
     }
 }
 

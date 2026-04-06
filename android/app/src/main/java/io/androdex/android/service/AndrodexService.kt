@@ -17,6 +17,7 @@ import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
 import io.androdex.android.model.ExecutionContent
 import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.MissingNotificationThreadPrompt
@@ -105,6 +106,7 @@ data class AndrodexServiceState(
     val trustedPairSnapshot: TrustedPairSnapshot? = null,
     val freshPairingAttempt: FreshPairingAttemptState? = null,
     val hostAccountSnapshot: HostAccountSnapshot? = null,
+    val hostRuntimeMetadata: HostRuntimeMetadata? = null,
     val defaultRelayUrl: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val connectionDetail: String? = null,
@@ -1441,6 +1443,7 @@ class AndrodexService(
                         connectionStatus = update.status,
                         connectionDetail = update.detail,
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
+                        hostRuntimeMetadata = update.runtimeMetadata ?: it.hostRuntimeMetadata,
                         pendingApproval = if (update.status == ConnectionStatus.CONNECTED) it.pendingApproval else null,
                     )
                 }
@@ -1559,8 +1562,10 @@ class AndrodexService(
                         supportsThreadFork = update.supportsThreadFork,
                         collaborationModes = update.collaborationModes,
                         threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
+                        hostRuntimeMetadata = update.runtimeMetadata ?: it.hostRuntimeMetadata,
                     )
                 }
+                restorePersistedThreadTimelinesForCurrentScope()
             }
 
             is ClientUpdate.AccountStatusLoaded -> {
