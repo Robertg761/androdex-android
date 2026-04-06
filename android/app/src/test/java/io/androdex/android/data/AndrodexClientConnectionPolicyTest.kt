@@ -34,6 +34,17 @@ class AndrodexClientConnectionPolicyTest {
     }
 
     @Test
+    fun secureError_mapsReplayableSecureSessionFailuresToSavedPairingRetry() {
+        val update = secureErrorConnectionUpdate(
+            code = "invalid_envelope",
+            message = "The bridge rejected an invalid or replayed secure envelope.",
+        )
+
+        assertEquals(ConnectionStatus.RETRYING_SAVED_PAIRING, update.status)
+        assertEquals("Secure session drifted, retrying saved pairing.", update.detail)
+    }
+
+    @Test
     fun socketFailure_doesNotOverridePendingTerminalHandshakeStatus() {
         val terminalUpdate = ClientUpdate.Connection(
             status = ConnectionStatus.RECONNECT_REQUIRED,

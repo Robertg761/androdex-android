@@ -114,7 +114,7 @@ private const val trustedSessionResolveTimeoutMs = 8_000L
 private const val defaultRpcTimeoutMs = 20_000L
 private const val threadReadTimeoutMs = 45_000L
 private const val threadListTimeoutMs = 30_000L
-private const val bestEffortThreadResumeTimeoutMs = 1_500L
+private const val bestEffortThreadResumeTimeoutMs = 300L
 private const val secureSessionReadyTimeoutMs = 5_000L
 private const val relayPingIntervalSeconds = 20L
 private const val logTag = "AndrodexClient"
@@ -214,6 +214,7 @@ class AndrodexClient(
     private val socketMutex = Mutex()
     private val connectionLifecycleMutex = Mutex()
     private val incomingMessageMutex = Mutex()
+    private val outboundMessageMutex = Mutex()
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val pendingSecureControlWaiters = mutableMapOf<String, MutableList<CompletableDeferred<String>>>()
     private val bufferedSecureControlMessages = mutableMapOf<String, ArrayDeque<String>>()
@@ -953,7 +954,7 @@ class AndrodexClient(
     }
 
     suspend fun loadThread(threadId: String): ThreadLoadResult {
-        resumeThread(threadId, SecureSessionWaitPolicy.FAIL_FAST)
+        resumeThreadInBackground(threadId, SecureSessionWaitPolicy.FAIL_FAST)
         return try {
             val result = sendRequest(
                 "thread/read",
@@ -1005,7 +1006,7 @@ class AndrodexClient(
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
-        resumeThread(threadId)
+        resumeThreadInBackground(threadId)
         var compatibility = TurnRequestCompatibilityState(
             includeStructuredFileItems = fileMentions.isNotEmpty(),
             includeStructuredSkillItems = skillMentions.isNotEmpty(),
@@ -1049,7 +1050,7 @@ class AndrodexClient(
         target: ComposerReviewTarget,
         baseBranch: String? = null,
     ) {
-        resumeThread(threadId)
+        resumeThreadInBackground(threadId)
         val params = buildReviewStartParams(
             threadId = threadId,
             target = target,
@@ -1067,7 +1068,7 @@ class AndrodexClient(
         skillMentions: List<TurnSkillMention> = emptyList(),
         collaborationMode: CollaborationModeKind? = null,
     ) {
-        resumeThread(threadId)
+        resumeThreadInBackground(threadId)
         var compatibility = TurnRequestCompatibilityState(
             includeStructuredFileItems = fileMentions.isNotEmpty(),
             includeStructuredSkillItems = skillMentions.isNotEmpty(),
@@ -1608,7 +1609,10 @@ class AndrodexClient(
         }
     }
 
-    private fun resumeThreadInBackground(threadId: String) {
+    private fun resumeThreadInBackground(
+        threadId: String,
+        secureSessionWaitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+    ) {
         clientScope.launch {
             val params = JSONObject().put("threadId", threadId)
             try {
@@ -1616,7 +1620,7 @@ class AndrodexClient(
                     sendRequest(
                         method = "thread/resume",
                         params = params,
-                        secureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
+                        secureSessionWaitPolicy = secureSessionWaitPolicy,
                         logTimeout = false,
                     )
                 }
@@ -2519,11 +2523,13 @@ class AndrodexClient(
         message: JSONObject,
         secureSessionWaitPolicy: SecureSessionWaitPolicy = SecureSessionWaitPolicy.RECONNECT_FRIENDLY,
     ) {
-        val secureSession = awaitSecureSessionReady(secureSessionWaitPolicy)
-        val secureText = secureWireText(
-            plaintext = message.toString(),
-            session = secureSession,
-        )
+        val secureText = outboundMessageMutex.withLock {
+            val secureSession = awaitSecureSessionReady(secureSessionWaitPolicy)
+            secureWireText(
+                plaintext = message.toString(),
+                session = secureSession,
+            )
+        }
         sendRawText(secureText)
     }
 
@@ -3407,11 +3413,17 @@ private fun AndrodexClient.RpcException.toGitOperationException(): GitOperationE
 
 internal fun secureErrorConnectionUpdate(code: String, message: String): ClientUpdate.Connection {
     val status = when (code) {
+        "invalid_envelope", "decrypt_failed", "secure_channel_unavailable" -> ConnectionStatus.RETRYING_SAVED_PAIRING
         "update_required" -> ConnectionStatus.UPDATE_REQUIRED
         "pairing_expired", "phone_not_trusted", "phone_identity_changed", "phone_replacement_required" -> ConnectionStatus.RECONNECT_REQUIRED
         else -> ConnectionStatus.DISCONNECTED
     }
-    return ClientUpdate.Connection(status, message)
+    val detail = when (code) {
+        "invalid_envelope", "decrypt_failed", "secure_channel_unavailable" ->
+            "Secure session drifted, retrying saved pairing."
+        else -> message
+    }
+    return ClientUpdate.Connection(status, detail)
 }
 
 internal fun connectionUpdateForSocketClose(

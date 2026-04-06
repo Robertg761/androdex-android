@@ -43,12 +43,12 @@ import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspacePathSummary
 import io.androdex.android.model.WorkspaceRecentState
 import io.androdex.android.model.requestId
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.advanceTimeBy
@@ -61,7 +61,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.ArrayDeque
-import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AndrodexServiceTest {
@@ -263,7 +262,7 @@ class AndrodexServiceTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"
         }
-        val persistenceDispatcher = ManualCoroutineDispatcher()
+        val persistenceDispatcher = StandardTestDispatcher(testScheduler)
         val service = AndrodexService(
             repository = repository,
             scope = backgroundScope,
@@ -286,10 +285,68 @@ class AndrodexServiceTest {
             ),
         )
         repository.currentThreadTimelineScopeKeyValue = "host-b"
-        persistenceDispatcher.runAll()
+        advanceTimeBy(threadTimelinePersistenceDebounceMs)
+        runCurrent()
 
         assertEquals(1, repository.persistedThreadTimelineWrites.size)
         assertEquals("host-a", repository.persistedThreadTimelineWrites.single().first)
+    }
+
+    @Test
+    fun persistedTimelineWrites_areDebouncedAndCoalesced() = runTest {
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-a"
+        }
+        val persistenceDispatcher = StandardTestDispatcher(testScheduler)
+        val service = AndrodexService(
+            repository = repository,
+            scope = backgroundScope,
+            threadTimelinePersistenceDispatcher = persistenceDispatcher,
+        )
+        runCurrent()
+
+        val firstMessages = listOf(
+            ConversationMessage(
+                id = "assistant-1",
+                threadId = "thread-1",
+                role = ConversationRole.ASSISTANT,
+                kind = ConversationKind.CHAT,
+                text = "First",
+                createdAtEpochMs = 1_000L,
+            )
+        )
+        val secondMessages = listOf(
+            ConversationMessage(
+                id = "assistant-1",
+                threadId = "thread-1",
+                role = ConversationRole.ASSISTANT,
+                kind = ConversationKind.CHAT,
+                text = "Second",
+                createdAtEpochMs = 1_000L,
+            )
+        )
+
+        service.enqueueThreadTimelinePersistence(
+            scopeKey = "host-a",
+            changedMessagesByThread = mapOf("thread-1" to firstMessages),
+        )
+        advanceTimeBy(threadTimelinePersistenceDebounceMs - 10L)
+        runCurrent()
+        assertTrue(repository.persistedThreadTimelineWrites.isEmpty())
+
+        service.enqueueThreadTimelinePersistence(
+            scopeKey = "host-a",
+            changedMessagesByThread = mapOf("thread-1" to secondMessages),
+        )
+        advanceTimeBy(9L)
+        runCurrent()
+        assertTrue(repository.persistedThreadTimelineWrites.isEmpty())
+
+        advanceTimeBy(1L)
+        runCurrent()
+
+        assertEquals(1, repository.persistedThreadTimelineWrites.size)
+        assertEquals(secondMessages, repository.persistedThreadTimelineWrites.single().third)
     }
 
     @Test
@@ -4954,20 +5011,6 @@ class AndrodexServiceTest {
         runCurrent()
 
         assertEquals(1, reconnectCalls)
-    }
-}
-
-private class ManualCoroutineDispatcher : CoroutineDispatcher() {
-    private val tasks = ArrayDeque<Runnable>()
-
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        tasks.addLast(block)
-    }
-
-    fun runAll() {
-        while (tasks.isNotEmpty()) {
-            tasks.removeFirst().run()
-        }
     }
 }
 

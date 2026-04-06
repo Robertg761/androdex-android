@@ -76,6 +76,7 @@ private const val executionReloadMergeWindowMs = 5_000L
 private const val minimumThreadListLoadingVisibleMs = 350L
 private const val slowThreadLoadLogThresholdMs = 400L
 private const val logTag = "AndrodexService"
+internal const val threadTimelinePersistenceDebounceMs = 250L
 
 private data class SubagentIdentityEntry(
     val threadId: String?,
@@ -2679,6 +2680,7 @@ class AndrodexService(
 
     private suspend fun flushPendingThreadTimelinePersistence() {
         while (true) {
+            delay(threadTimelinePersistenceDebounceMs)
             val batch = threadTimelinePersistenceMutex.withLock {
                 if (pendingThreadTimelinePersistenceByThread.isEmpty()) {
                     threadTimelinePersistenceJob = null

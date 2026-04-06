@@ -98,9 +98,19 @@ function startBridge({
     "thread/resume",
   ]);
   const timedForwardedRequestMethods = new Set([
+    "thread/start",
     "thread/list",
     "thread/read",
     "thread/resume",
+    "turn/start",
+    "turn/steer",
+    "review/start",
+  ]);
+  const debugForwardedRequestMethods = new Set([
+    "thread/start",
+    "turn/start",
+    "turn/steer",
+    "review/start",
   ]);
   const forwardedRequestMethodTTLms = 2 * 60_000;
   const forwardedRequestTimingsById = new Map();
@@ -240,11 +250,7 @@ function startBridge({
       desktopRefresher.handleOutbound(message);
       pushNotificationTracker.handleOutbound(message);
       rememberThreadFromMessage("codex", message);
-      secureTransport.queueOutboundApplicationMessage(sanitizeRelayBoundCodexMessage(message), (wireMessage) => {
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send(wireMessage);
-        }
-      });
+      sendApplicationResponse(sanitizeRelayBoundCodexMessage(message));
     },
     onTransportClose() {
       desktopRefresher.handleTransportReset();
@@ -499,10 +505,23 @@ function startBridge({
       forwardedRequestTimingsById,
     );
     rememberThreadFromMessage("android", normalizedMessage);
+    logForwardedRequestToCodex(normalizedMessage, debugForwardedRequestMethods);
     if (queueMessageUntilCodexWarm(normalizedMessage)) {
       return;
     }
-    workspaceRuntime.sendToCodex(normalizedMessage);
+    try {
+      const didSend = workspaceRuntime.sendToCodex(normalizedMessage);
+      if (didSend === false) {
+        const detail = "The host runtime transport is restarting. Retry the request once the session recovers.";
+        console.warn(`[androdex] failed to forward request to Codex: ${detail}`);
+        respondForwardingFailure(normalizedMessage, detail);
+      }
+    } catch (error) {
+      const detail = normalizeNonEmptyString(error?.message)
+        || "The host runtime could not accept the request.";
+      console.warn(`[androdex] failed to forward request to Codex: ${detail}`);
+      respondForwardingFailure(normalizedMessage, detail);
+    }
   }
 
   function queueMessageUntilCodexWarm(rawMessage) {
@@ -538,6 +557,7 @@ function startBridge({
         }
 
         codexHandshakeState = "cold";
+        console.warn(`[androdex] local Codex warm-up failed: ${normalizeNonEmptyString(error?.message) || "unknown error"}`);
         rejectPendingColdStartMessages(
           normalizeNonEmptyString(error?.message) || "The host is not ready yet."
         );
@@ -546,6 +566,25 @@ function startBridge({
         pendingAutoWarmPromise = null;
       });
     return pendingAutoWarmPromise;
+  }
+
+  function maybeWarmCodexAfterBridgeInitialize() {
+    if (!workspaceRuntime.hasActiveWorkspace()) {
+      return;
+    }
+    if (!lastInitializeParams || typeof lastInitializeParams !== "object") {
+      return;
+    }
+    if (codexHandshakeState === "warm" || codexHandshakeState === "warming") {
+      return;
+    }
+
+    ensureCodexWarmAfterTransportReset().catch((error) => {
+      const detail = normalizeNonEmptyString(error?.message);
+      if (detail) {
+        console.warn(`[androdex] local Codex warm-up failed: ${detail}`);
+      }
+    });
   }
 
   function flushPendingColdStartMessages() {
@@ -580,6 +619,21 @@ function startBridge({
         },
       }));
     }
+  }
+
+  function respondForwardingFailure(rawMessage, detail) {
+    const parsed = safeParseJSON(rawMessage);
+    if (parsed?.id == null) {
+      return;
+    }
+
+    sendApplicationResponse(JSON.stringify({
+      id: parsed.id,
+      error: {
+        code: -32000,
+        message: detail,
+      },
+    }));
   }
 
   function handleBridgeManagedAccountRequest(rawMessage, sendResponse) {
@@ -628,13 +682,18 @@ function startBridge({
   }
 
   function sendApplicationResponse(rawMessage, options = {}) {
+    const allowPreResume = options.allowPreResume === true
+      || shouldAllowPreResumeRelayResponse(rawMessage);
     secureTransport.queueOutboundApplicationMessage(rawMessage, (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(wireMessage);
         return true;
       }
       return false;
-    }, options);
+    }, {
+      ...options,
+      allowPreResume,
+    });
   }
 
   function sendRelayRegistrationUpdate(nextDeviceState = deviceState) {
@@ -800,7 +859,6 @@ function startBridge({
       lastInitializeParams = parsed?.params && typeof parsed.params === "object" && !Array.isArray(parsed.params)
         ? parsed.params
         : {};
-      console.log(`[androdex] bridge-managed initialize request workspaceActive=${workspaceRuntime.hasActiveWorkspace()}`);
       lastBridgeManagedInitializeParams = cloneJsonObject(parsed.params) || {};
       if (!workspaceRuntime.hasActiveWorkspace()) {
         sendApplicationResponse(JSON.stringify({
@@ -813,6 +871,7 @@ function startBridge({
         return true;
       }
 
+      maybeWarmCodexAfterBridgeInitialize();
       sendApplicationResponse(
         createBridgeManagedInitializeSuccessResponse(parsed.id),
         { allowPreResume: true },
@@ -821,7 +880,6 @@ function startBridge({
     }
 
     if (method === "initialized") {
-      console.log("[androdex] bridge-managed initialized notification received");
       return true;
     }
 
@@ -1221,6 +1279,33 @@ function resolveForwardedRequestReplay(
   };
 }
 
+function logForwardedRequestToCodex(rawMessage, debugMethods) {
+  if (!debugMethods || debugMethods.size === 0) {
+    return;
+  }
+
+  const context = extractBridgeMessageContext(rawMessage);
+  if (!debugMethods.has(context.method)) {
+    return;
+  }
+
+  const parsed = safeParseJSON(rawMessage);
+  const requestId = parsed?.id;
+  if (requestId == null) {
+    return;
+  }
+
+  const params = context.params && typeof context.params === "object" ? context.params : {};
+  const inputItems = Array.isArray(params.input) ? params.input.length : 0;
+  const collaborationMode = normalizeNonEmptyString(params?.collaborationMode?.mode);
+  const model = normalizeNonEmptyString(params?.model);
+  console.log(
+    `[androdex] rpc->codex ${context.method} id=${requestId} thread=${context.threadId || "<none>"} `
+      + `inputItems=${inputItems}${model ? ` model=${model}` : ""}`
+      + `${collaborationMode ? ` collaborationMode=${collaborationMode}` : ""}`,
+  );
+}
+
 function resolveForwardedInitializeResponse(rawMessage, forwardedInitializeRequestIds) {
   if (!forwardedInitializeRequestIds || typeof forwardedInitializeRequestIds.has !== "function") {
     return null;
@@ -1259,6 +1344,15 @@ function createBridgeManagedInitializeSuccessResponse(requestId) {
       workspaceActive: true,
     },
   });
+}
+
+function shouldAllowPreResumeRelayResponse(rawMessage) {
+  const parsed = safeParseJSON(rawMessage);
+  if (!parsed || parsed.id == null) {
+    return false;
+  }
+
+  return normalizeNonEmptyString(parsed.method) === "";
 }
 
 function isAlreadyInitializedError(message) {
@@ -1353,12 +1447,14 @@ function buildMacRegistration(deviceState) {
 module.exports = {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  logForwardedRequestToCodex,
   rememberForwardedRequestTiming,
   resolveForwardedRequestReplay,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  shouldAllowPreResumeRelayResponse,
   shouldQueueMessageUntilCodexWarm,
   startBridge,
 };

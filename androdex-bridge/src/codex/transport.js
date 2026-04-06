@@ -86,10 +86,15 @@ function createSpawnTransport({ env, cwd }) {
     },
     send(message) {
       if (!codex.stdin.writable || codex.stdin.destroyed || codex.stdin.writableEnded) {
-        return;
+        if (!didReportError) {
+          didReportError = true;
+          listeners.emitError(new Error("The local Codex transport is no longer writable."));
+        }
+        return false;
       }
 
       codex.stdin.write(message.endsWith("\n") ? message : `${message}\n`);
+      return true;
     },
     onMessage(handler) {
       listeners.onMessage = handler;
@@ -171,7 +176,9 @@ function createWebSocketTransport({ endpoint, WebSocketImpl = WebSocket }) {
     send(message) {
       if (socket.readyState === openState) {
         socket.send(message);
+        return true;
       }
+      return false;
     },
     onMessage(handler) {
       listeners.onMessage = handler;

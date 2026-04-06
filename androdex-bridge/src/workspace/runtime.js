@@ -63,7 +63,7 @@ function createWorkspaceRuntime({
       throw new Error("No active Codex workspace on the host.");
     }
 
-    codex.send(message);
+    return codex.send(message);
   }
 
   async function restoreActiveWorkspace() {

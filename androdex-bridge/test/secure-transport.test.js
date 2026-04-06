@@ -279,6 +279,91 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
   ]);
 });
 
+test("secure transport can send explicit pre-resume responses before replay state is restored", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const phoneIdentity = createOkpKeyPair("ed25519");
+  const phoneEphemeral = createOkpKeyPair("x25519");
+  const wireMessages = [];
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-pre-resume",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "mac-pre-resume",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {
+        "phone-pre-resume": phoneIdentity.publicKey,
+      },
+    },
+  });
+
+  secureTransport.bindLiveSendWireMessage((message) => {
+    wireMessages.push(message);
+    return true;
+  });
+
+  const handshake = finishHandshake({
+    secureTransport,
+    sessionId: "session-pre-resume",
+    macDeviceId: "mac-pre-resume",
+    phoneDeviceId: "phone-pre-resume",
+    macIdentity,
+    phoneIdentity,
+    phoneEphemeral,
+    handshakeMode: HANDSHAKE_MODE_TRUSTED_RECONNECT,
+    lastAppliedBridgeOutboundSeq: 0,
+    skipResumeState: true,
+  });
+  wireMessages.length = 0;
+
+  secureTransport.queueOutboundApplicationMessage(
+    JSON.stringify({ id: "response-pre-resume", result: { ok: true } }),
+    (message) => {
+      wireMessages.push(message);
+      return true;
+    },
+    { allowPreResume: true }
+  );
+
+  assert.equal(wireMessages.length, 1);
+
+  const sharedSecret = diffieHellman({
+    privateKey: createPrivateKey({
+      key: {
+        crv: "X25519",
+        d: base64ToBase64Url(phoneEphemeral.privateKey),
+        kty: "OKP",
+        x: base64ToBase64Url(phoneEphemeral.publicKey),
+      },
+      format: "jwk",
+    }),
+    publicKey: createPublicKey({
+      key: {
+        crv: "X25519",
+        kty: "OKP",
+        x: base64ToBase64Url(handshake.serverHello.macEphemeralPublicKey),
+      },
+      format: "jwk",
+    }),
+  });
+  const salt = createHash("sha256").update(handshake.transcriptBytes).digest();
+  const infoPrefix = [
+    "androdex-e2ee-v1",
+    "session-pre-resume",
+    "mac-pre-resume",
+    "phone-pre-resume",
+    String(handshake.serverHello.keyEpoch),
+  ].join("|");
+  const macToPhoneKey = Buffer.from(
+    hkdfSync("sha256", sharedSecret, salt, Buffer.from(`${infoPrefix}|macToPhone`, "utf8"), 32)
+  );
+  const outboundEnvelope = JSON.parse(wireMessages[0]);
+  const outboundPayload = decryptEnvelope(outboundEnvelope, macToPhoneKey);
+
+  assert.equal(outboundPayload.payloadText, JSON.stringify({ id: "response-pre-resume", result: { ok: true } }));
+  assert.equal(Object.hasOwn(outboundPayload, "bridgeOutboundSeq"), false);
+});
+
 test("qr bootstrap rejects pairing a different Android device after one phone is trusted", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const firstPhoneIdentity = createOkpKeyPair("ed25519");
@@ -708,6 +793,7 @@ function finishHandshake({
   handshakeMode,
   lastAppliedBridgeOutboundSeq,
   nextRecoveryIdentityPublicKey = "",
+  skipResumeState = false,
 }) {
   const controlMessages = [];
   const applicationMessages = [];
@@ -797,22 +883,24 @@ function finishHandshake({
   const secureReady = controlMessages.find((message) => message.kind === "secureReady");
   assert.ok(secureReady, "expected secureReady");
 
-  secureTransport.handleIncomingWireMessage(
-    JSON.stringify({
-      kind: "resumeState",
-      sessionId,
-      keyEpoch: serverHello.keyEpoch,
-      lastAppliedBridgeOutboundSeq,
-    }),
-    {
-      sendControlMessage(message) {
-        controlMessages.push(message);
-      },
-      onApplicationMessage(message) {
-        applicationMessages.push(message);
-      },
-    }
-  );
+  if (!skipResumeState) {
+    secureTransport.handleIncomingWireMessage(
+      JSON.stringify({
+        kind: "resumeState",
+        sessionId,
+        keyEpoch: serverHello.keyEpoch,
+        lastAppliedBridgeOutboundSeq,
+      }),
+      {
+        sendControlMessage(message) {
+          controlMessages.push(message);
+        },
+        onApplicationMessage(message) {
+          applicationMessages.push(message);
+        },
+      }
+    );
+  }
 
   return { applicationMessages, controlMessages, serverHello, transcriptBytes };
 }

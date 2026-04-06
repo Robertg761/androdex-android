@@ -10,12 +10,14 @@ const WebSocket = require("ws");
 const {
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  logForwardedRequestToCodex,
   rememberForwardedRequestTiming,
   resolveForwardedRequestReplay,
   resolveForwardedRequestTiming,
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  shouldAllowPreResumeRelayResponse,
   shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
 
@@ -231,6 +233,46 @@ test("resolveForwardedInitializeResponse passes through non-initialize responses
   assert.equal(forwardedInitializeRequestIds.has("req-init"), true);
 });
 
+test("shouldAllowPreResumeRelayResponse allows plain RPC responses through before resume", () => {
+  assert.equal(
+    shouldAllowPreResumeRelayResponse(
+      JSON.stringify({
+        id: "req-collaboration-modes",
+        result: {
+          items: [],
+        },
+      })
+    ),
+    true
+  );
+});
+
+test("shouldAllowPreResumeRelayResponse keeps notifications and server requests replay-safe", () => {
+  assert.equal(
+    shouldAllowPreResumeRelayResponse(
+      JSON.stringify({
+        method: "thread/updated",
+        params: {
+          threadId: "thread-123",
+        },
+      })
+    ),
+    false
+  );
+  assert.equal(
+    shouldAllowPreResumeRelayResponse(
+      JSON.stringify({
+        id: "host-request",
+        method: "pairing/recoveryProvisioned",
+        params: {
+          ok: true,
+        },
+      })
+    ),
+    false
+  );
+});
+
 test("rememberForwardedRequestTiming tracks thread RPCs and resolveForwardedRequestTiming reports their duration", () => {
   const forwardedRequestTimingsById = new Map();
 
@@ -267,7 +309,7 @@ test("rememberForwardedRequestTiming tracks thread RPCs and resolveForwardedRequ
   assert.equal(forwardedRequestTimingsById.size, 0);
 });
 
-test("rememberForwardedRequestTiming ignores unrelated methods", () => {
+test("rememberForwardedRequestTiming tracks turn-start latency when requested", () => {
   const forwardedRequestTimingsById = new Map();
 
   rememberForwardedRequestTiming(
@@ -278,12 +320,12 @@ test("rememberForwardedRequestTiming ignores unrelated methods", () => {
         threadId: "thread-123",
       },
     }),
-    new Set(["thread/list", "thread/read", "thread/resume"]),
+    new Set(["thread/list", "thread/read", "thread/resume", "turn/start"]),
     forwardedRequestTimingsById,
     1_000
   );
 
-  assert.equal(
+  assert.deepEqual(
     resolveForwardedRequestTiming(
       JSON.stringify({
         id: "req-turn-start",
@@ -294,8 +336,50 @@ test("rememberForwardedRequestTiming ignores unrelated methods", () => {
       forwardedRequestTimingsById,
       2_000
     ),
-    null
+    {
+      method: "turn/start",
+      threadId: "thread-123",
+      durationMs: 1_000,
+      errorMessage: "",
+    }
   );
+});
+
+test("logForwardedRequestToCodex records the turn-start context sent to the host runtime", () => {
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (message) => {
+    lines.push(String(message));
+  };
+
+  try {
+    logForwardedRequestToCodex(
+      JSON.stringify({
+        id: "req-turn-start",
+        method: "turn/start",
+        params: {
+          threadId: "thread-123",
+          input: [
+            { type: "text", text: "hello" },
+          ],
+          model: "gpt-5.4",
+          collaborationMode: {
+            mode: "git",
+          },
+        },
+      }),
+      new Set(["turn/start"])
+    );
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /rpc->codex turn\/start/);
+  assert.match(lines[0], /thread=thread-123/);
+  assert.match(lines[0], /inputItems=1/);
+  assert.match(lines[0], /model=gpt-5\.4/);
+  assert.match(lines[0], /collaborationMode=git/);
 });
 
 test("resolveForwardedRequestReplay returns the original request when Codex says it is not initialized", () => {
