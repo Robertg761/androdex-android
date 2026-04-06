@@ -93,6 +93,24 @@ class ThreadTimelineFormattingTest {
     }
 
     @Test
+    fun minimalCommandStatusLabel_reportsRunningState() {
+        assertEquals("Running command", "running".minimalCommandStatusLabel())
+        assertEquals("Running command", "in_progress".minimalCommandStatusLabel())
+    }
+
+    @Test
+    fun minimalCommandStatusLabel_reportsCompletedState() {
+        assertEquals("Command finished", "completed".minimalCommandStatusLabel())
+        assertEquals("Command finished", "success".minimalCommandStatusLabel())
+    }
+
+    @Test
+    fun minimalCommandStatusLabel_reportsFailureState() {
+        assertEquals("Command failed", "failed".minimalCommandStatusLabel())
+        assertEquals("Command failed", "stopped".minimalCommandStatusLabel())
+    }
+
+    @Test
     fun buildThreadTimelineComposeCache_preservesSnapshotDerivedFields() {
         val snapshot = buildThreadTimelineRenderSnapshot(
             threadId = "thread-1",

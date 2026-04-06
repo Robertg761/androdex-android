@@ -2147,7 +2147,37 @@ private fun FileChangeBubble(message: ConversationMessage) {
 
 @Composable
 private fun CommandBubble(message: ConversationMessage) {
-    ExecutionBubble(message = message)
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val execution = remember(message) { message.execution ?: fallbackExecutionContent(message) }
+    val tone = executionStatusTone(execution.status)
+
+    Surface(
+        color = colors.secondarySurface.copy(alpha = 0.62f),
+        shape = RoundedCornerShape(999.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+        modifier = Modifier.widthIn(max = 260.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = geometry.spacing12, vertical = geometry.spacing8),
+            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(tone.accent),
+            )
+            Text(
+                text = execution.status.minimalCommandStatusLabel(),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
@@ -2864,6 +2894,15 @@ internal fun String.normalizedExecutionStatusLabel(): String {
                 }
             }
         }
+}
+
+internal fun String.minimalCommandStatusLabel(): String {
+    return when (trim().lowercase()) {
+        "running", "in_progress", "active" -> "Running command"
+        "failed", "error", "cancelled", "stopped" -> "Command failed"
+        "completed", "done", "success" -> "Command finished"
+        else -> "Command activity"
+    }
 }
 
 @Composable
