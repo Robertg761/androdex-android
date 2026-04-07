@@ -26,7 +26,9 @@ import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
+import io.androdex.android.model.capabilityBlockReason
 import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadCapabilityAction
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadTokenUsage
 import io.androdex.android.model.ThreadRunSnapshot
@@ -586,6 +588,11 @@ class AndrodexService(
             return
         }
 
+        preferredThreadId
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { requireThreadCapabilitySupport(it, ThreadCapabilityAction.TURN_START) }
+
         val preferredWorkspace = stateFlow.value.activeWorkspacePath
         val threadId = preferredThreadId?.trim()?.takeIf { it.isNotEmpty() } ?: run {
             val thread = repository.startThread(preferredWorkspace)
@@ -694,6 +701,7 @@ class AndrodexService(
         baseBranch: String? = null,
     ) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TURN_START)
         clearThreadOutcome(normalizedThreadId)
         repository.startReview(
             threadId = normalizedThreadId,
@@ -717,6 +725,7 @@ class AndrodexService(
 
     suspend fun interruptThread(threadId: String) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TURN_INTERRUPT)
         when (val resolution = resolveActiveTurn(normalizedThreadId)) {
             is ActiveTurnResolution.Resolved -> {
                 markThreadRunning(normalizedThreadId, resolution.turnId)
@@ -736,6 +745,10 @@ class AndrodexService(
     }
 
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
+        request.threadId
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { requireThreadCapabilitySupport(it, ThreadCapabilityAction.APPROVAL_RESPONSES) }
         repository.respondToApproval(request, accept)
     }
 
@@ -746,6 +759,7 @@ class AndrodexService(
     ) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
         val normalizedRequestId = requestId.trim().takeIf { it.isNotEmpty() } ?: return
+        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TOOL_INPUT_RESPONSES)
         val request = stateFlow.value.pendingToolInputsByThread[normalizedThreadId]
             ?.get(normalizedRequestId)
             ?: return
@@ -821,6 +835,7 @@ class AndrodexService(
         numTurns: Int = 1,
     ) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.CHECKPOINT_ROLLBACK)
         val result = repository.rollbackThread(normalizedThreadId, numTurns)
         stateFlow.update { current ->
             current.copy(
@@ -2522,6 +2537,17 @@ class AndrodexService(
             ?: metadata?.backendProvider
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun requireThreadCapabilitySupport(threadId: String, action: ThreadCapabilityAction) {
+        val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        val thread = stateFlow.value.findThreadSummary(normalizedThreadId) ?: return
+        val reason = thread.capabilityBlockReason(action) ?: return
+        throw IllegalStateException(reason)
+    }
+
+    private fun AndrodexServiceState.findThreadSummary(threadId: String): ThreadSummary? {
+        return threads.firstOrNull { it.id == threadId }
     }
 
     private fun hasRuntimeTargetIdentityChanged(

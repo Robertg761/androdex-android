@@ -221,6 +221,24 @@ internal fun ComposerBar(
             }
         }
 
+        AnimatedVisibility(
+            visible = !state.availabilityMessage.isNullOrBlank(),
+            enter = remodexFadeIn(motion.microStateMillis) + remodexExpandVertically(motion.microStateMillis),
+            exit = remodexFadeOut(motion.microStateMillis) + remodexShrinkVertically(motion.microStateMillis),
+        ) {
+            Text(
+                text = state.availabilityMessage.orEmpty(),
+                modifier = Modifier.padding(
+                    start = geometry.spacing14,
+                    end = geometry.spacing14,
+                    top = geometry.spacing8,
+                    bottom = geometry.spacing2,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.accentOrange,
+            )
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()

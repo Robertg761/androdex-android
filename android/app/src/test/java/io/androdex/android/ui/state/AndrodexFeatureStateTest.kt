@@ -24,6 +24,8 @@ import io.androdex.android.model.QueuePauseState
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ReasoningEffortOption
 import io.androdex.android.model.ServiceTier
+import io.androdex.android.model.ThreadCapabilities
+import io.androdex.android.model.ThreadCapabilityFlag
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ThreadQueuedDraftState
 import io.androdex.android.model.ThreadRuntimeOverride
@@ -781,6 +783,118 @@ class AndrodexFeatureStateTest {
         assertEquals("release", prompt.questions.single().answer)
         assertTrue(prompt.questions.single().options.any { it.label == "release" && it.isSelected })
         assertTrue(prompt.questions.single().allowsCustomAnswer)
+    }
+
+    @Test
+    fun threadRoute_disablesComposerAndRuntimeWhenTurnStartIsUnsupported() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            composerText = "Please continue",
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "/workspace/app",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    threadCapabilities = ThreadCapabilities(
+                        readOnly = true,
+                        turnStart = ThreadCapabilityFlag(
+                            supported = false,
+                            reason = "Open this thread on the host Mac to continue it.",
+                        ),
+                    ),
+                )
+            ),
+        )
+
+        val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.composer.inputEnabled)
+        assertFalse(route.state.composer.submitEnabled)
+        assertFalse(route.state.composer.planModeEnabled)
+        assertFalse(route.state.composer.subagentsEnabled)
+        assertFalse(route.state.composer.runtimeButtonEnabled)
+        assertEquals(
+            "Open this thread on the host Mac to continue it.",
+            route.state.composer.availabilityMessage,
+        )
+    }
+
+    @Test
+    fun threadRoute_disablesStopAndToolInputSubmitWhenCapabilitiesBlockThem() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            runningThreadIds = setOf("thread-9"),
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "/workspace/app",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    threadCapabilities = ThreadCapabilities(
+                        readOnly = true,
+                        turnInterrupt = ThreadCapabilityFlag(
+                            supported = false,
+                            reason = "Stop this run from the desktop session.",
+                        ),
+                        toolInputResponses = ThreadCapabilityFlag(
+                            supported = false,
+                            reason = "Answer these questions from the desktop session.",
+                        ),
+                    ),
+                )
+            ),
+            pendingToolInputsByThread = mapOf(
+                "thread-9" to mapOf(
+                    "request-1" to ToolUserInputRequest(
+                        idValue = "request-1",
+                        method = "item/tool/requestUserInput",
+                        threadId = "thread-9",
+                        turnId = "turn-1",
+                        itemId = "item-1",
+                        title = "Pick a branch",
+                        message = "Select which branch to inspect.",
+                        questions = listOf(
+                            ToolUserInputQuestion(
+                                id = "branch",
+                                header = "Branch",
+                                question = "Which branch should we inspect?",
+                                options = listOf(
+                                    ToolUserInputOption("main", "Use the default branch."),
+                                ),
+                                isOther = true,
+                            )
+                        ),
+                        rawPayload = "{}",
+                    )
+                )
+            ),
+            toolInputAnswersByRequest = mapOf(
+                "request-1" to mapOf("branch" to "main")
+            ),
+        )
+
+        val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
+
+        assertTrue(route.state.composer.showStop)
+        assertFalse(route.state.composer.stopEnabled)
+        assertEquals(
+            "Stop this run from the desktop session.",
+            route.state.composer.availabilityMessage,
+        )
+        assertFalse(route.state.pendingToolInputs.single().submitEnabled)
+        assertEquals(
+            "Answer these questions from the desktop session.",
+            route.state.pendingToolInputs.single().availabilityMessage,
+        )
     }
 
     private fun gitThreadState(

@@ -35,6 +35,8 @@ import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentState
+import io.androdex.android.model.ThreadCapabilities
+import io.androdex.android.model.ThreadCapabilityFlag
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
@@ -266,6 +268,49 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun respondToApproval_rejectsUnsupportedThreadCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val renderedRequest = ApprovalRequest(
+            idValue = "request-rendered",
+            method = "item/commandExecution/requestApproval",
+            command = "rm -rf /tmp/demo",
+            reason = "Needs approval",
+            threadId = "thread-1",
+            turnId = "turn-1",
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            approvalResponses = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Send approvals from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val failure = runCatching {
+            service.respondToApproval(renderedRequest, accept = true)
+        }.exceptionOrNull()
+
+        assertEquals("Send approvals from the desktop session.", failure?.message)
+        assertNull(repository.lastApprovalRequest)
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"
@@ -430,6 +475,46 @@ class AndrodexServiceTest {
 
         assertTrue(service.state.value.runningThreadIds.isEmpty())
         assertTrue(service.state.value.selectedThreadId == "thread-created")
+    }
+
+    @Test
+    fun sendMessage_andStartReview_rejectUnsupportedTurnStartCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            turnStart = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Continue this thread from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val sendFailure = runCatching {
+            service.sendMessage("Keep going", preferredThreadId = "thread-1")
+        }.exceptionOrNull()
+        val reviewFailure = runCatching {
+            service.startReview("thread-1", ComposerReviewTarget.UNCOMMITTED_CHANGES)
+        }.exceptionOrNull()
+
+        assertEquals("Continue this thread from the desktop session.", sendFailure?.message)
+        assertEquals("Continue this thread from the desktop session.", reviewFailure?.message)
+        assertTrue(repository.startedTurns.isEmpty())
+        assertTrue(repository.steeredTurns.isEmpty())
     }
 
     @Test
@@ -4742,6 +4827,66 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun respondToToolUserInput_rejectsUnsupportedThreadCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            toolInputResponses = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Answer these prompts from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val request = ToolUserInputRequest(
+            idValue = "request-1",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemId = "item-1",
+            title = "Pick a branch",
+            message = "Select which branch to inspect.",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch should we inspect?",
+                    options = emptyList(),
+                )
+            ),
+            rawPayload = "{}",
+        )
+        service.processClientUpdate(ClientUpdate.ToolUserInputRequested(request))
+
+        val failure = runCatching {
+            service.respondToToolUserInput(
+                threadId = "thread-1",
+                requestId = "request-1",
+                answers = mapOf("branch" to "main"),
+            )
+        }.exceptionOrNull()
+
+        assertEquals("Answer these prompts from the desktop session.", failure?.message)
+        assertNull(repository.lastToolInputRequest)
+        assertEquals(listOf("request-1"), service.state.value.pendingToolInputsByThread["thread-1"]?.keys?.toList())
+    }
+
+    @Test
     fun turnCompletion_clearsOnlyPendingToolInputForCompletedTurn() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
@@ -4948,6 +5093,42 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun interruptThread_rejectsUnsupportedInterruptCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            turnInterrupt = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Stop this run from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val failure = runCatching {
+            service.interruptThread("thread-1")
+        }.exceptionOrNull()
+
+        assertEquals("Stop this run from the desktop session.", failure?.message)
+        assertTrue(repository.interruptedTurns.isEmpty())
+        assertTrue(repository.readThreadRunSnapshotIds.isEmpty())
+    }
+
+    @Test
     fun sendMessage_steersActiveRunWhenTurnIdIsKnown() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(
@@ -5132,6 +5313,41 @@ class AndrodexServiceTest {
         )
         assertFalse(service.state.value.readyThreadIds.contains("thread-1"))
         assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
+    }
+
+    @Test
+    fun rollbackThread_rejectsUnsupportedThreadCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            checkpointRollback = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Roll back this thread from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val failure = runCatching {
+            service.rollbackThread("thread-1")
+        }.exceptionOrNull()
+
+        assertEquals("Roll back this thread from the desktop session.", failure?.message)
+        assertTrue(repository.rollbackRequests.isEmpty())
     }
 
     @Test

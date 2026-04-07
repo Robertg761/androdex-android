@@ -33,6 +33,8 @@ import io.androdex.android.model.ModelOption
 import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
+import io.androdex.android.model.capabilityBlockReason
+import io.androdex.android.model.ThreadCapabilityAction
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputQuestion
 import io.androdex.android.model.ThreadRuntimeOverride
@@ -253,6 +255,7 @@ internal data class ToolUserInputCardUiState(
     val questions: List<ToolUserInputQuestionUiState>,
     val isSubmitting: Boolean,
     val submitEnabled: Boolean,
+    val availabilityMessage: String?,
 )
 
 internal data class ToolUserInputQuestionUiState(
@@ -323,6 +326,7 @@ internal data class ComposerUiState(
     val submitButtonLabel: String,
     val isSubmitting: Boolean,
     val submitEnabled: Boolean,
+    val availabilityMessage: String?,
     val showStop: Boolean,
     val isStopping: Boolean,
     val stopEnabled: Boolean,
@@ -586,7 +590,17 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
     timelineSnapshot: ThreadTimelineRenderSnapshot,
 ): ThreadTimelineUiState {
     val selectedThread = threads.firstOrNull { it.id == threadId }
+    val turnStartBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TURN_START)
+    val turnInterruptBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TURN_INTERRUPT)
+    val toolInputBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TOOL_INPUT_RESPONSES)
+    val rollbackBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.CHECKPOINT_ROLLBACK)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
+    val composerCapabilityBlockReason = if (isThreadRunning) {
+        turnInterruptBlockReason ?: turnStartBlockReason
+    } else {
+        turnStartBlockReason
+    }
+    val isComposerCapabilityBlocked = composerCapabilityBlockReason != null
     val planModeSupported = CollaborationModeKind.PLAN in collaborationModes
     val isPlanModeRequested = isComposerPlanMode || threadId in composerPlanModeByThread
     val isPlanModeEnabled = planModeSupported && isPlanModeRequested
@@ -637,9 +651,12 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
                     )
                 },
                 isSubmitting = request.requestId in submittingToolInputRequestIds,
-                submitEnabled = request.questions.isNotEmpty() && request.questions.all { question ->
-                    answers[question.id]?.trim()?.isNotEmpty() == true
-                },
+                submitEnabled = toolInputBlockReason == null
+                    && request.questions.isNotEmpty()
+                    && request.questions.all { question ->
+                        answers[question.id]?.trim()?.isNotEmpty() == true
+                    },
+                availabilityMessage = toolInputBlockReason,
             )
     }
     val queueControlsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread
@@ -766,12 +783,14 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
         ),
         rollback = ThreadActionUiState(
             isEnabled = supportsThreadRollback
+                && rollbackBlockReason == null
                 && connectionStatus == ConnectionStatus.CONNECTED
                 && !maintenanceActionBusy
                 && !isThreadRunning
                 && hasThreadHistory,
             availabilityMessage = when {
                 !supportsThreadRollback -> "Update the host bridge to enable native thread rollback."
+                rollbackBlockReason != null -> rollbackBlockReason
                 connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to roll back this thread."
                 !hasThreadHistory -> "No thread history is available to roll back yet."
                 isThreadRunning -> "Wait for the current run to finish before rolling back this thread."
@@ -826,18 +845,25 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
             slashCommandItems = composerSlashCommandItems,
             isSlashCommandAutocompleteVisible = isSlashCommandAutocompleteVisible,
             slashCommandQuery = slashCommandQuery,
-            inputEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            inputEnabled = !isComposerCapabilityBlocked && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
             submitMode = submitMode,
             isPlanModeEnabled = isPlanModeEnabled,
             isPlanModeSupported = planModeSupported,
-            planModeEnabled = planModeSupported && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            planModeEnabled = planModeSupported
+                && !isComposerCapabilityBlocked
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
             planModeLabel = when {
                 !planModeSupported -> "Plan unavailable"
                 isPlanModeEnabled -> "Plan mode on"
                 else -> "Plan mode"
             },
             isSubagentsEnabled = isSubagentsEnabled,
-            subagentsEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            subagentsEnabled = !isComposerCapabilityBlocked
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
             reviewSelection = reviewSelection,
             isReviewModeEnabled = reviewSelection != null,
             reviewTarget = reviewSelection?.target,
@@ -885,11 +911,16 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
             ) {
                 false
             } else {
-                !sendAvailability.isSendDisabled
+                !isComposerCapabilityBlocked && !sendAvailability.isSendDisabled
             },
+            availabilityMessage = composerCapabilityBlockReason,
             showStop = isThreadRunning,
             isStopping = isInterruptingSelectedThread,
-            stopEnabled = isThreadRunning && !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            stopEnabled = isThreadRunning
+                && turnInterruptBlockReason == null
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
             queuedCount = queuedDrafts.size,
             isQueuePaused = queueState?.isPaused == true,
             runtimeButtonLabel = buildComposerRuntimeButtonLabel(
@@ -897,7 +928,10 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
                 effectiveReasoning = effectiveReasoning,
                 effectiveServiceTier = effectiveServiceTier,
             ),
-            runtimeButtonEnabled = !isBusy && !isSendingMessage && !isInterruptingSelectedThread,
+            runtimeButtonEnabled = !isComposerCapabilityBlocked
+                && !isBusy
+                && !isSendingMessage
+                && !isInterruptingSelectedThread,
         ),
     )
 }

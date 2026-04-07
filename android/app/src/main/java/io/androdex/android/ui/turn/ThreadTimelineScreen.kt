@@ -1189,6 +1189,13 @@ private fun ToolInputRequestCard(
                         color = colors.textSecondary,
                     )
                 }
+                request.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.accentOrange,
+                    )
+                }
             }
 
             request.questions.forEachIndexed { index, question ->

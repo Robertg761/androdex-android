@@ -736,6 +736,18 @@ Deliverables:
 - gate unsupported actions cleanly
 - ensure T3-backed threads do not expose Codex-native-only actions unless implemented safely
 
+Status update:
+
+- in progress
+- landed Android-side consumption of bridge capability metadata for unsupported-provider and unresolved-workspace T3 threads:
+  - composer input, send, stop, plan/subagent toggles, and runtime access now disable from per-thread capability metadata instead of assuming every thread is safely mutable
+  - pending tool-input cards now surface capability gating reasons and disable submission when the bridge marks tool-input responses unsupported
+  - Android service actions now hard-reject blocked `send`, `review`, `interrupt`, `approval`, tool-input response, and rollback requests using the same per-thread capability reasons shown in the UI
+- not landed yet:
+  - stale-action reconciliation after desktop resolves an approval, user-input request, or interruptible turn first
+  - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
+  - structured logging for attach, bootstrap, replay, and action-gating outcomes
+
 Deliverables:
 
 - capability-gated UI
@@ -910,24 +922,23 @@ Completed so far:
 - T3 transport restarts now recover through snapshot plus replay from the persisted state-root-scoped watermark, while suppressing duplicate live notifications for already-delivered resumed-thread events
 - resumed-thread plan/task/tool notifications now suppress duplicate emissions when the same T3 activity id is re-delivered, and reconnect regression coverage now proves old activity notifications stay suppressed while newly replayed completions still surface with stable item identity
 - T3 summaries, reads, and resume responses now carry explicit bridge capability metadata for companion support state, workspace availability, live-update eligibility, and read-only action gating so Android no longer has to infer unsupported/orphaned state from preview text alone
+- Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 
 Still in progress:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool subset
-- richer unsupported/orphaned-thread capability metadata consumption and action gating on Android
 - stale-action reconciliation for desktop-resolved approvals, user-input requests, and interrupts
 - structured logging for attach, bootstrap, replay, and action-gating outcomes
 
 Not started yet:
 
 - T3 mutating command mapping
-- Android capability-driven T3 action surface
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Immediate Next Steps
 
-1. Teach Android UI and action handling to consume the new per-thread T3 capability metadata for unsupported-provider and unresolved-workspace gating.
+1. Implement stale-action reconciliation for approvals, tool-input requests, and interrupts that desktop T3 may already have resolved before Android responds.
 2. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool subset.
 3. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
 4. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
