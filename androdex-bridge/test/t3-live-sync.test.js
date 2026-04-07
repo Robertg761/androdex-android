@@ -720,6 +720,133 @@ test("T3 adapter only emits bridge-managed live notifications after a supported 
   assert.equal(responses[2].params.status, "completed");
 });
 
+test("T3 adapter suppresses duplicate resumed-thread assistant and title notifications for repeated live delivery", async () => {
+  let subscriptionRequestId = null;
+  const titleEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.meta-updated",
+    payload: {
+      threadId: "thread-123",
+      title: "Recovered live title",
+      updatedAt: "2026-04-07T12:00:08.000Z",
+    },
+  };
+  const assistantEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: "thread-123",
+      messageId: "msg-2",
+      role: "assistant",
+      text: "Recovered live answer",
+      attachments: [],
+      turnId: "turn-1",
+      streaming: false,
+      createdAt: "2026-04-07T12:00:09.000Z",
+      updatedAt: "2026-04-07T12:00:09.000Z",
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [titleEvent, assistantEvent],
+  });
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [titleEvent, assistantEvent],
+  });
+  await nextTick();
+
+  assert.equal(
+    responses.filter((entry) =>
+      entry.method === "thread/name/updated" && entry.params?.title === "Recovered live title"
+    ).length,
+    1,
+  );
+  assert.equal(
+    responses.filter((entry) =>
+      entry.method === "codex/event/agent_message" && entry.params?.messageId === "msg-2"
+    ).length,
+    1,
+  );
+});
+
 test("T3 adapter emits a fresh turn/started when T3 swaps the active running turn id", async () => {
   let subscriptionRequestId = null;
   const firstRunningSessionEvent = {
@@ -1441,6 +1568,220 @@ test("T3 adapter projects tool activity lifecycle into stable execution item not
   assert.equal(responses[2].params.itemId, responses[3].params.itemId);
 });
 
+test("T3 adapter projects approval and user-input activity lifecycles into stable execution item notifications after resume", async () => {
+  let subscriptionRequestId = null;
+  const approvalRequestedEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-approval-1-open",
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-1",
+          requestKind: "command",
+          requestType: "command_approval",
+          detail: "Run git diff --stat",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const approvalResolvedEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-approval-1-resolved",
+        tone: "approval",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        payload: {
+          requestId: "approval-1",
+          requestKind: "command",
+          requestType: "command_approval",
+          decision: "accept",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+  const userInputRequestedEvent = {
+    sequence: 10,
+    eventId: "event-10",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:10.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-input-1-open",
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "user-input-1",
+          questions: [
+            {
+              id: "deploy_target",
+              question: "Where should we deploy?",
+            },
+          ],
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:10.000Z",
+      },
+    },
+  };
+  const userInputResolvedEvent = {
+    sequence: 11,
+    eventId: "event-11",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:11.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-input-1-resolved",
+        tone: "info",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        payload: {
+          requestId: "user-input-1",
+          answers: {
+            deploy_target: ["preview"],
+          },
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:11.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [
+      approvalRequestedEvent,
+      approvalResolvedEvent,
+      userInputRequestedEvent,
+      userInputResolvedEvent,
+    ],
+  });
+  await nextTick();
+
+  assert.equal(responses.length, 5);
+  assert.equal(responses[1].method, "item/updated");
+  assert.equal(responses[1].params.itemId, "t3-approval:thread-123:approval-1");
+  assert.equal(responses[1].params.item.status, "in_progress");
+  assert.equal(responses[1].params.item.title, "Command approval requested");
+  assert.equal(responses[1].params.item.summary, "Run git diff --stat");
+
+  assert.equal(responses[2].method, "item/completed");
+  assert.equal(responses[2].params.itemId, "t3-approval:thread-123:approval-1");
+  assert.equal(responses[2].params.item.status, "completed");
+  assert.equal(responses[2].params.item.title, "Approval resolved");
+
+  assert.equal(responses[3].method, "item/updated");
+  assert.equal(responses[3].params.itemId, "t3-user-input:thread-123:user-input-1");
+  assert.equal(responses[3].params.item.status, "in_progress");
+  assert.equal(responses[3].params.item.title, "User input requested");
+
+  assert.equal(responses[4].method, "item/completed");
+  assert.equal(responses[4].params.itemId, "t3-user-input:thread-123:user-input-1");
+  assert.equal(responses[4].params.item.status, "completed");
+  assert.equal(responses[4].params.item.title, "User input submitted");
+});
+
 test("T3 adapter keeps repeated same-command tool activities distinct within one resumed turn", async () => {
   let subscriptionRequestId = null;
   const toolStartedFirstEvent = {
@@ -2044,6 +2385,12 @@ test("T3 adapter reconnects through snapshot plus replay after a transport resta
   );
   assert.ok(responses.some((entry) =>
     entry.method === "thread/name/updated" && entry.params?.title === "Recovered after restart"));
+  assert.equal(
+    responses.filter((entry) =>
+      entry.method === "thread/name/updated" && entry.params?.title === "Recovered after restart"
+    ).length,
+    1,
+  );
 
   const threadReadResponse = responses.find((entry) => entry.id === "req-thread-read");
   assert.ok(threadReadResponse);

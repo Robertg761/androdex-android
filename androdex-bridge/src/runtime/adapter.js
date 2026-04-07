@@ -639,8 +639,10 @@ function createT3ServerRuntimeAdapter({
 
     const created = {
       notificationFingerprintByActivityId: new Map(),
+      approvalItemIdsByRequestId: new Map(),
       taskItemIdsByTaskId: new Map(),
       toolItemIdsByKey: new Map(),
+      userInputItemIdsByRequestId: new Map(),
     };
     liveActivityStateByThread.set(normalizedThreadId, created);
     return created;
@@ -1122,6 +1124,37 @@ function buildThreadActivityNotifications({
     });
   }
 
+  if (kind === "approval.requested" || kind === "approval.resolved") {
+    const itemId = resolveApprovalActivityItemId({
+      activity,
+      threadActivityState,
+      threadId,
+    });
+    const item = buildExecutionActivityItem({
+      activity,
+      itemId,
+      fallbackType: "activity",
+      fallbackStatus: kind === "approval.resolved" ? "completed" : "in_progress",
+      detail: firstNonEmptyString([
+        payload.detail,
+        payload.requestType,
+      ]),
+    });
+    return dedupeActivityNotifications({
+      activity,
+      notifications: [{
+        method: kind === "approval.resolved" ? "item/completed" : "item/updated",
+        params: {
+          threadId,
+          turnId,
+          itemId,
+          item,
+        },
+      }],
+      threadActivityState,
+    });
+  }
+
   if (kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed") {
     const itemId = resolveToolActivityItemId({
       activity,
@@ -1141,6 +1174,34 @@ function buildThreadActivityNotifications({
       activity,
       notifications: [{
         method: kind === "tool.completed" ? "item/completed" : "item/updated",
+        params: {
+          threadId,
+          turnId,
+          itemId,
+          item,
+        },
+      }],
+      threadActivityState,
+    });
+  }
+
+  if (kind === "user-input.requested" || kind === "user-input.resolved") {
+    const itemId = resolveUserInputActivityItemId({
+      activity,
+      threadActivityState,
+      threadId,
+    });
+    const item = buildExecutionActivityItem({
+      activity,
+      itemId,
+      fallbackType: "activity",
+      fallbackStatus: kind === "user-input.resolved" ? "completed" : "in_progress",
+      detail: normalizeNonEmptyString(payload.detail),
+    });
+    return dedupeActivityNotifications({
+      activity,
+      notifications: [{
+        method: kind === "user-input.resolved" ? "item/completed" : "item/updated",
         params: {
           threadId,
           turnId,
@@ -1219,6 +1280,25 @@ function resolveTaskActivityItemId({
   return `t3-task:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || Date.now())}`;
 }
 
+function resolveApprovalActivityItemId({
+  activity,
+  threadActivityState,
+  threadId,
+}) {
+  const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const requestId = normalizeNonEmptyString(payload.requestId);
+  if (requestId) {
+    const existing = threadActivityState.approvalItemIdsByRequestId.get(requestId);
+    if (existing) {
+      return existing;
+    }
+    const created = `t3-approval:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`;
+    threadActivityState.approvalItemIdsByRequestId.set(requestId, created);
+    return created;
+  }
+  return `t3-approval:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || Date.now())}`;
+}
+
 function resolveToolActivityItemId({
   activity,
   threadActivityState,
@@ -1269,6 +1349,25 @@ function resolveToolActivityItemId({
     threadActivityState.toolItemIdsByKey.set(correlationKey, [created]);
   }
   return created;
+}
+
+function resolveUserInputActivityItemId({
+  activity,
+  threadActivityState,
+  threadId,
+}) {
+  const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const requestId = normalizeNonEmptyString(payload.requestId);
+  if (requestId) {
+    const existing = threadActivityState.userInputItemIdsByRequestId.get(requestId);
+    if (existing) {
+      return existing;
+    }
+    const created = `t3-user-input:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`;
+    threadActivityState.userInputItemIdsByRequestId.set(requestId, created);
+    return created;
+  }
+  return `t3-user-input:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || Date.now())}`;
 }
 
 function buildExecutionActivityItem({
