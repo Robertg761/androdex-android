@@ -752,7 +752,7 @@ Status update:
   - bridge-managed live notifications for resumed supported T3 Codex threads, now covering turn lifecycle, assistant message completion, title refresh, plan updates, reasoning/task activity cards, tool execution activity cards, and approval/user-input activity cards
   - reconnect recovery across T3 transport restarts now re-enters through snapshot plus replay using the persisted state-root-scoped watermark, without duplicating already-delivered resumed-thread notifications
   - resumed-thread activity notifications now suppress duplicate plan/task/tool emissions when replay or live overlap re-delivers the same T3 activity identity, and reconnect coverage now proves only newly recovered activity completions surface after restart
-  - replay/idempotency coverage now also explicitly proves resumed-thread assistant-message and title-update notifications stay single-emission across duplicate live delivery and reconnect replay
+  - replay/idempotency coverage now also explicitly proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
   - `thread/list`, `thread/read`, and `thread/resume` now expose explicit bridge capability metadata for supported, unsupported-provider, and unresolved-workspace T3 threads instead of relying on preview text alone
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
 - not landed yet:
@@ -795,7 +795,7 @@ Status update:
   - the bridge now emits structured host-local runtime log entries for suitability probe start/validation, snapshot bootstrap, replay requests/results, reconnect/resubscribe recovery, and read-only action gating
   - logs use a hashed state-root identity plus safe reason codes instead of dumping local path details into normal output
 - not landed yet:
-  - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
+  - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool/approval/user-input subset
 
 Deliverables:
 
@@ -973,7 +973,7 @@ Completed so far:
 - T3 summaries, reads, and resume responses now carry explicit bridge capability metadata for companion support state, workspace availability, live-update eligibility, and read-only action gating so Android no longer has to infer unsupported/orphaned state from preview text alone
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
-- replay/idempotency coverage now also proves resumed-thread assistant-message and title-update notifications stay single-emission across duplicate live delivery and reconnect replay
+- replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
@@ -1008,7 +1008,7 @@ Not started yet:
 - workspace activation: supported for suitable host-local T3 instances only
 - `thread/list` / `thread/read`: supported through snapshot plus replay synthesis
 - `thread/resume`: supported for companion-eligible Codex-backed threads only
-- live turn, assistant, title, plan, task, and tool activity updates: supported for resumed companion-eligible threads only
+- live turn, assistant, title, plan, task, tool, approval, and user-input activity updates: supported for resumed companion-eligible threads only
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
 - send / plan / subagent flows: not supported yet
 - interrupt: not supported yet
