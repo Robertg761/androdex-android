@@ -26,6 +26,49 @@ class SubagentJsonHelpersTest {
     }
 
     @Test
+    fun decodeThreadSummary_readsBridgeCapabilityMetadata() {
+        val summary = decodeThreadSummarySpec(
+            mapOf(
+                "id" to "thread-t3",
+                "title" to "T3 thread",
+                "backendProvider" to "claudeAgent",
+                "threadCapabilities" to mapOf(
+                    "readOnly" to true,
+                    "backendProvider" to "claudeAgent",
+                    "companionSupported" to false,
+                    "companionSupportState" to "unsupported_provider",
+                    "companionSupportReason" to "Unsupported provider for Androdex companion support.",
+                    "workspacePath" to "/tmp/project",
+                    "workspaceResolved" to true,
+                    "workspaceAvailable" to true,
+                    "liveUpdates" to mapOf(
+                        "supported" to false,
+                        "reason" to "Only Codex-backed threads can attach live updates.",
+                    ),
+                    "turnStart" to mapOf(
+                        "supported" to false,
+                        "reason" to "Read-only milestone.",
+                    ),
+                    "toolInputResponses" to mapOf(
+                        "supported" to false,
+                        "reason" to "Read-only milestone.",
+                    ),
+                ),
+            )
+        )
+
+        assertEquals("claudeAgent", summary?.backendProvider)
+        assertEquals("unsupported_provider", summary?.threadCapabilities?.companionSupportState)
+        assertEquals(false, summary?.threadCapabilities?.liveUpdates?.supported)
+        assertEquals(
+            "Only Codex-backed threads can attach live updates.",
+            summary?.threadCapabilities?.liveUpdates?.reason,
+        )
+        assertEquals(false, summary?.threadCapabilities?.turnStart?.supported)
+        assertEquals(false, summary?.threadCapabilities?.toolInputResponses?.supported)
+    }
+
+    @Test
     fun decodeSubagentActionSpec_decodesNestedStateAndIdentity() {
         val action = decodeSubagentActionSpec(
             mapOf(

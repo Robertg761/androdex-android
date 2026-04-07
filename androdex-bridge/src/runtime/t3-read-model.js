@@ -537,6 +537,10 @@ function buildProjectMap(projects) {
 function buildThreadSummary(thread, project) {
   const cwd = resolveThreadCwd(thread, project);
   const provider = normalizeNonEmptyString(thread?.modelSelection?.provider);
+  const threadCapabilities = describeT3ThreadCapabilities({
+    thread,
+    project,
+  });
   const preview = buildThreadPreview(thread, project, provider, cwd);
   return {
     id: normalizeNonEmptyString(thread?.id),
@@ -546,6 +550,8 @@ function buildThreadSummary(thread, project) {
     createdAt: normalizeNonEmptyString(thread?.createdAt) || null,
     updatedAt: normalizeNonEmptyString(thread?.updatedAt) || normalizeNonEmptyString(thread?.createdAt) || null,
     model: normalizeNonEmptyString(thread?.modelSelection?.model) || null,
+    backendProvider: threadCapabilities.backendProvider,
+    threadCapabilities,
   };
 }
 
@@ -580,6 +586,128 @@ function resolveThreadCwd(thread, project) {
   return normalizeNonEmptyString(thread?.worktreePath)
     || normalizeNonEmptyString(project?.workspaceRoot)
     || null;
+}
+
+function describeT3ThreadCapabilities({
+  snapshot = null,
+  thread,
+  project = null,
+}) {
+  const resolvedProject = project || findRecord(
+    Array.isArray(snapshot?.projects) ? snapshot.projects : [],
+    "id",
+    thread?.projectId,
+  );
+  const backendProvider = normalizeNonEmptyString(thread?.modelSelection?.provider) || null;
+  const normalizedProvider = normalizeNonEmptyString(backendProvider).toLowerCase();
+  const workspacePath = resolveThreadCwd(thread, resolvedProject);
+  const workspaceAvailable = workspacePath ? pathExists(workspacePath) : false;
+  const providerSupported = !normalizedProvider || normalizedProvider === "codex";
+  const workspaceResolved = Boolean(workspacePath);
+  const companionSupportState = resolveCompanionSupportState({
+    providerSupported,
+    workspaceResolved,
+    workspaceAvailable,
+  });
+  const companionSupportReason = buildCompanionSupportReason({
+    backendProvider,
+    companionSupportState,
+  });
+  const liveUpdatesReason = companionSupportReason
+    || "The read-only T3 adapter only attaches live updates for supported Codex-backed threads whose local workspace mapping still resolves.";
+  const readOnlyMutationReason = "The read-only T3 adapter milestone has not enabled mutating thread actions yet.";
+
+  return {
+    readOnly: true,
+    backendProvider,
+    companionSupported: companionSupportState === "supported",
+    companionSupportState,
+    companionSupportReason,
+    workspacePath: workspacePath || null,
+    workspaceResolved,
+    workspaceAvailable,
+    read: {
+      supported: true,
+      reason: null,
+    },
+    liveUpdates: {
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported" ? null : liveUpdatesReason,
+    },
+    turnStart: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+    turnInterrupt: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+    approvalResponses: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+    userInputResponses: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+    toolInputResponses: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+    checkpointRollback: {
+      supported: false,
+      reason: readOnlyMutationReason,
+    },
+  };
+}
+
+function resolveCompanionSupportState({
+  providerSupported,
+  workspaceResolved,
+  workspaceAvailable,
+}) {
+  const workspaceReady = workspaceResolved && workspaceAvailable;
+  if (providerSupported && workspaceReady) {
+    return "supported";
+  }
+  if (!providerSupported && workspaceReady) {
+    return "unsupported_provider";
+  }
+  if (!providerSupported && workspaceResolved) {
+    return "unsupported_provider_and_workspace_unavailable";
+  }
+  if (!providerSupported) {
+    return "unsupported_provider_and_workspace_unmapped";
+  }
+  if (workspaceResolved) {
+    return "workspace_unavailable";
+  }
+  return "workspace_unmapped";
+}
+
+function buildCompanionSupportReason({
+  backendProvider,
+  companionSupportState,
+}) {
+  if (companionSupportState === "supported") {
+    return null;
+  }
+  if (companionSupportState === "unsupported_provider") {
+    return `The read-only T3 adapter only attaches live updates for Codex-backed threads; this thread uses ${backendProvider || "an unsupported provider"}.`;
+  }
+  if (companionSupportState === "unsupported_provider_and_workspace_unavailable") {
+    return `This T3 thread uses ${backendProvider || "an unsupported provider"} and its recorded local workspace path no longer resolves on this host.`;
+  }
+  if (companionSupportState === "unsupported_provider_and_workspace_unmapped") {
+    return `This T3 thread uses ${backendProvider || "an unsupported provider"} and does not expose a usable local workspace mapping on this host.`;
+  }
+  if (companionSupportState === "workspace_unavailable") {
+    return "This supported T3 thread remains discoverable, but its recorded local workspace path no longer resolves on this host.";
+  }
+  if (companionSupportState === "workspace_unmapped") {
+    return "This supported T3 thread remains discoverable, but the bridge could not resolve a usable local workspace mapping for it on this host.";
+  }
+  return "This T3 thread is not currently eligible for Androdex companion support.";
 }
 
 function buildThreadTurns(thread) {
@@ -901,4 +1029,5 @@ module.exports = {
   buildT3ThreadListResult,
   buildT3ThreadReadResult,
   createEmptyT3Snapshot,
+  describeT3ThreadCapabilities,
 };

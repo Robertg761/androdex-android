@@ -331,6 +331,8 @@ data class ThreadSummary(
     val agentNickname: String? = null,
     val agentRole: String? = null,
     val model: String? = null,
+    val backendProvider: String? = null,
+    val threadCapabilities: ThreadCapabilities? = null,
 ) {
     val projectName: String
         get() = cwd
@@ -353,6 +355,30 @@ data class ThreadSummary(
             }
         }
 }
+
+data class ThreadCapabilities(
+    val readOnly: Boolean = false,
+    val backendProvider: String? = null,
+    val companionSupported: Boolean = false,
+    val companionSupportState: String? = null,
+    val companionSupportReason: String? = null,
+    val workspacePath: String? = null,
+    val workspaceResolved: Boolean = false,
+    val workspaceAvailable: Boolean = false,
+    val read: ThreadCapabilityFlag? = null,
+    val liveUpdates: ThreadCapabilityFlag? = null,
+    val turnStart: ThreadCapabilityFlag? = null,
+    val turnInterrupt: ThreadCapabilityFlag? = null,
+    val approvalResponses: ThreadCapabilityFlag? = null,
+    val userInputResponses: ThreadCapabilityFlag? = null,
+    val toolInputResponses: ThreadCapabilityFlag? = null,
+    val checkpointRollback: ThreadCapabilityFlag? = null,
+)
+
+data class ThreadCapabilityFlag(
+    val supported: Boolean,
+    val reason: String? = null,
+)
 
 data class WorkspacePathSummary(
     val path: String,

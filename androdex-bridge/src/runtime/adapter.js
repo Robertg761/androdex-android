@@ -4,14 +4,13 @@
 // Exports: createRuntimeAdapter
 // Depends on: ../codex/transport, ./method-policy, ./t3-protocol, ./t3-suitability, ./target-config
 
-const fs = require("fs");
-const path = require("path");
 const { createCodexTransport } = require("../codex/transport");
 const {
   applyT3EventsToSnapshot,
   buildT3ThreadListResult,
   buildT3ThreadReadResult,
   createEmptyT3Snapshot,
+  describeT3ThreadCapabilities,
 } = require("./t3-read-model");
 const {
   buildRuntimeTargetMethodRejectionMessage,
@@ -573,6 +572,7 @@ function createT3ServerRuntimeAdapter({
     }
 
     const created = {
+      notificationFingerprintByActivityId: new Map(),
       taskItemIdsByTaskId: new Map(),
       toolItemIdsByKey: new Map(),
     };
@@ -729,6 +729,7 @@ function createT3ServerRuntimeAdapter({
             resumed: true,
             liveUpdatesAttached: true,
             reason: "The read-only T3 adapter attached bridge-managed live updates for this T3 thread.",
+            threadCapabilities: resumeSupport.threadCapabilities,
           });
         })
         .catch((error) => {
@@ -843,26 +844,26 @@ function resolveT3ResumeSupport(snapshot, threadId) {
     throw new Error(`T3 thread not found: ${normalizedThreadId}`);
   }
 
-  if (!isT3ThreadEligibleForLiveUpdates(snapshot, thread)) {
-    const provider = normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase();
-    const workspacePath = resolveT3ThreadWorkspacePath(snapshot, thread);
+  const threadCapabilities = describeT3ThreadCapabilities({
+    snapshot,
+    thread,
+  });
+  if (!threadCapabilities.liveUpdates.supported) {
     return {
       ok: false,
       result: {
         ok: false,
         resumed: false,
         liveUpdatesAttached: false,
-        reason: provider && provider !== "codex"
-          ? `The read-only T3 adapter only attaches live updates for Codex-backed threads; this thread uses ${provider}.`
-          : workspacePath
-            ? "The read-only T3 adapter only attaches live updates for threads whose local workspace mapping still resolves."
-            : "The read-only T3 adapter only attaches live updates for threads with a usable local workspace mapping.",
+        reason: threadCapabilities.liveUpdates.reason,
+        threadCapabilities,
       },
     };
   }
 
   return {
     ok: true,
+    threadCapabilities,
   };
 }
 
@@ -946,36 +947,11 @@ function findT3Thread(snapshot, threadId) {
     normalizeNonEmptyString(thread?.id) === normalizedThreadId && !thread?.deletedAt) || null;
 }
 
-function findT3Project(snapshot, projectId) {
-  const normalizedProjectId = normalizeNonEmptyString(projectId);
-  if (!normalizedProjectId) {
-    return null;
-  }
-  const projects = Array.isArray(snapshot?.projects) ? snapshot.projects : [];
-  return projects.find((project) =>
-    normalizeNonEmptyString(project?.id) === normalizedProjectId && !project?.deletedAt) || null;
-}
-
-function resolveT3ThreadWorkspacePath(snapshot, thread) {
-  const worktreePath = normalizeNonEmptyString(thread?.worktreePath);
-  if (worktreePath) {
-    return worktreePath;
-  }
-  const project = findT3Project(snapshot, thread?.projectId);
-  return normalizeNonEmptyString(project?.workspaceRoot) || "";
-}
-
 function isT3ThreadEligibleForLiveUpdates(snapshot, thread) {
-  const provider = normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase();
-  if (provider && provider !== "codex") {
-    return false;
-  }
-
-  const workspacePath = resolveT3ThreadWorkspacePath(snapshot, thread);
-  if (!workspacePath) {
-    return false;
-  }
-  return pathExists(workspacePath);
+  return describeT3ThreadCapabilities({
+    snapshot,
+    thread,
+  }).liveUpdates.supported;
 }
 
 function findThreadMessage(thread, messageId) {
@@ -985,14 +961,6 @@ function findThreadMessage(thread, messageId) {
   }
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   return messages.find((message) => normalizeNonEmptyString(message?.id) === normalizedMessageId) || null;
-}
-
-function pathExists(candidatePath) {
-  try {
-    return fs.existsSync(path.normalize(candidatePath));
-  } catch {
-    return false;
-  }
 }
 
 function normalizeNonEmptyString(value) {
@@ -1018,15 +986,19 @@ function buildThreadActivityNotifications({
     if ((!steps || steps.length === 0) && !explanation) {
       return [];
     }
-    return [{
-      method: "turn/plan/updated",
-      params: {
-        threadId,
-        turnId,
-        ...(explanation ? { explanation } : {}),
-        ...(steps.length > 0 ? { steps } : {}),
-      },
-    }];
+    return dedupeActivityNotifications({
+      activity,
+      notifications: [{
+        method: "turn/plan/updated",
+        params: {
+          threadId,
+          turnId,
+          ...(explanation ? { explanation } : {}),
+          ...(steps.length > 0 ? { steps } : {}),
+        },
+      }],
+      threadActivityState,
+    });
   }
 
   if (kind === "task.progress" || kind === "task.completed") {
@@ -1047,15 +1019,19 @@ function buildThreadActivityNotifications({
         payload.summary,
       ]),
     });
-    return [{
-      method: kind === "task.completed" ? "item/completed" : "item/updated",
-      params: {
-        threadId,
-        turnId,
-        itemId,
-        item,
-      },
-    }];
+    return dedupeActivityNotifications({
+      activity,
+      notifications: [{
+        method: kind === "task.completed" ? "item/completed" : "item/updated",
+        params: {
+          threadId,
+          turnId,
+          itemId,
+          item,
+        },
+      }],
+      threadActivityState,
+    });
   }
 
   if (kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed") {
@@ -1073,18 +1049,48 @@ function buildThreadActivityNotifications({
         : normalizeNonEmptyString(payload.status) || "in_progress",
       detail: normalizeNonEmptyString(payload.detail),
     });
-    return [{
-      method: kind === "tool.completed" ? "item/completed" : "item/updated",
-      params: {
-        threadId,
-        turnId,
-        itemId,
-        item,
-      },
-    }];
+    return dedupeActivityNotifications({
+      activity,
+      notifications: [{
+        method: kind === "tool.completed" ? "item/completed" : "item/updated",
+        params: {
+          threadId,
+          turnId,
+          itemId,
+          item,
+        },
+      }],
+      threadActivityState,
+    });
   }
 
   return [];
+}
+
+function dedupeActivityNotifications({
+  activity,
+  notifications,
+  threadActivityState,
+}) {
+  const normalizedNotifications = Array.isArray(notifications)
+    ? notifications.filter(Boolean)
+    : [];
+  if (normalizedNotifications.length === 0) {
+    return [];
+  }
+
+  const activityId = normalizeNonEmptyString(activity?.id);
+  if (!activityId) {
+    return normalizedNotifications;
+  }
+
+  const fingerprint = JSON.stringify(normalizedNotifications);
+  const previousFingerprint = threadActivityState?.notificationFingerprintByActivityId?.get(activityId);
+  if (previousFingerprint === fingerprint) {
+    return [];
+  }
+  threadActivityState?.notificationFingerprintByActivityId?.set(activityId, fingerprint);
+  return normalizedNotifications;
 }
 
 function extractPlanStepsFromActivityPayload(payload) {

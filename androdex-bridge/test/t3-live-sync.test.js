@@ -1288,6 +1288,121 @@ test("T3 adapter keeps repeated same-command tool activities distinct within one
   assert.equal(responses[4].params.itemId, responses[2].params.itemId);
 });
 
+test("T3 adapter suppresses duplicate live activity notifications when the same activity id is replayed with a new sequence", async () => {
+  let subscriptionRequestId = null;
+  const firstPlanEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-plan-shared",
+        tone: "info",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        payload: {
+          explanation: "Same plan",
+          plan: [
+            { step: "Inspect files", status: "completed" },
+            { step: "Update bridge", status: "in_progress" },
+          ],
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const duplicatedPlanEvent = {
+    ...firstPlanEvent,
+    sequence: 9,
+    eventId: "event-9",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    payload: {
+      ...firstPlanEvent.payload,
+      activity: {
+        ...firstPlanEvent.payload.activity,
+        createdAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [firstPlanEvent, duplicatedPlanEvent],
+  });
+  await nextTick();
+
+  assert.equal(responses.length, 2);
+  assert.equal(responses[1].method, "turn/plan/updated");
+  assert.equal(responses[1].params.explanation, "Same plan");
+});
+
 test("T3 adapter clears transient replay failures and does not leak unhandled rejections during live recovery", async () => {
   let replayAttemptCount = 0;
   let subscriptionRequestId = null;
@@ -1617,4 +1732,213 @@ test("T3 adapter reconnects through snapshot plus replay after a transport resta
   assert.ok(threadReadResponse);
   assert.equal(threadReadResponse.result.thread.title, "Recovered after restart");
   assert.equal(threadReadResponse.result.thread.turns[0].items[1].content[0].text, "Seen before restart");
+});
+
+test("T3 adapter reconnect replay does not duplicate prior plan/task/tool notifications and still emits the new activity completion", async () => {
+  let firstSubscriptionRequestId = null;
+  let secondSubscriptionRequestId = null;
+  let persistedSequence = 0;
+  const replayRequests = [];
+
+  const planUpdatedEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-plan-1",
+        tone: "info",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        payload: {
+          explanation: "Reconnect safely",
+          plan: [
+            { step: "Resume thread", status: "completed" },
+            { step: "Watch replay", status: "in_progress" },
+          ],
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const toolStartedEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-tool-start",
+        tone: "tool",
+        kind: "tool.started",
+        summary: "Run tests started",
+        payload: {
+          itemType: "command_execution",
+          detail: "npm test",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+  const toolCompletedEvent = {
+    sequence: 10,
+    eventId: "event-10",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:10.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-tool-complete",
+        tone: "tool",
+        kind: "tool.completed",
+        summary: "Run tests",
+        payload: {
+          itemType: "command_execution",
+          detail: "npm test",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:10.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      if (socket.connectionIndex === 0) {
+        firstSubscriptionRequestId = message.id;
+      } else {
+        secondSubscriptionRequestId = message.id;
+      }
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+      return;
+    }
+
+    if (message.tag === "orchestration.replayEvents") {
+      replayRequests.push({
+        connectionIndex: socket.connectionIndex,
+        fromSequenceExclusive: message.payload.fromSequenceExclusive,
+      });
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, [
+          planUpdatedEvent,
+          toolStartedEvent,
+          toolCompletedEvent,
+        ]);
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+    loadReplayCursor() {
+      return persistedSequence;
+    },
+    persistReplayCursor(scope) {
+      persistedSequence = scope.sequence;
+    },
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const firstSocket = WebSocketImpl.instances[0];
+  assert.ok(firstSocket);
+  assert.ok(firstSubscriptionRequestId);
+  firstSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: firstSubscriptionRequestId,
+    values: [planUpdatedEvent, toolStartedEvent],
+  });
+  await nextTick();
+
+  const firstPlanNotification = responses.find((entry) => entry.method === "turn/plan/updated");
+  const firstToolStartNotification = responses.find((entry) => entry.method === "item/updated");
+  assert.ok(firstPlanNotification);
+  assert.ok(firstToolStartNotification);
+  assert.equal(firstToolStartNotification.params.item.command, "npm test");
+  assert.equal(persistedSequence, 9);
+
+  firstSocket.close(1012, "service restart");
+  await waitFor(() => WebSocketImpl.instances.length >= 2);
+  await waitFor(() => secondSubscriptionRequestId !== null);
+  await waitFor(() => persistedSequence === 10);
+
+  const planNotifications = responses.filter((entry) => entry.method === "turn/plan/updated");
+  const toolUpdatedNotifications = responses.filter((entry) => entry.method === "item/updated");
+  const toolCompletedNotifications = responses.filter((entry) => entry.method === "item/completed");
+
+  assert.deepEqual(replayRequests, [
+    {
+      connectionIndex: 1,
+      fromSequenceExclusive: 7,
+    },
+  ]);
+  assert.equal(planNotifications.length, 1);
+  assert.equal(toolUpdatedNotifications.length, 1);
+  assert.equal(toolCompletedNotifications.length, 1);
+  assert.equal(toolCompletedNotifications[0].params.item.command, "npm test");
+  assert.equal(toolCompletedNotifications[0].params.itemId, firstToolStartNotification.params.itemId);
 });

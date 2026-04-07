@@ -14,7 +14,7 @@ const snapshot = {
     {
       id: "project-1",
       title: "Project One",
-      workspaceRoot: "/tmp/project-one",
+      workspaceRoot: "/tmp",
       createdAt: "2026-04-07T11:00:00.000Z",
       updatedAt: "2026-04-07T11:30:00.000Z",
       deletedAt: null,
@@ -32,7 +32,7 @@ const snapshot = {
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: "main",
-      worktreePath: "/tmp/project-one",
+      worktreePath: "/tmp",
       latestTurn: {
         turnId: "turn-2",
         state: "completed",
@@ -81,7 +81,7 @@ const snapshot = {
       runtimeMode: "approval-required",
       interactionMode: "plan",
       branch: null,
-      worktreePath: "/tmp/project-one",
+      worktreePath: "/tmp",
       latestTurn: null,
       createdAt: "2026-04-07T10:00:00.000Z",
       updatedAt: "2026-04-07T10:30:00.000Z",
@@ -105,9 +105,17 @@ test("buildT3ThreadListResult maps snapshot threads into the Android summary con
   assert.equal(result.data.length, 2);
   assert.equal(result.data[0].id, "thread-codex");
   assert.equal(result.data[0].title, "Fix bug");
-  assert.equal(result.data[0].cwd, "/tmp/project-one");
+  assert.equal(result.data[0].cwd, "/tmp");
   assert.equal(result.data[0].model, "gpt-5.4");
+  assert.equal(result.data[0].threadCapabilities.companionSupportState, "supported");
+  assert.equal(result.data[0].threadCapabilities.liveUpdates.supported, true);
+  assert.equal(result.data[0].threadCapabilities.turnStart.supported, false);
+  assert.equal(result.data[0].threadCapabilities.toolInputResponses.supported, false);
+  assert.equal(result.data[0].backendProvider, "codex");
   assert.match(result.data[1].preview, /unsupported t3 provider/i);
+  assert.equal(result.data[1].threadCapabilities.companionSupportState, "unsupported_provider");
+  assert.equal(result.data[1].threadCapabilities.liveUpdates.supported, false);
+  assert.match(result.data[1].threadCapabilities.liveUpdates.reason, /only attaches live updates for codex-backed threads/i);
   assert.equal(result.nextCursor, null);
 });
 
@@ -130,11 +138,35 @@ test("buildT3ThreadReadResult synthesizes turns/items that Android can decode", 
   });
 
   assert.equal(result.thread.id, "thread-codex");
+  assert.equal(result.thread.threadCapabilities.companionSupportState, "supported");
   assert.equal(result.thread.turns.length, 1);
   assert.equal(result.thread.turns[0].id, "turn-2");
   assert.equal(result.thread.turns[0].status, "completed");
   assert.equal(result.thread.turns[0].items[0].type, "user_message");
   assert.equal(result.thread.turns[0].items[1].type, "assistant_message");
+});
+
+test("buildT3ThreadReadResult exposes explicit capability metadata for orphaned supported threads", () => {
+  const orphanedSnapshot = {
+    ...snapshot,
+    threads: [
+      {
+        ...snapshot.threads[0],
+        id: "thread-orphaned",
+        worktreePath: "/tmp/androdex-missing-worktree",
+      },
+    ],
+  };
+
+  const result = buildT3ThreadReadResult({
+    snapshot: orphanedSnapshot,
+    threadId: "thread-orphaned",
+  });
+
+  assert.equal(result.thread.threadCapabilities.companionSupportState, "workspace_unavailable");
+  assert.equal(result.thread.threadCapabilities.liveUpdates.supported, false);
+  assert.match(result.thread.threadCapabilities.liveUpdates.reason, /recorded local workspace path no longer resolves/i);
+  assert.equal(result.thread.threadCapabilities.workspacePath, "/tmp/androdex-missing-worktree");
 });
 
 test("buildT3ThreadReadResult preserves image attachments as structured content", () => {

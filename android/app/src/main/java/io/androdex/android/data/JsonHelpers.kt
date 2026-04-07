@@ -35,6 +35,8 @@ import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadTokenUsage
+import io.androdex.android.model.ThreadCapabilities
+import io.androdex.android.model.ThreadCapabilityFlag
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
@@ -162,6 +164,12 @@ internal fun decodeThreadSummarySpec(values: Map<String, Any?>): ThreadSummary? 
     val title = values.stringOrNull("name", "title", "preview") ?: "Conversation"
     val preview = values.stringOrNull("preview")
     val cwd = values.stringOrNull("cwd", "current_working_directory", "working_directory")
+    val threadCapabilities = values.mapOrNull(
+        "threadCapabilities",
+        "thread_capabilities",
+        "bridgeCapabilities",
+        "bridge_capabilities",
+    )?.let(::decodeThreadCapabilitiesSpec)
     val createdAt = parseTimestamp(
         values["createdAt"] ?: values["created_at"]
     )
@@ -186,6 +194,43 @@ internal fun decodeThreadSummarySpec(values: Map<String, Any?>): ThreadSummary? 
         agentNickname = values.stringOrNull("agentNickname", "agent_nickname"),
         agentRole = values.stringOrNull("agentRole", "agent_role", "agentType", "agent_type"),
         model = values.stringOrNull("model", "modelName", "model_name", "modelProvider", "model_provider"),
+        backendProvider = values.stringOrNull("backendProvider", "backend_provider")
+            ?: threadCapabilities?.backendProvider,
+        threadCapabilities = threadCapabilities,
+    )
+}
+
+private fun decodeThreadCapabilitiesSpec(values: Map<String, Any?>): ThreadCapabilities {
+    return ThreadCapabilities(
+        readOnly = values["readOnly"] as? Boolean ?: values["read_only"] as? Boolean ?: false,
+        backendProvider = values.stringOrNull("backendProvider", "backend_provider"),
+        companionSupported = values["companionSupported"] as? Boolean
+            ?: values["companion_supported"] as? Boolean
+            ?: false,
+        companionSupportState = values.stringOrNull("companionSupportState", "companion_support_state"),
+        companionSupportReason = values.stringOrNull("companionSupportReason", "companion_support_reason"),
+        workspacePath = values.stringOrNull("workspacePath", "workspace_path"),
+        workspaceResolved = values["workspaceResolved"] as? Boolean
+            ?: values["workspace_resolved"] as? Boolean
+            ?: false,
+        workspaceAvailable = values["workspaceAvailable"] as? Boolean
+            ?: values["workspace_available"] as? Boolean
+            ?: false,
+        read = values.mapOrNull("read")?.let(::decodeThreadCapabilityFlagSpec),
+        liveUpdates = values.mapOrNull("liveUpdates", "live_updates")?.let(::decodeThreadCapabilityFlagSpec),
+        turnStart = values.mapOrNull("turnStart", "turn_start")?.let(::decodeThreadCapabilityFlagSpec),
+        turnInterrupt = values.mapOrNull("turnInterrupt", "turn_interrupt")?.let(::decodeThreadCapabilityFlagSpec),
+        approvalResponses = values.mapOrNull("approvalResponses", "approval_responses")?.let(::decodeThreadCapabilityFlagSpec),
+        userInputResponses = values.mapOrNull("userInputResponses", "user_input_responses")?.let(::decodeThreadCapabilityFlagSpec),
+        toolInputResponses = values.mapOrNull("toolInputResponses", "tool_input_responses")?.let(::decodeThreadCapabilityFlagSpec),
+        checkpointRollback = values.mapOrNull("checkpointRollback", "checkpoint_rollback")?.let(::decodeThreadCapabilityFlagSpec),
+    )
+}
+
+private fun decodeThreadCapabilityFlagSpec(values: Map<String, Any?>): ThreadCapabilityFlag {
+    return ThreadCapabilityFlag(
+        supported = values["supported"] as? Boolean ?: false,
+        reason = values.stringOrNull("reason"),
     )
 }
 
