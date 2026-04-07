@@ -665,6 +665,154 @@ test("T3 adapter emits a fresh turn/started when T3 swaps the active running tur
   assert.equal(responses[2].params.turnId, "turn-2");
 });
 
+test("T3 adapter suppresses duplicate resumed-thread turn lifecycle notifications for the same turn state", async () => {
+  let subscriptionRequestId = null;
+  const runningSessionEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "running",
+        activeTurnId: "turn-2",
+        updatedAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const duplicateRunningSessionEvent = {
+    ...runningSessionEvent,
+    sequence: 9,
+    eventId: "event-9",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    payload: {
+      ...runningSessionEvent.payload,
+      session: {
+        ...runningSessionEvent.payload.session,
+        updatedAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+  const completedSessionEvent = {
+    sequence: 10,
+    eventId: "event-10",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:10.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "ready",
+        activeTurnId: null,
+        updatedAt: "2026-04-07T12:00:10.000Z",
+      },
+    },
+  };
+  const duplicateCompletedSessionEvent = {
+    ...completedSessionEvent,
+    sequence: 11,
+    eventId: "event-11",
+    occurredAt: "2026-04-07T12:00:11.000Z",
+    payload: {
+      ...completedSessionEvent.payload,
+      session: {
+        ...completedSessionEvent.payload.session,
+        updatedAt: "2026-04-07T12:00:11.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [
+      runningSessionEvent,
+      duplicateRunningSessionEvent,
+      completedSessionEvent,
+      duplicateCompletedSessionEvent,
+    ],
+  });
+  await nextTick();
+
+  const turnStartedNotifications = responses.filter((entry) => entry.method === "turn/started");
+  const turnCompletedNotifications = responses.filter((entry) => entry.method === "turn/completed");
+
+  assert.equal(turnStartedNotifications.length, 1);
+  assert.equal(turnStartedNotifications[0].params.turnId, "turn-2");
+  assert.equal(turnCompletedNotifications.length, 1);
+  assert.equal(turnCompletedNotifications[0].params.turnId, "turn-2");
+  assert.equal(turnCompletedNotifications[0].params.status, "completed");
+});
+
 test("T3 adapter stops emitting live notifications after a resumed thread becomes unsupported", async () => {
   let subscriptionRequestId = null;
   const providerSwitchEvent = {
@@ -1941,4 +2089,166 @@ test("T3 adapter reconnect replay does not duplicate prior plan/task/tool notifi
   assert.equal(toolCompletedNotifications.length, 1);
   assert.equal(toolCompletedNotifications[0].params.item.command, "npm test");
   assert.equal(toolCompletedNotifications[0].params.itemId, firstToolStartNotification.params.itemId);
+});
+
+test("T3 adapter reconnect replay does not duplicate prior turn lifecycle notifications and still emits the new completion", async () => {
+  let firstSubscriptionRequestId = null;
+  let secondSubscriptionRequestId = null;
+  let persistedSequence = 0;
+  const replayRequests = [];
+
+  const runningSessionEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "running",
+        activeTurnId: "turn-2",
+        updatedAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const completedSessionEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "ready",
+        activeTurnId: null,
+        updatedAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      if (socket.connectionIndex === 0) {
+        firstSubscriptionRequestId = message.id;
+      } else {
+        secondSubscriptionRequestId = message.id;
+      }
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+      return;
+    }
+
+    if (message.tag === "orchestration.replayEvents") {
+      replayRequests.push({
+        connectionIndex: socket.connectionIndex,
+        fromSequenceExclusive: message.payload.fromSequenceExclusive,
+      });
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, [
+          runningSessionEvent,
+          completedSessionEvent,
+        ]);
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+    loadReplayCursor() {
+      return persistedSequence;
+    },
+    persistReplayCursor(scope) {
+      persistedSequence = scope.sequence;
+    },
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const firstSocket = WebSocketImpl.instances[0];
+  assert.ok(firstSocket);
+  assert.ok(firstSubscriptionRequestId);
+  firstSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: firstSubscriptionRequestId,
+    values: [runningSessionEvent],
+  });
+  await nextTick();
+
+  assert.equal(
+    responses.filter((entry) => entry.method === "turn/started").length,
+    1,
+  );
+  assert.equal(persistedSequence, 8);
+
+  firstSocket.close(1012, "service restart");
+  await waitFor(() => WebSocketImpl.instances.length >= 2);
+  await waitFor(() => secondSubscriptionRequestId !== null);
+  await waitFor(() => persistedSequence === 9);
+
+  const turnStartedNotifications = responses.filter((entry) => entry.method === "turn/started");
+  const turnCompletedNotifications = responses.filter((entry) => entry.method === "turn/completed");
+
+  assert.deepEqual(replayRequests, [
+    {
+      connectionIndex: 1,
+      fromSequenceExclusive: 7,
+    },
+  ]);
+  assert.equal(turnStartedNotifications.length, 1);
+  assert.equal(turnStartedNotifications[0].params.turnId, "turn-2");
+  assert.equal(turnCompletedNotifications.length, 1);
+  assert.equal(turnCompletedNotifications[0].params.turnId, "turn-2");
+  assert.equal(turnCompletedNotifications[0].params.status, "completed");
 });

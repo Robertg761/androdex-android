@@ -747,6 +747,9 @@ Status update:
   - stale Android actions now clear the matching stale pending/running state locally
   - selected threads force a fresh hydrate after stale approval/tool-input/interrupt failures so the phone catches back up to host state
   - the user now gets an explicit "already resolved on the host" message instead of a raw transport/runtime failure
+- expanded replay/idempotency coverage for resumed T3 live notifications:
+  - duplicate live-plus-replay delivery is now explicitly covered for turn lifecycle notifications in addition to the existing title, assistant, plan, task, and tool surfaces
+  - reconnect replay coverage now proves previously-emitted `turn/started` notifications do not re-fire after restart while new `turn/completed` notifications still surface
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
   - structured logging for attach, bootstrap, replay, and action-gating outcomes
@@ -926,6 +929,7 @@ Completed so far:
 - resumed-thread plan/task/tool notifications now suppress duplicate emissions when the same T3 activity id is re-delivered, and reconnect regression coverage now proves old activity notifications stay suppressed while newly replayed completions still surface with stable item identity
 - T3 summaries, reads, and resume responses now carry explicit bridge capability metadata for companion support state, workspace availability, live-update eligibility, and read-only action gating so Android no longer has to infer unsupported/orphaned state from preview text alone
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
+- replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 
 Still in progress:
 
