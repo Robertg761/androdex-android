@@ -3,6 +3,7 @@ package io.androdex.android.service
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.data.AndrodexRepositoryContract
 import io.androdex.android.model.ApprovalRequest
+import io.androdex.android.model.AccessMode
 import io.androdex.android.model.CollaborationModeKind
 import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ConnectionStatus
@@ -23,12 +24,19 @@ import io.androdex.android.model.GitRemoveWorktreeResult
 import io.androdex.android.model.GitRepoDiffResult
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.GitWorktreeChangeTransferMode
+import io.androdex.android.model.HostAccountSnapshot
+import io.androdex.android.model.HostAccountStatus
+import io.androdex.android.model.HostRuntimeMetadata
 import io.androdex.android.model.ImageAttachment
+import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
+import io.androdex.android.model.ReasoningEffortOption
+import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadLoadResult
+import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputQuestion
@@ -2586,6 +2594,413 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun connectionUpdate_runtimeTargetChangeClearsSelectedThreadAndPendingThreadState() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-new", "New target thread", null, "/workspace/new", 1_000L, 2_000L),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-old", "Old target thread", null, "/workspace/old", 1_000L, 1_500L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-old",
+                        threadId = "thread-old",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Old target message",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-old",
+                        itemId = "item-old",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-old",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        val oldRuntimeMetadata = HostRuntimeMetadata(
+            runtimeTarget = "codex-native",
+            runtimeTargetDisplayName = "Codex Native",
+            backendProvider = "codex-native",
+            backendProviderDisplayName = "Codex Native",
+        )
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = listOf(
+                    ModelOption(
+                        id = "gpt-5.4",
+                        model = "gpt-5.4",
+                        displayName = "GPT-5.4",
+                        description = "Primary",
+                        isDefault = true,
+                        supportedReasoningEfforts = listOf(
+                            ReasoningEffortOption("medium", "Balanced"),
+                            ReasoningEffortOption("high", "Deep"),
+                        ),
+                        defaultReasoningEffort = "medium",
+                    )
+                ),
+                selectedModelId = "gpt-5.4",
+                selectedReasoningEffort = "high",
+                selectedAccessMode = AccessMode.FULL_ACCESS,
+                selectedServiceTier = ServiceTier.FAST,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = mapOf(
+                    "thread-old" to ThreadRuntimeOverride(
+                        reasoningEffort = "high",
+                        serviceTierRawValue = "fast",
+                        overridesReasoning = true,
+                        overridesServiceTier = true,
+                    )
+                ),
+                runtimeMetadata = oldRuntimeMetadata,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.AccountStatusLoaded(
+                snapshot = HostAccountSnapshot(
+                    status = HostAccountStatus.AUTHENTICATED,
+                    email = "host@example.com",
+                    planType = "pro",
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-old", "Old target thread", null, "/workspace/old", 1_000L, 1_500L),
+                )
+            )
+        )
+        service.openThread("thread-old")
+        advanceUntilIdle()
+
+        val approval = ApprovalRequest(
+            idValue = "approval-1",
+            method = "item/commandExecution/requestApproval",
+            command = "rm -rf /tmp/old",
+            reason = "Old target approval",
+            threadId = "thread-old",
+            turnId = "turn-old",
+        )
+        val toolInput = ToolUserInputRequest(
+            idValue = "tool-input-1",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-old",
+            turnId = "turn-old",
+            itemId = "item-old",
+            title = "Pick branch",
+            message = "Choose one",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch?",
+                    options = emptyList(),
+                    isOther = true,
+                )
+            ),
+            rawPayload = "{}",
+        )
+        repository.emit(ClientUpdate.ApprovalRequested(approval))
+        repository.emit(ClientUpdate.ToolUserInputRequested(toolInput))
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.HANDSHAKING,
+                detail = "Switching to new runtime target",
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                    backendProvider = "t3-server",
+                    backendProviderDisplayName = "T3 Server",
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertNull(service.state.value.selectedThreadId)
+        assertNull(service.state.value.pendingApproval)
+        assertTrue(service.state.value.pendingToolInputsByThread.isEmpty())
+        assertTrue(service.state.value.timelineByThread.isEmpty())
+        assertNull(service.state.value.hostAccountSnapshot)
+        assertTrue(service.state.value.availableModels.isEmpty())
+        assertNull(service.state.value.selectedModelId)
+        assertNull(service.state.value.selectedReasoningEffort)
+        assertEquals(AccessMode.ON_REQUEST, service.state.value.selectedAccessMode)
+        assertNull(service.state.value.selectedServiceTier)
+        assertFalse(service.state.value.supportsServiceTier)
+        assertFalse(service.state.value.supportsThreadCompaction)
+        assertFalse(service.state.value.supportsThreadRollback)
+        assertFalse(service.state.value.supportsBackgroundTerminalCleanup)
+        assertFalse(service.state.value.supportsThreadFork)
+        assertTrue(service.state.value.collaborationModes.isEmpty())
+        assertTrue(service.state.value.threadRuntimeOverridesByThread.isEmpty())
+    }
+
+    @Test
+    fun connectionUpdate_runtimeTargetChangeIgnoresLateRefreshAndWorkspaceLoadsFromPreviousTarget() = runTest {
+        val repository = FakeRepository().apply {
+            refreshedThreads = listOf(
+                ThreadSummary("thread-new", "New target thread", null, "/workspace/new", 2_000L, 2_500L),
+            )
+            refreshThreadsDelayMs = 1_000L
+            queuedRefreshThreadsResults += listOf(
+                ThreadSummary("thread-old", "Old target thread", null, "/workspace/old", 1_000L, 1_500L),
+            )
+            queuedRefreshThreadsDelaysMs += 100L
+            recentState = WorkspaceRecentState(
+                activeCwd = "/workspace/new",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/workspace/new", "new", isActive = true),
+                ),
+            )
+            listRecentWorkspacesDelayMs = 1_000L
+            queuedRecentStates += WorkspaceRecentState(
+                activeCwd = "/workspace/old",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/workspace/old", "old", isActive = true),
+                ),
+            )
+            queuedListRecentWorkspacesDelaysMs += 100L
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "codex-native",
+                    runtimeTargetDisplayName = "Codex Native",
+                    backendProvider = "codex-native",
+                    backendProviderDisplayName = "Codex Native",
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        val oldRefresh = backgroundScope.launch {
+            service.refreshThreads()
+        }
+        runCurrent()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected to new runtime target",
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                    backendProvider = "t3-server",
+                    backendProviderDisplayName = "T3 Server",
+                ),
+            )
+        )
+
+        advanceTimeBy(100L)
+        runCurrent()
+
+        assertTrue(service.state.value.threads.isEmpty())
+        assertNull(service.state.value.activeWorkspacePath)
+
+        advanceTimeBy(100L)
+        runCurrent()
+
+        assertTrue(service.state.value.threads.isEmpty())
+        assertNull(service.state.value.activeWorkspacePath)
+
+        val newRefresh = backgroundScope.launch {
+            service.refreshThreads()
+        }
+        runCurrent()
+        advanceUntilIdle()
+        oldRefresh.join()
+        newRefresh.join()
+
+        assertEquals(listOf("thread-new"), service.state.value.threads.map { it.id })
+        assertEquals("/workspace/new", service.state.value.activeWorkspacePath)
+    }
+
+    @Test
+    fun runtimeConfigLoaded_runtimeTargetChangeRestoresOnlyNewScopeState() = runTest {
+        val oldRuntimeMetadata = HostRuntimeMetadata(
+            runtimeTarget = "codex-native",
+            runtimeTargetDisplayName = "Codex Native",
+            backendProvider = "codex-native",
+            backendProviderDisplayName = "Codex Native",
+        )
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-1::codex-native"
+            persistedThreadTimelinesByScope = mapOf(
+                "host-1::codex-native" to mapOf(
+                    "thread-old" to listOf(
+                        ConversationMessage(
+                            id = "old-message",
+                            threadId = "thread-old",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "Old scope message",
+                            createdAtEpochMs = 1_000L,
+                            turnId = "turn-old",
+                            itemId = "item-old",
+                        )
+                    )
+                ),
+                "host-1::t3-server" to mapOf(
+                    "thread-new" to listOf(
+                        ConversationMessage(
+                            id = "new-message",
+                            threadId = "thread-new",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "New scope message",
+                            createdAtEpochMs = 2_000L,
+                            turnId = "turn-new",
+                            itemId = "item-new",
+                        )
+                    )
+                ),
+            )
+            refreshedThreads = listOf(
+                ThreadSummary("thread-new", "New target thread", null, "/workspace/new", 2_000L, 2_500L),
+            )
+            recentState = WorkspaceRecentState(
+                activeCwd = "/workspace/new",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/workspace/new", "new", isActive = true),
+                ),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-old", "Old target thread", null, "/workspace/old", 1_000L, 1_500L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "selected-old",
+                        threadId = "thread-old",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Selected old thread",
+                        createdAtEpochMs = 1_500L,
+                        turnId = "turn-old",
+                        itemId = "item-selected-old",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-old",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = listOf(
+                    ModelOption(
+                        id = "gpt-5.4",
+                        model = "gpt-5.4",
+                        displayName = "GPT-5.4",
+                        description = "Primary",
+                        isDefault = true,
+                        supportedReasoningEfforts = emptyList(),
+                        defaultReasoningEffort = null,
+                    )
+                ),
+                selectedModelId = "gpt-5.4",
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = ServiceTier.FAST,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = mapOf(
+                    "thread-old" to ThreadRuntimeOverride(
+                        reasoningEffort = "medium",
+                        serviceTierRawValue = "fast",
+                        overridesReasoning = true,
+                        overridesServiceTier = true,
+                    )
+                ),
+                runtimeMetadata = oldRuntimeMetadata,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-old", "Old target thread", null, "/workspace/old", 1_000L, 1_500L),
+                )
+            )
+        )
+        service.openThread("thread-old")
+        advanceUntilIdle()
+
+        repository.currentThreadTimelineScopeKeyValue = "host-1::t3-server"
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                    backendProvider = "t3-server",
+                    backendProviderDisplayName = "T3 Server",
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertNull(service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("New scope message"),
+            service.state.value.timelineByThread["thread-new"].orEmpty().map { it.text },
+        )
+        assertTrue(service.state.value.threadRuntimeOverridesByThread.isEmpty())
+    }
+
+    @Test
     fun openThread_reloadsHydratedRunningThreadToCatchUp() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(
@@ -5040,6 +5455,9 @@ private class FakeRepository : AndrodexRepositoryContract {
     var reconnectSavedAction: (() -> Unit)? = null
     var refreshThreadsCalls = 0
     var listRecentWorkspacesCalls = 0
+    var listRecentWorkspacesDelayMs: Long = 0L
+    val queuedRecentStates = ArrayDeque<WorkspaceRecentState>()
+    val queuedListRecentWorkspacesDelaysMs = ArrayDeque<Long>()
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -5089,6 +5507,8 @@ private class FakeRepository : AndrodexRepositoryContract {
     var refreshThreadsError: Throwable? = null
     var refreshedThreads: List<ThreadSummary> = emptyList()
     var refreshThreadsDelayMs: Long = 0L
+    val queuedRefreshThreadsResults = ArrayDeque<List<ThreadSummary>>()
+    val queuedRefreshThreadsDelaysMs = ArrayDeque<Long>()
     var loadThreadDelayMs: Long = 0L
     var refreshThreadsObservedWhileLoadThreadInFlight = false
     private var loadThreadInFlightCount = 0
@@ -5103,10 +5523,19 @@ private class FakeRepository : AndrodexRepositoryContract {
         }
         refreshThreadsCalls += 1
         refreshThreadsError?.let { throw it }
-        if (refreshThreadsDelayMs > 0) {
-            delay(refreshThreadsDelayMs)
+        val delayMs = if (queuedRefreshThreadsDelaysMs.isNotEmpty()) {
+            queuedRefreshThreadsDelaysMs.removeFirst()
+        } else {
+            refreshThreadsDelayMs
         }
-        return refreshedThreads
+        if (delayMs > 0) {
+            delay(delayMs)
+        }
+        return if (queuedRefreshThreadsResults.isNotEmpty()) {
+            queuedRefreshThreadsResults.removeFirst()
+        } else {
+            refreshedThreads
+        }
     }
 
     override suspend fun startThread(preferredProjectPath: String?): ThreadSummary {
@@ -5291,7 +5720,19 @@ private class FakeRepository : AndrodexRepositoryContract {
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
         listRecentWorkspacesCalls += 1
-        return recentState
+        val delayMs = if (queuedListRecentWorkspacesDelaysMs.isNotEmpty()) {
+            queuedListRecentWorkspacesDelaysMs.removeFirst()
+        } else {
+            listRecentWorkspacesDelayMs
+        }
+        if (delayMs > 0) {
+            delay(delayMs)
+        }
+        return if (queuedRecentStates.isNotEmpty()) {
+            queuedRecentStates.removeFirst()
+        } else {
+            recentState
+        }
     }
 
     override suspend fun listWorkspaceDirectory(path: String?): WorkspaceBrowseResult {

@@ -470,8 +470,9 @@ class AndrodexService(
     }
 
     suspend fun refreshThreads() {
-        refreshThreadsInternal()
-        loadWorkspaceState()
+        val expectedContextRevision = threadSessionContextRevision.get()
+        refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
+        loadWorkspaceState(expectedContextRevision = expectedContextRevision)
     }
 
     suspend fun openThread(
@@ -765,14 +766,23 @@ class AndrodexService(
         }
     }
 
-    suspend fun loadRuntimeConfig() {
+    suspend fun loadRuntimeConfig(
+        expectedContextRevision: Long = threadSessionContextRevision.get(),
+    ) {
+        if (expectedContextRevision != threadSessionContextRevision.get()) {
+            return
+        }
         stateFlow.update { it.copy(isLoadingRuntimeConfig = true) }
         try {
             repository.loadRuntimeConfig()
         } catch (error: Throwable) {
-            reportError(error.message ?: "Failed to load runtime settings.")
+            if (expectedContextRevision == threadSessionContextRevision.get()) {
+                reportError(error.message ?: "Failed to load runtime settings.")
+            }
         } finally {
-            stateFlow.update { it.copy(isLoadingRuntimeConfig = false) }
+            if (expectedContextRevision == threadSessionContextRevision.get()) {
+                stateFlow.update { it.copy(isLoadingRuntimeConfig = false) }
+            }
         }
     }
 
@@ -882,8 +892,13 @@ class AndrodexService(
         ensureThreadHydrated(forkedThread.id, forceRefresh = true)
     }
 
-    suspend fun loadWorkspaceState() {
+    suspend fun loadWorkspaceState(
+        expectedContextRevision: Long = threadSessionContextRevision.get(),
+    ) {
         val recent = repository.listRecentWorkspaces()
+        if (expectedContextRevision != threadSessionContextRevision.get()) {
+            return
+        }
         stateFlow.update {
             it.copy(
                 activeWorkspacePath = recent.activeCwd,
@@ -955,7 +970,13 @@ class AndrodexService(
         }
     }
 
-    private suspend fun refreshThreadsInternal(allowDuringSelectedThreadLoad: Boolean = false) {
+    private suspend fun refreshThreadsInternal(
+        allowDuringSelectedThreadLoad: Boolean = false,
+        expectedContextRevision: Long = threadSessionContextRevision.get(),
+    ) {
+        if (expectedContextRevision != threadSessionContextRevision.get()) {
+            return
+        }
         if (!allowDuringSelectedThreadLoad && isSelectedThreadLoadInFlight()) {
             deferredThreadListRefreshPending = true
             return
@@ -966,8 +987,14 @@ class AndrodexService(
             val threads = threadCollectionRequestMutex.withLock {
                 repository.refreshThreads()
             }
+            if (expectedContextRevision != threadSessionContextRevision.get()) {
+                return
+            }
             applyLoadedThreads(threads)
         } finally {
+            if (expectedContextRevision != threadSessionContextRevision.get()) {
+                return
+            }
             val elapsedMs = System.currentTimeMillis() - startedAt
             val remainingMs = minimumThreadListLoadingVisibleMs - elapsedMs
             if (remainingMs > 0) {
@@ -978,9 +1005,10 @@ class AndrodexService(
     }
 
     private fun scheduleThreadCollectionsRefresh() {
+        val expectedContextRevision = threadSessionContextRevision.get()
         scope.launch {
-            runCatching { refreshThreadsInternal() }
-            runCatching { loadWorkspaceState() }
+            runCatching { refreshThreadsInternal(expectedContextRevision = expectedContextRevision) }
+            runCatching { loadWorkspaceState(expectedContextRevision = expectedContextRevision) }
         }
     }
 
@@ -1080,6 +1108,28 @@ class AndrodexService(
                 missingNotificationThreadPrompt = null,
                 pendingToolInputsByThread = emptyMap(),
             )
+        }
+    }
+
+    private fun invalidateRuntimeTargetScopedState() {
+        threadSessionContextRevision.incrementAndGet()
+        optimisticWorkspaceThreadIds.clear()
+        selectedThreadLoadCounts.clear()
+        deferredThreadListRefreshPending = false
+        subagentIdentityByThreadId.clear()
+        subagentIdentityByAgentId.clear()
+        replacePersistedThreadTimelineBaseline(emptyMap())
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            threadHydrationRequestMutex.withLock {
+                threadHydrationLoads.clear()
+                threadHydrationLoadContextRevisions.clear()
+                threadHydrationForceLoadRevisions.clear()
+                threadHydrationForceRequestRevisions.clear()
+                threadHydrationForceSatisfiedRevisions.clear()
+            }
+        }
+        stateFlow.update { current ->
+            current.clearRuntimeTargetScopedState()
         }
     }
 
@@ -1423,8 +1473,13 @@ class AndrodexService(
     internal fun processClientUpdate(update: ClientUpdate) {
         when (update) {
             is ClientUpdate.Connection -> {
-                val previousStatus = stateFlow.value.connectionStatus
-                val freshPairingAttempt = stateFlow.value.freshPairingAttempt
+                val previousState = stateFlow.value
+                val previousStatus = previousState.connectionStatus
+                val runtimeTargetChanged = hasRuntimeTargetIdentityChanged(
+                    previous = previousState.hostRuntimeMetadata,
+                    next = update.runtimeMetadata,
+                )
+                val freshPairingAttempt = previousState.freshPairingAttempt
                 if (freshPairingAttempt != null) {
                     if (update.status == ConnectionStatus.RETRYING_SAVED_PAIRING) {
                         return
@@ -1436,6 +1491,9 @@ class AndrodexService(
                     ) {
                         return
                     }
+                }
+                if (runtimeTargetChanged) {
+                    invalidateRuntimeTargetScopedState()
                 }
                 stateFlow.update {
                     it.copy(
@@ -1451,13 +1509,17 @@ class AndrodexService(
                     ConnectionStatus.CONNECTED -> {
                         suppressSavedReconnect = false
                         cancelSavedReconnectRetry()
-                        if (previousStatus != ConnectionStatus.CONNECTED) {
+                        if (previousStatus != ConnectionStatus.CONNECTED && !runtimeTargetChanged) {
                             invalidateHydratedThreads()
                         }
+                        val expectedContextRevision = threadSessionContextRevision.get()
                         scope.launch {
-                            refreshThreadsInternal()
-                            loadRuntimeConfig()
-                            loadWorkspaceState()
+                            refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
+                            loadRuntimeConfig(expectedContextRevision = expectedContextRevision)
+                            loadWorkspaceState(expectedContextRevision = expectedContextRevision)
+                            if (expectedContextRevision != threadSessionContextRevision.get()) {
+                                return@launch
+                            }
                             recoverVisibleThreadState()
                             routePendingNotificationOpenIfPossible()
                         }
@@ -1548,6 +1610,13 @@ class AndrodexService(
             }
 
             is ClientUpdate.RuntimeConfigLoaded -> {
+                val runtimeTargetChanged = hasRuntimeTargetIdentityChanged(
+                    previous = stateFlow.value.hostRuntimeMetadata,
+                    next = update.runtimeMetadata,
+                )
+                if (runtimeTargetChanged) {
+                    invalidateRuntimeTargetScopedState()
+                }
                 stateFlow.update {
                     it.copy(
                         availableModels = update.models,
@@ -1566,6 +1635,18 @@ class AndrodexService(
                     )
                 }
                 restorePersistedThreadTimelinesForCurrentScope()
+                if (runtimeTargetChanged) {
+                    val expectedContextRevision = threadSessionContextRevision.get()
+                    scope.launch {
+                        refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
+                        loadWorkspaceState(expectedContextRevision = expectedContextRevision)
+                        if (expectedContextRevision != threadSessionContextRevision.get()) {
+                            return@launch
+                        }
+                        recoverVisibleThreadState()
+                        routePendingNotificationOpenIfPossible()
+                    }
+                }
             }
 
             is ClientUpdate.AccountStatusLoaded -> {
@@ -2376,6 +2457,52 @@ class AndrodexService(
         )
     }
 
+    private fun AndrodexServiceState.clearRuntimeTargetScopedState(): AndrodexServiceState {
+        return copy(
+            threads = emptyList(),
+            hasLoadedThreadList = false,
+            isLoadingThreadList = false,
+            selectedThreadId = null,
+            selectedThreadTitle = null,
+            threadTimelineStateByThread = emptyMap(),
+            hydratedThreadIds = emptySet(),
+            hydratedThreadVersions = emptyMap(),
+            hostAccountSnapshot = null,
+            isLoadingRuntimeConfig = false,
+            availableModels = emptyList(),
+            selectedModelId = null,
+            selectedReasoningEffort = null,
+            selectedAccessMode = AccessMode.ON_REQUEST,
+            selectedServiceTier = null,
+            supportsServiceTier = false,
+            supportsThreadCompaction = false,
+            supportsThreadRollback = false,
+            supportsBackgroundTerminalCleanup = false,
+            supportsThreadFork = false,
+            collaborationModes = emptySet(),
+            activeTurnIdByThread = emptyMap(),
+            runningThreadIds = emptySet(),
+            protectedRunningFallbackThreadIds = emptySet(),
+            readyThreadIds = emptySet(),
+            failedThreadIds = emptySet(),
+            latestTurnTerminalStateByThread = emptyMap(),
+            tokenUsageByThread = emptyMap(),
+            threadRuntimeOverridesByThread = emptyMap(),
+            activeWorkspacePath = null,
+            recentWorkspaces = emptyList(),
+            workspaceBrowserPath = null,
+            workspaceBrowserParentPath = null,
+            workspaceBrowserEntries = emptyList(),
+            isWorkspaceBrowserLoading = false,
+            pendingNotificationOpenThreadId = null,
+            pendingNotificationOpenTurnId = null,
+            focusedTurnId = null,
+            missingNotificationThreadPrompt = null,
+            pendingApproval = null,
+            pendingToolInputsByThread = emptyMap(),
+        )
+    }
+
     private fun prepareThreadForDisplay(threadId: String, targetThread: ThreadSummary?) {
         stateFlow.update { current ->
             current.copy(
@@ -2386,6 +2513,24 @@ class AndrodexService(
                 failedThreadIds = current.failedThreadIds - threadId,
             )
         }
+    }
+
+    private fun runtimeTargetIdentityKey(metadata: HostRuntimeMetadata?): String? {
+        return metadata?.runtimeTarget
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: metadata?.backendProvider
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun hasRuntimeTargetIdentityChanged(
+        previous: HostRuntimeMetadata?,
+        next: HostRuntimeMetadata?,
+    ): Boolean {
+        val previousKey = runtimeTargetIdentityKey(previous) ?: return false
+        val nextKey = runtimeTargetIdentityKey(next) ?: return false
+        return previousKey != nextKey
     }
 
     private suspend fun ensureThreadHydrated(
