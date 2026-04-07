@@ -1,0 +1,191 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const {
+  buildT3ThreadListResult,
+  buildT3ThreadReadResult,
+} = require("../src/runtime/t3-read-model");
+
+const snapshot = {
+  snapshotSequence: 12,
+  updatedAt: "2026-04-07T12:00:00.000Z",
+  projects: [
+    {
+      id: "project-1",
+      title: "Project One",
+      workspaceRoot: "/tmp/project-one",
+      createdAt: "2026-04-07T11:00:00.000Z",
+      updatedAt: "2026-04-07T11:30:00.000Z",
+      deletedAt: null,
+    },
+  ],
+  threads: [
+    {
+      id: "thread-codex",
+      projectId: "project-1",
+      title: "Fix bug",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "main",
+      worktreePath: "/tmp/project-one",
+      latestTurn: {
+        turnId: "turn-2",
+        state: "completed",
+        requestedAt: "2026-04-07T11:10:00.000Z",
+        startedAt: "2026-04-07T11:10:05.000Z",
+        completedAt: "2026-04-07T11:11:00.000Z",
+        assistantMessageId: "msg-2",
+      },
+      createdAt: "2026-04-07T11:00:00.000Z",
+      updatedAt: "2026-04-07T11:11:00.000Z",
+      archivedAt: null,
+      deletedAt: null,
+      messages: [
+        {
+          id: "msg-1",
+          role: "user",
+          text: "Please fix it",
+          turnId: "turn-2",
+          streaming: false,
+          createdAt: "2026-04-07T11:10:00.000Z",
+          updatedAt: "2026-04-07T11:10:00.000Z",
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          text: "Done",
+          turnId: "turn-2",
+          streaming: false,
+          createdAt: "2026-04-07T11:10:05.000Z",
+          updatedAt: "2026-04-07T11:11:00.000Z",
+        },
+      ],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    },
+    {
+      id: "thread-unsupported",
+      projectId: "project-1",
+      title: "Claude thread",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      branch: null,
+      worktreePath: "/tmp/project-one",
+      latestTurn: null,
+      createdAt: "2026-04-07T10:00:00.000Z",
+      updatedAt: "2026-04-07T10:30:00.000Z",
+      archivedAt: null,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    },
+  ],
+};
+
+test("buildT3ThreadListResult maps snapshot threads into the Android summary contract", () => {
+  const result = buildT3ThreadListResult({
+    snapshot,
+    limit: 10,
+  });
+
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data[0].id, "thread-codex");
+  assert.equal(result.data[0].title, "Fix bug");
+  assert.equal(result.data[0].cwd, "/tmp/project-one");
+  assert.equal(result.data[0].model, "gpt-5.4");
+  assert.match(result.data[1].preview, /unsupported t3 provider/i);
+  assert.equal(result.nextCursor, null);
+});
+
+test("buildT3ThreadListResult applies cursor pagination", () => {
+  const result = buildT3ThreadListResult({
+    snapshot,
+    limit: 1,
+    cursor: "1",
+  });
+
+  assert.equal(result.data.length, 1);
+  assert.equal(result.data[0].id, "thread-unsupported");
+  assert.equal(result.nextCursor, null);
+});
+
+test("buildT3ThreadReadResult synthesizes turns/items that Android can decode", () => {
+  const result = buildT3ThreadReadResult({
+    snapshot,
+    threadId: "thread-codex",
+  });
+
+  assert.equal(result.thread.id, "thread-codex");
+  assert.equal(result.thread.turns.length, 1);
+  assert.equal(result.thread.turns[0].id, "turn-2");
+  assert.equal(result.thread.turns[0].status, "completed");
+  assert.equal(result.thread.turns[0].items[0].type, "user_message");
+  assert.equal(result.thread.turns[0].items[1].type, "assistant_message");
+});
+
+test("buildT3ThreadReadResult preserves image attachments as structured content", () => {
+  const attachmentSnapshot = {
+    ...snapshot,
+    threads: [
+      {
+        ...snapshot.threads[0],
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Please inspect this image",
+            turnId: "turn-2",
+            streaming: false,
+            createdAt: "2026-04-07T11:10:00.000Z",
+            updatedAt: "2026-04-07T11:10:00.000Z",
+            attachments: [
+              {
+                name: "screenshot.png",
+                url: "data:image/png;base64,AAAA",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = buildT3ThreadReadResult({
+    snapshot: attachmentSnapshot,
+    threadId: "thread-codex",
+  });
+
+  assert.deepEqual(result.thread.turns[0].items[0].content, [
+    {
+      type: "input_text",
+      text: "Please inspect this image",
+    },
+    {
+      type: "image",
+      url: "data:image/png;base64,AAAA",
+    },
+  ]);
+});
+
+test("buildT3ThreadReadResult throws when the requested thread is missing", () => {
+  assert.throws(
+    () => buildT3ThreadReadResult({
+      snapshot,
+      threadId: "missing-thread",
+    }),
+    /T3 thread not found/i
+  );
+});

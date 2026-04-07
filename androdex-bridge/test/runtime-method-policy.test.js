@@ -51,6 +51,78 @@ class FakeWebSocket {
         })));
       });
     }
+    if (parsed.method === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          id: parsed.id,
+          result: {
+            snapshotSequence: 7,
+            updatedAt: "2026-04-07T12:00:00.000Z",
+            projects: [
+              {
+                id: "project-1",
+                title: "Project One",
+                workspaceRoot: "/tmp/t3-state",
+                createdAt: "2026-04-07T11:00:00.000Z",
+                updatedAt: "2026-04-07T11:30:00.000Z",
+                deletedAt: null,
+              },
+            ],
+            threads: [
+              {
+                id: "thread-123",
+                projectId: "project-1",
+                title: "Snapshot thread",
+                modelSelection: {
+                  provider: "codex",
+                  model: "gpt-5.4",
+                },
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: "/tmp/t3-state",
+                latestTurn: {
+                  turnId: "turn-1",
+                  state: "completed",
+                  requestedAt: "2026-04-07T11:10:00.000Z",
+                  startedAt: "2026-04-07T11:10:05.000Z",
+                  completedAt: "2026-04-07T11:11:00.000Z",
+                  assistantMessageId: "msg-2",
+                },
+                createdAt: "2026-04-07T11:00:00.000Z",
+                updatedAt: "2026-04-07T11:11:00.000Z",
+                archivedAt: null,
+                deletedAt: null,
+                messages: [
+                  {
+                    id: "msg-1",
+                    role: "user",
+                    text: "Hello",
+                    turnId: "turn-1",
+                    streaming: false,
+                    createdAt: "2026-04-07T11:10:00.000Z",
+                    updatedAt: "2026-04-07T11:10:00.000Z",
+                  },
+                  {
+                    id: "msg-2",
+                    role: "assistant",
+                    text: "World",
+                    turnId: "turn-1",
+                    streaming: false,
+                    createdAt: "2026-04-07T11:10:05.000Z",
+                    updatedAt: "2026-04-07T11:11:00.000Z",
+                  },
+                ],
+                proposedPlans: [],
+                activities: [],
+                checkpoints: [],
+                session: null,
+              },
+            ],
+          },
+        })));
+      });
+    }
   }
 
   close() {
@@ -141,4 +213,105 @@ test("T3 runtime adapter blocks mutating methods before they cross the transport
     })),
     /currently read-only/i
   );
+});
+
+test("T3 runtime adapter synthesizes thread/list responses from the snapshot read model", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-list",
+    method: "thread/list",
+    params: {
+      limit: 10,
+      cursor: null,
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-list");
+  assert.equal(responses[0].result.data[0].id, "thread-123");
+});
+
+test("T3 runtime adapter synthesizes thread/read responses from the snapshot read model", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-read",
+    method: "thread/read",
+    params: {
+      threadId: "thread-123",
+      includeTurns: true,
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-read");
+  assert.equal(responses[0].result.thread.id, "thread-123");
+  assert.equal(responses[0].result.thread.turns[0].items[1].type, "assistant_message");
+});
+
+test("T3 runtime adapter reports snapshot-only thread/resume results without claiming live reattach", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-resume");
+  assert.equal(responses[0].result.ok, false);
+  assert.equal(responses[0].result.liveUpdatesAttached, false);
+  assert.match(responses[0].result.reason, /did not attach live updates/i);
 });

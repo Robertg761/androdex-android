@@ -7,6 +7,10 @@
 const WebSocket = require("ws");
 const { createCodexTransport } = require("../codex/transport");
 const {
+  buildT3ThreadListResult,
+  buildT3ThreadReadResult,
+} = require("./t3-read-model");
+const {
   buildRuntimeTargetMethodRejectionMessage,
   isRuntimeTargetMethodAllowed,
 } = require("./method-policy");
@@ -106,6 +110,8 @@ function createT3ServerRuntimeAdapter({
 
   const parsedEndpoint = ensureLoopbackEndpoint(normalizedEndpoint);
   const metadataListeners = createHandlerBag();
+  const messageListeners = createHandlerBag();
+  let snapshotCache = null;
   let runtimeMetadata = {
     runtimeAttachState: "probing",
     runtimeAttachFailure: null,
@@ -113,11 +119,15 @@ function createT3ServerRuntimeAdapter({
     runtimeAuthMode: null,
     runtimeStateRoot: null,
     runtimeEndpointHost: normalizeNonEmptyString(parsedEndpoint.hostname),
+    runtimeSnapshotSequence: null,
   };
   const transport = createEndpointWebSocketTransport({
     endpoint: normalizedEndpoint,
     WebSocketImpl,
     onBeforeReadyRequest: performSuitabilityProbe,
+  });
+  transport.onMessage((message) => {
+    messageListeners.emit(message);
   });
 
   function updateRuntimeMetadata(nextValues) {
@@ -149,6 +159,100 @@ function createT3ServerRuntimeAdapter({
       runtimeAttachFailure: null,
       ...validatedMetadata,
     });
+    await refreshSnapshotCache();
+  }
+
+  async function refreshSnapshotCache() {
+    const snapshot = await transport.request("orchestration.getSnapshot", {}, {
+      timeoutMs: T3_ATTACH_TIMEOUT_MS,
+    });
+    snapshotCache = snapshot && typeof snapshot === "object" ? snapshot : {
+      snapshotSequence: null,
+      projects: [],
+      threads: [],
+      updatedAt: null,
+    };
+    updateRuntimeMetadata({
+      runtimeSnapshotSequence: snapshotCache?.snapshotSequence ?? null,
+    });
+    return snapshotCache;
+  }
+
+  function emitMessage(rawMessage) {
+    messageListeners.emit(rawMessage);
+  }
+
+  function emitRpcResult(requestId, result) {
+    emitMessage(JSON.stringify({
+      id: requestId,
+      result,
+    }));
+  }
+
+  function emitRpcError(requestId, message) {
+    emitMessage(JSON.stringify({
+      id: requestId,
+      error: {
+        code: -32000,
+        message,
+      },
+    }));
+  }
+
+  function handleReadOnlyRequest(rawMessage) {
+    const parsed = safeParseJSON(rawMessage);
+    const requestId = parsed?.id;
+    const method = normalizeNonEmptyString(parsed?.method);
+    if (requestId == null || !method) {
+      return false;
+    }
+
+    if (method === "thread/list") {
+      void refreshSnapshotCache()
+        .then((snapshot) => {
+          emitRpcResult(requestId, buildT3ThreadListResult({
+            snapshot,
+            cursor: parsed?.params?.cursor,
+            limit: parsed?.params?.limit,
+          }));
+        })
+        .catch((error) => {
+          emitRpcError(requestId, normalizeNonEmptyString(error?.message) || "Failed to load T3 threads.");
+        });
+      return true;
+    }
+
+    if (method === "thread/read") {
+      void refreshSnapshotCache()
+        .then((snapshot) => {
+          emitRpcResult(requestId, buildT3ThreadReadResult({
+            snapshot,
+            threadId: parsed?.params?.threadId,
+          }));
+        })
+        .catch((error) => {
+          emitRpcError(requestId, normalizeNonEmptyString(error?.message) || "Failed to load the T3 thread.");
+        });
+      return true;
+    }
+
+    if (method === "thread/resume") {
+      void refreshSnapshotCache()
+        .then(() => {
+          emitRpcResult(requestId, {
+            ok: false,
+            resumed: false,
+            liveUpdatesAttached: false,
+            reason: "The read-only T3 adapter refreshed snapshot state but did not attach live updates for this thread.",
+          });
+        })
+        .catch((error) => {
+          emitRpcError(requestId, normalizeNonEmptyString(error?.message) || "Failed to resume the T3 thread.");
+        });
+      return true;
+    }
+
+    return false;
   }
 
   return {
@@ -161,7 +265,9 @@ function createT3ServerRuntimeAdapter({
     mode: transport.mode,
     onClose: transport.onClose,
     onError: transport.onError,
-    onMessage: transport.onMessage,
+    onMessage(handler) {
+      messageListeners.add(handler);
+    },
     onMetadata(handler) {
       metadataListeners.add(handler);
     },
@@ -179,6 +285,10 @@ function createT3ServerRuntimeAdapter({
             method,
           })
         );
+      }
+
+      if (handleReadOnlyRequest(message)) {
+        return true;
       }
 
       return transport.send(message);
@@ -339,6 +449,7 @@ function createEndpointWebSocketTransport({
         socket.close();
       }
     },
+    request: sendRequest,
     whenReady() {
       return readyPromise;
     },
