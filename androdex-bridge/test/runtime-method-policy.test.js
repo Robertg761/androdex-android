@@ -31,94 +31,102 @@ class FakeWebSocket {
   send(message) {
     this.sentMessages.push(message);
     const parsed = JSON.parse(message);
-    if (parsed.method === "server.getConfig") {
+    if (parsed.tag === "server.getConfig") {
       queueMicrotask(() => {
         this.handlers.get("message")?.(Buffer.from(JSON.stringify({
-          id: parsed.id,
-          result: {
-            protocolVersion: "2026-04-01",
-            authMode: "bootstrap-token",
-            baseDir: "/tmp/t3-state",
-            rpcMethods: [
-              "server.getConfig",
-              "orchestration.getSnapshot",
-              "orchestration.replayEvents",
-            ],
-            subscriptions: [
-              "subscribeOrchestrationDomainEvents",
-            ],
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
           },
         })));
       });
     }
-    if (parsed.method === "orchestration.getSnapshot") {
+    if (parsed.tag === "orchestration.getSnapshot") {
       queueMicrotask(() => {
         this.handlers.get("message")?.(Buffer.from(JSON.stringify({
-          id: parsed.id,
-          result: {
-            snapshotSequence: 7,
-            updatedAt: "2026-04-07T12:00:00.000Z",
-            projects: [
-              {
-                id: "project-1",
-                title: "Project One",
-                workspaceRoot: "/tmp/t3-state",
-                createdAt: "2026-04-07T11:00:00.000Z",
-                updatedAt: "2026-04-07T11:30:00.000Z",
-                deletedAt: null,
-              },
-            ],
-            threads: [
-              {
-                id: "thread-123",
-                projectId: "project-1",
-                title: "Snapshot thread",
-                modelSelection: {
-                  provider: "codex",
-                  model: "gpt-5.4",
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              snapshotSequence: 7,
+              updatedAt: "2026-04-07T12:00:00.000Z",
+              projects: [
+                {
+                  id: "project-1",
+                  title: "Project One",
+                  workspaceRoot: "/tmp/t3-state",
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:30:00.000Z",
+                  deletedAt: null,
                 },
-                runtimeMode: "full-access",
-                interactionMode: "default",
-                branch: "main",
-                worktreePath: "/tmp/t3-state",
-                latestTurn: {
-                  turnId: "turn-1",
-                  state: "completed",
-                  requestedAt: "2026-04-07T11:10:00.000Z",
-                  startedAt: "2026-04-07T11:10:05.000Z",
-                  completedAt: "2026-04-07T11:11:00.000Z",
-                  assistantMessageId: "msg-2",
+              ],
+              threads: [
+                {
+                  id: "thread-123",
+                  projectId: "project-1",
+                  title: "Snapshot thread",
+                  modelSelection: {
+                    provider: "codex",
+                    model: "gpt-5.4",
+                  },
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: "/tmp/t3-state",
+                  latestTurn: {
+                    turnId: "turn-1",
+                    state: "completed",
+                    requestedAt: "2026-04-07T11:10:00.000Z",
+                    startedAt: "2026-04-07T11:10:05.000Z",
+                    completedAt: "2026-04-07T11:11:00.000Z",
+                    assistantMessageId: "msg-2",
+                  },
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:11:00.000Z",
+                  archivedAt: null,
+                  deletedAt: null,
+                  messages: [
+                    {
+                      id: "msg-1",
+                      role: "user",
+                      text: "Hello",
+                      turnId: "turn-1",
+                      streaming: false,
+                      createdAt: "2026-04-07T11:10:00.000Z",
+                      updatedAt: "2026-04-07T11:10:00.000Z",
+                    },
+                    {
+                      id: "msg-2",
+                      role: "assistant",
+                      text: "World",
+                      turnId: "turn-1",
+                      streaming: false,
+                      createdAt: "2026-04-07T11:10:05.000Z",
+                      updatedAt: "2026-04-07T11:11:00.000Z",
+                    },
+                  ],
+                  proposedPlans: [],
+                  activities: [],
+                  checkpoints: [],
+                  session: null,
                 },
-                createdAt: "2026-04-07T11:00:00.000Z",
-                updatedAt: "2026-04-07T11:11:00.000Z",
-                archivedAt: null,
-                deletedAt: null,
-                messages: [
-                  {
-                    id: "msg-1",
-                    role: "user",
-                    text: "Hello",
-                    turnId: "turn-1",
-                    streaming: false,
-                    createdAt: "2026-04-07T11:10:00.000Z",
-                    updatedAt: "2026-04-07T11:10:00.000Z",
-                  },
-                  {
-                    id: "msg-2",
-                    role: "assistant",
-                    text: "World",
-                    turnId: "turn-1",
-                    streaming: false,
-                    createdAt: "2026-04-07T11:10:05.000Z",
-                    updatedAt: "2026-04-07T11:11:00.000Z",
-                  },
-                ],
-                proposedPlans: [],
-                activities: [],
-                checkpoints: [],
-                session: null,
-              },
-            ],
+              ],
+            },
           },
         })));
       });

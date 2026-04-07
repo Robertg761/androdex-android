@@ -45,6 +45,7 @@ These are no longer unknowns; they are facts from the cloned repo:
 
 - T3 Code ships a standalone `t3` server binary from `apps/server`.
 - The server uses HTTP plus WebSocket RPC, not a Codex-style stdin/stdout app-server.
+- The WebSocket RPC protocol uses Effect RPC envelopes, with request frames tagged as `_tag: "Request"` and responses delivered as `_tag: "Exit"` and `_tag: "Chunk"` messages keyed by `requestId`.
 - The server exposes RPC methods such as `server.getConfig`, `orchestration.getSnapshot`, `orchestration.dispatchCommand`, `orchestration.replayEvents`, and streaming subscriptions.
 - T3 Code's orchestration layer owns projects, threads, messages, sessions, checkpoints, activities, and replayable event history.
 - T3 Code currently models provider kinds as `codex` and `claudeAgent`, not `t3code`.
@@ -645,6 +646,12 @@ Deliverables:
 - keep user-visible behavior unchanged
 - preserve all existing timeline and reconnect behavior
 
+Status update:
+
+- completed
+- landed runtime-target config and adapter seams in the bridge
+- kept the Codex-native path behavior-preserving while moving send/transport orchestration behind the adapter boundary
+
 Deliverables:
 
 - `CodexNativeRuntimeAdapter`
@@ -657,6 +664,15 @@ Deliverables:
 - update timeline cache scope keys and persisted runtime defaults to be runtime-target-safe
 - define invalidation rules for thread ids, overrides, active-turn state, and replay checkpoints on runtime-target change
 - enforce metadata-first bootstrap ordering so Android never hydrates thread/timeline state before the active runtime target is known
+
+Status update:
+
+- mostly completed
+- landed bridge and Android runtime-target metadata
+- landed runtime-target-safe timeline cache scoping and per-thread runtime-override scoping
+- landed runtime-target-change invalidation in Android service state
+- metadata-first bootstrap ordering is in place for runtime-target identity before Android-visible thread hydration
+- canonical runtime-target-scoped Androdex thread identity is still pending as a distinct on-wire identity change
 
 Deliverables:
 
@@ -682,6 +698,27 @@ Deliverables:
 - implement stale-action detection and clean refresh behavior when desktop has already resolved an approval, user-input request, or interruptible turn
 - implement structured adapter logging for attach, bootstrap, replay, gating, and stale-action outcomes
 - prove continuity for supported threads created outside Androdex
+
+Status update:
+
+- in progress
+- landed the read-only T3 attach milestone foundation:
+  - explicit `t3-server` runtime target support
+  - loopback-only suitability checks for protocol/auth/state-root/method presence
+  - readiness-gated workspace activation
+  - bridge-managed read-only gating for mutating T3 actions
+  - initial `orchestration.getSnapshot` bootstrap
+  - local synthesis of `thread/list`, `thread/read`, and best-effort `thread/resume` from the T3 snapshot
+  - Effect RPC transport alignment for real T3 request/exit/chunk envelopes
+  - buffered `subscribeOrchestrationDomainEvents` handling with gap recovery through `orchestration.replayEvents`
+  - state-root-scoped replay cursor persistence for the bridge-side T3 read model
+- not landed yet:
+  - Android-visible live thread/timeline push semantics on top of the synchronized bridge cache
+  - reconnect hardening beyond the current subscription gap-recovery path
+  - full duplicate suppression and replay idempotency coverage across broader event shapes
+  - workspace/project remapping and orphaned-thread action gating beyond preview labeling
+  - mutating T3 actions
+  - structured adapter logging
 
 Deliverables:
 
@@ -847,14 +884,46 @@ T3 support is complete when all of the following are true:
 - docs and troubleshooting guidance are updated
 - automated and manual smoke coverage pass for both runtime targets
 
+## Implementation Progress
+
+Completed so far:
+
+- runtime-target framing and adapter extraction in the bridge
+- Codex-native adapter migration without changing the default host path
+- bridge and Android runtime-target metadata plumbing
+- runtime-target-safe persistence for timeline caches and thread runtime overrides
+- runtime-target switch invalidation for selected thread, pending turn state, and cached thread data
+- explicit T3 attach suitability checks with loopback-only endpoint enforcement
+- readiness-gated T3 workspace activation so incompatible T3 instances never appear active
+- initial read-only T3 snapshot bootstrap via `server.getConfig` plus `orchestration.getSnapshot`
+- snapshot-backed synthesis for `thread/list`, `thread/read`, and best-effort `thread/resume`
+- bridge-side T3 protocol transport now speaks the real Effect RPC request/exit/chunk envelope instead of a JSON-RPC-style placeholder
+- T3 live cache updates now come from `subscribeOrchestrationDomainEvents`, with replay-gap recovery through `orchestration.replayEvents`
+- T3 replay cursors are now persisted by runtime target plus state-root scope inside bridge daemon config
+
+Still in progress:
+
+- canonical runtime-target-scoped Androdex thread identity as a first-class bridge contract
+- Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache
+- reconnect hardening and replay-based recovery across transport restarts, not just in-session subscription gaps
+- broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage
+- richer unsupported/orphaned-thread capability metadata beyond summary/preview labeling
+- stale-action reconciliation for desktop-resolved approvals, user-input requests, and interrupts
+- structured logging for attach, bootstrap, replay, and action-gating outcomes
+
+Not started yet:
+
+- T3 mutating command mapping
+- Android capability-driven T3 action surface
+- end-to-end smoke hardening for T3 reconnect and cross-repo continuity
+
 ## Immediate Next Steps
 
-1. Rename the design framing from "T3 provider support" to "T3 server runtime support" in bridge code and docs.
-2. Define the runtime-target adapter interface and move the current Codex-native path behind it.
-3. Define the bridge metadata contract with separate runtime-target and backend-provider fields, plus provider readiness state.
-4. Define the canonical runtime-target-scoped Androdex thread identity and where it is used for caches, selected-thread restore, and active-turn state.
-5. Audit Android persistence and timeline cache scoping so runtime-target switches are safe.
-6. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation before building the T3 adapter.
-7. Implement a bridge spike that attaches to an existing suitable host-local T3 instance when available, otherwise spawns local `t3` with explicit loopback host, `--no-browser`, `autoBootstrapProjectFromCwd` disabled, and bootstrap-envelope auth; then call `server.getConfig`, subscribe to server lifecycle/config streams, validate a race-safe orchestration bootstrap flow using snapshot plus replay, and prove the read-only adapter milestone first.
+1. Add the canonical runtime-target-scoped Androdex thread identity and start using it for cache keys, selected-thread restore, and active-turn state.
+2. Decide and implement the Android-visible live update contract for synchronized T3 cache changes so `thread/resume` can move beyond snapshot-only semantics safely.
+3. Harden reconnect around the persisted T3 replay cursor so a transport restart re-enters through snapshot plus replay without losing the current read-model watermark.
+4. Expand duplicate suppression and replay-idempotency coverage across a wider set of T3 event types.
+5. Replace preview-only unsupported/orphaned labeling with explicit bridge capability metadata for non-Codex and unresolved-workspace T3 threads.
+6. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
+7. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
 8. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
-9. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.

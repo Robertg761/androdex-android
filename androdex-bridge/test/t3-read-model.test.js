@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  applyT3EventsToSnapshot,
   buildT3ThreadListResult,
   buildT3ThreadReadResult,
 } = require("../src/runtime/t3-read-model");
@@ -188,4 +189,50 @@ test("buildT3ThreadReadResult throws when the requested thread is missing", () =
     }),
     /T3 thread not found/i
   );
+});
+
+test("applyT3EventsToSnapshot infers the latest turn from messages when session-set clears activeTurnId", () => {
+  const snapshotWithoutLatestTurn = {
+    ...snapshot,
+    threads: [
+      {
+        ...snapshot.threads[0],
+        latestTurn: null,
+        session: null,
+      },
+    ],
+  };
+
+  const result = applyT3EventsToSnapshot({
+    snapshot: snapshotWithoutLatestTurn,
+    events: [
+      {
+        sequence: 13,
+        eventId: "event-13",
+        aggregateKind: "thread",
+        aggregateId: "thread-codex",
+        occurredAt: "2026-04-07T12:13:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: "thread-codex",
+          session: {
+            threadId: "thread-codex",
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-04-07T12:13:00.000Z",
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.snapshot.threads[0].latestTurn.turnId, "turn-2");
+  assert.equal(result.snapshot.threads[0].latestTurn.state, "completed");
 });

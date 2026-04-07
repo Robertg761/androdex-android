@@ -134,6 +134,8 @@ function createWorkspaceRuntime({
       endpoint: resolveConfiguredRuntimeEndpoint(),
       env: process.env,
       cwd,
+      loadReplayCursor,
+      persistReplayCursor,
       targetKind: resolveConfiguredRuntimeTarget(),
     });
     pendingRuntime = nextRuntime;
@@ -243,6 +245,47 @@ function createWorkspaceRuntime({
     });
   }
 
+  function loadReplayCursor({ runtimeTarget, runtimeStateRoot }) {
+    const scopeKey = buildT3ReplayScopeKey({ runtimeTarget, runtimeStateRoot });
+    if (!scopeKey) {
+      return 0;
+    }
+    const persistedSequence = Number(config?.t3ReplayCursors?.[scopeKey]?.lastSequence);
+    return Number.isFinite(persistedSequence) && persistedSequence >= 0
+      ? Math.trunc(persistedSequence)
+      : 0;
+  }
+
+  function persistReplayCursor({ runtimeTarget, runtimeStateRoot, sequence }) {
+    const scopeKey = buildT3ReplayScopeKey({ runtimeTarget, runtimeStateRoot });
+    const normalizedSequence = Number(sequence);
+    if (!scopeKey || !Number.isFinite(normalizedSequence) || normalizedSequence < 0) {
+      return;
+    }
+
+    const nextSequence = Math.trunc(normalizedSequence);
+    const currentReplayCursors = {
+      ...(config.t3ReplayCursors || {}),
+    };
+    if (Number(currentReplayCursors[scopeKey]?.lastSequence) === nextSequence) {
+      return;
+    }
+
+    const nextReplayCursors = {
+      ...currentReplayCursors,
+      [scopeKey]: {
+        lastSequence: nextSequence,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    config.t3ReplayCursors = nextReplayCursors;
+    writeDaemonConfig({
+      ...(readDaemonConfig() || {}),
+      ...config,
+      t3ReplayCursors: nextReplayCursors,
+    });
+  }
+
   function resolveConfiguredRuntimeTarget() {
     return normalizeNonEmptyString(config?.runtimeTarget)
       || normalizeNonEmptyString(config?.runtimeProvider)
@@ -297,6 +340,15 @@ function normalizeNonEmptyString(value) {
 function normalizeWorkspacePath(value) {
   const trimmed = normalizeNonEmptyString(value);
   return trimmed ? path.normalize(trimmed) : "";
+}
+
+function buildT3ReplayScopeKey({ runtimeTarget, runtimeStateRoot }) {
+  const normalizedTarget = normalizeNonEmptyString(runtimeTarget);
+  const normalizedStateRoot = normalizeWorkspacePath(runtimeStateRoot);
+  if (!normalizedTarget || !normalizedStateRoot) {
+    return "";
+  }
+  return `${normalizedTarget}::${normalizedStateRoot}`;
 }
 
 function isExistingDirectory(targetPath) {

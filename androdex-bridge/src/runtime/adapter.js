@@ -2,13 +2,14 @@
 // Purpose: Provides the first runtime-target adapter seam so the bridge can switch host runtimes without pushing target-specific lifecycle into workspace orchestration.
 // Layer: CLI helper
 // Exports: createRuntimeAdapter
-// Depends on: ws, ../codex/transport, ./method-policy, ./t3-suitability, ./target-config
+// Depends on: ../codex/transport, ./method-policy, ./t3-protocol, ./t3-suitability, ./target-config
 
-const WebSocket = require("ws");
 const { createCodexTransport } = require("../codex/transport");
 const {
+  applyT3EventsToSnapshot,
   buildT3ThreadListResult,
   buildT3ThreadReadResult,
+  createEmptyT3Snapshot,
 } = require("./t3-read-model");
 const {
   buildRuntimeTargetMethodRejectionMessage,
@@ -19,6 +20,7 @@ const {
   ensureLoopbackEndpoint,
   validateT3AttachConfig,
 } = require("./t3-suitability");
+const { createT3EndpointTransport } = require("./t3-protocol");
 const {
   DEFAULT_RUNTIME_TARGET,
   resolveRuntimeTargetConfig,
@@ -31,6 +33,8 @@ function createRuntimeAdapter({
   endpoint = "",
   env = process.env,
   cwd = "",
+  loadReplayCursor = null,
+  persistReplayCursor = null,
   WebSocketImpl,
 } = {}) {
   const runtimeTarget = resolveRuntimeTargetConfig({ kind: targetKind });
@@ -49,6 +53,8 @@ function createRuntimeAdapter({
       runtimeTarget,
       endpoint,
       env,
+      loadReplayCursor,
+      persistReplayCursor,
       WebSocketImpl,
     });
   }
@@ -95,7 +101,9 @@ function createT3ServerRuntimeAdapter({
   runtimeTarget,
   endpoint = "",
   env = process.env,
-  WebSocketImpl = WebSocket,
+  loadReplayCursor = null,
+  persistReplayCursor = null,
+  WebSocketImpl,
 } = {}) {
   const normalizedEndpoint = normalizeNonEmptyString(endpoint);
   if (!normalizedEndpoint) {
@@ -111,7 +119,7 @@ function createT3ServerRuntimeAdapter({
   const parsedEndpoint = ensureLoopbackEndpoint(normalizedEndpoint);
   const metadataListeners = createHandlerBag();
   const messageListeners = createHandlerBag();
-  let snapshotCache = null;
+  let snapshotCache = createEmptyT3Snapshot();
   let runtimeMetadata = {
     runtimeAttachState: "probing",
     runtimeAttachFailure: null,
@@ -120,8 +128,22 @@ function createT3ServerRuntimeAdapter({
     runtimeStateRoot: null,
     runtimeEndpointHost: normalizeNonEmptyString(parsedEndpoint.hostname),
     runtimeSnapshotSequence: null,
+    runtimeReplaySequence: 0,
+    runtimeSubscriptionState: "bootstrapping",
+    runtimeDuplicateSuppressionCount: 0,
   };
-  const transport = createEndpointWebSocketTransport({
+  let unsubscribeDomainEvents = null;
+  let pendingDomainEvents = [];
+  let pendingEventFlush = Promise.resolve();
+  let appliedSequence = 0;
+  let duplicateSuppressionCount = 0;
+  let liveDomainEventsReady = false;
+  let replayRecoveryPromise = null;
+  let resubscribePromise = null;
+  let replayScope = null;
+  let persistedReplayCursor = 0;
+  let shuttingDown = false;
+  const transport = createT3EndpointTransport({
     endpoint: normalizedEndpoint,
     WebSocketImpl,
     onBeforeReadyRequest: performSuitabilityProbe,
@@ -138,12 +160,13 @@ function createT3ServerRuntimeAdapter({
     metadataListeners.emit(runtimeMetadata);
   }
 
-  async function performSuitabilityProbe({ sendRequest }) {
+  async function performSuitabilityProbe({ request }) {
     updateRuntimeMetadata({
       runtimeAttachState: "probing",
       runtimeAttachFailure: null,
+      runtimeSubscriptionState: "bootstrapping",
     });
-    const configResult = await sendRequest("server.getConfig", {}, {
+    const configResult = await request("server.getConfig", {}, {
       timeoutMs: T3_ATTACH_TIMEOUT_MS,
     });
     const validatedMetadata = validateT3AttachConfig({
@@ -155,27 +178,207 @@ function createT3ServerRuntimeAdapter({
       }),
     });
     updateRuntimeMetadata({
-      runtimeAttachState: "ready",
+      runtimeAttachState: "bootstrapping",
       runtimeAttachFailure: null,
       ...validatedMetadata,
     });
+    replayScope = {
+      runtimeStateRoot: normalizeNonEmptyString(validatedMetadata.runtimeStateRoot),
+      runtimeTarget: runtimeTarget.kind,
+    };
+    persistedReplayCursor = normalizeSequenceNumber(loadReplayCursor?.(replayScope));
+    updateRuntimeMetadata({
+      runtimeReplaySequence: persistedReplayCursor,
+    });
+    startDomainEventSubscription();
     await refreshSnapshotCache();
+    appliedSequence = normalizeSequenceNumber(snapshotCache?.snapshotSequence);
+    persistAppliedReplaySequence(appliedSequence);
+    liveDomainEventsReady = true;
+    await flushPendingDomainEvents();
+    updateRuntimeMetadata({
+      runtimeAttachState: "ready",
+      runtimeAttachFailure: null,
+      runtimeSubscriptionState: "live",
+    });
   }
 
   async function refreshSnapshotCache() {
     const snapshot = await transport.request("orchestration.getSnapshot", {}, {
       timeoutMs: T3_ATTACH_TIMEOUT_MS,
     });
-    snapshotCache = snapshot && typeof snapshot === "object" ? snapshot : {
-      snapshotSequence: null,
-      projects: [],
-      threads: [],
-      updatedAt: null,
-    };
+    snapshotCache = snapshot && typeof snapshot === "object" ? snapshot : createEmptyT3Snapshot();
     updateRuntimeMetadata({
-      runtimeSnapshotSequence: snapshotCache?.snapshotSequence ?? null,
+      runtimeSnapshotSequence: normalizeSequenceNumber(snapshotCache?.snapshotSequence),
     });
     return snapshotCache;
+  }
+
+  async function ensureSnapshotCache() {
+    const visibleSequence = normalizeSequenceNumber(snapshotCache?.snapshotSequence);
+    if (visibleSequence > 0 || Array.isArray(snapshotCache?.threads) || Array.isArray(snapshotCache?.projects)) {
+      return snapshotCache;
+    }
+    return refreshSnapshotCache();
+  }
+
+  function startDomainEventSubscription() {
+    unsubscribeDomainEvents?.();
+    updateRuntimeMetadata({
+      runtimeSubscriptionState: liveDomainEventsReady ? "resubscribing" : "subscribing",
+    });
+    unsubscribeDomainEvents = transport.subscribe("subscribeOrchestrationDomainEvents", {}, {
+      onValue(event) {
+        queueDomainEvent(event);
+      },
+      onEnd() {
+        scheduleDomainEventResubscribe();
+      },
+      onError() {
+        scheduleDomainEventResubscribe();
+      },
+    });
+  }
+
+  function scheduleDomainEventResubscribe() {
+    if (shuttingDown || resubscribePromise) {
+      return;
+    }
+    resubscribePromise = Promise.resolve()
+      .then(async () => {
+        startDomainEventSubscription();
+        if (liveDomainEventsReady) {
+          await recoverMissingDomainEvents(appliedSequence);
+          await flushPendingDomainEvents();
+          updateRuntimeMetadata({
+            runtimeAttachFailure: null,
+            runtimeSubscriptionState: "live",
+          });
+        }
+      })
+      .catch((error) => {
+        updateRuntimeMetadata({
+          runtimeSubscriptionState: "error",
+          runtimeAttachFailure: normalizeNonEmptyString(error?.message) || runtimeMetadata.runtimeAttachFailure,
+        });
+      })
+      .finally(() => {
+        resubscribePromise = null;
+      });
+  }
+
+  function queueDomainEvent(event) {
+    if (!event || typeof event !== "object") {
+      return;
+    }
+    pendingDomainEvents.push(event);
+    if (liveDomainEventsReady) {
+      void flushPendingDomainEvents().catch(() => {
+        // Error state is already published by flushPendingDomainEvents.
+      });
+    }
+  }
+
+  function flushPendingDomainEvents() {
+    pendingEventFlush = pendingEventFlush.catch(() => undefined).then(async () => {
+      if (!liveDomainEventsReady || pendingDomainEvents.length === 0) {
+        return;
+      }
+      pendingDomainEvents.sort((left, right) => normalizeSequenceNumber(left?.sequence) - normalizeSequenceNumber(right?.sequence));
+      while (pendingDomainEvents.length > 0) {
+        const nextEvent = pendingDomainEvents[0];
+        const nextSequence = normalizeSequenceNumber(nextEvent?.sequence);
+        if (!Number.isFinite(nextSequence) || nextSequence <= appliedSequence) {
+          pendingDomainEvents.shift();
+          duplicateSuppressionCount += 1;
+          publishReadModelMetadata();
+          continue;
+        }
+
+        if (appliedSequence > 0 && nextSequence > appliedSequence + 1) {
+          const recoveredSequence = await recoverMissingDomainEvents(appliedSequence);
+          if (recoveredSequence < nextSequence - 1) {
+            throw new Error(
+              `T3 event gap detected after sequence ${appliedSequence}; replay did not supply sequence ${nextSequence - 1}.`
+            );
+          }
+          pendingDomainEvents.sort((left, right) => normalizeSequenceNumber(left?.sequence) - normalizeSequenceNumber(right?.sequence));
+          continue;
+        }
+
+        pendingDomainEvents.shift();
+        applyEventsToReadModel([nextEvent]);
+      }
+    }).catch((error) => {
+      updateRuntimeMetadata({
+        runtimeSubscriptionState: "error",
+        runtimeAttachFailure: normalizeNonEmptyString(error?.message) || runtimeMetadata.runtimeAttachFailure,
+      });
+      throw error;
+    });
+    return pendingEventFlush;
+  }
+
+  function recoverMissingDomainEvents(fromSequenceExclusive) {
+    if (replayRecoveryPromise) {
+      return replayRecoveryPromise;
+    }
+
+    updateRuntimeMetadata({
+      runtimeSubscriptionState: "replaying",
+    });
+    replayRecoveryPromise = transport.request("orchestration.replayEvents", {
+      fromSequenceExclusive,
+    }, {
+      timeoutMs: T3_ATTACH_TIMEOUT_MS,
+    }).then((events) => {
+      applyEventsToReadModel(Array.isArray(events) ? events : []);
+      return appliedSequence;
+    }).finally(() => {
+      replayRecoveryPromise = null;
+      if (!shuttingDown) {
+        updateRuntimeMetadata({
+          runtimeAttachFailure: null,
+          runtimeSubscriptionState: "live",
+        });
+      }
+    });
+    return replayRecoveryPromise;
+  }
+
+  function applyEventsToReadModel(events) {
+    const result = applyT3EventsToSnapshot({
+      snapshot: snapshotCache,
+      events,
+    });
+    snapshotCache = result.snapshot;
+    appliedSequence = Math.max(appliedSequence, normalizeSequenceNumber(result.lastSequence));
+    duplicateSuppressionCount += normalizeSequenceNumber(result.duplicateCount);
+    persistAppliedReplaySequence(appliedSequence);
+    publishReadModelMetadata();
+    return result;
+  }
+
+  function persistAppliedReplaySequence(sequence) {
+    if (!Number.isFinite(sequence) || sequence < 0 || !replayScope?.runtimeStateRoot) {
+      return;
+    }
+    try {
+      persistReplayCursor?.({
+        ...replayScope,
+        sequence,
+      });
+    } catch {
+      // Persistence is best-effort and should not break the active runtime.
+    }
+  }
+
+  function publishReadModelMetadata() {
+    updateRuntimeMetadata({
+      runtimeSnapshotSequence: normalizeSequenceNumber(snapshotCache?.snapshotSequence),
+      runtimeReplaySequence: appliedSequence,
+      runtimeDuplicateSuppressionCount: duplicateSuppressionCount,
+    });
   }
 
   function emitMessage(rawMessage) {
@@ -208,7 +411,7 @@ function createT3ServerRuntimeAdapter({
     }
 
     if (method === "thread/list") {
-      void refreshSnapshotCache()
+      void ensureSnapshotCache()
         .then((snapshot) => {
           emitRpcResult(requestId, buildT3ThreadListResult({
             snapshot,
@@ -223,7 +426,7 @@ function createT3ServerRuntimeAdapter({
     }
 
     if (method === "thread/read") {
-      void refreshSnapshotCache()
+      void ensureSnapshotCache()
         .then((snapshot) => {
           emitRpcResult(requestId, buildT3ThreadReadResult({
             snapshot,
@@ -237,7 +440,7 @@ function createT3ServerRuntimeAdapter({
     }
 
     if (method === "thread/resume") {
-      void refreshSnapshotCache()
+      void ensureSnapshotCache()
         .then(() => {
           emitRpcResult(requestId, {
             ok: false,
@@ -293,7 +496,11 @@ function createT3ServerRuntimeAdapter({
 
       return transport.send(message);
     },
-    shutdown: transport.shutdown,
+    shutdown() {
+      shuttingDown = true;
+      unsubscribeDomainEvents?.();
+      transport.shutdown();
+    },
     whenReady() {
       return transport.whenReady().catch((error) => {
         updateRuntimeMetadata({
@@ -302,156 +509,6 @@ function createT3ServerRuntimeAdapter({
         });
         throw error;
       });
-    },
-  };
-}
-
-function createEndpointWebSocketTransport({
-  endpoint,
-  WebSocketImpl = WebSocket,
-  onBeforeReadyRequest = null,
-} = {}) {
-  const socket = new WebSocketImpl(endpoint);
-  const listeners = createListenerBag();
-  const openState = WebSocketImpl.OPEN ?? WebSocket.OPEN ?? 1;
-  const connectingState = WebSocketImpl.CONNECTING ?? WebSocket.CONNECTING ?? 0;
-  const pendingInternalRequests = new Map();
-  let nextInternalRequestId = 0;
-  let readyState = "connecting";
-  let settleReady = null;
-  const readyPromise = new Promise((resolve, reject) => {
-    settleReady = {
-      resolve,
-      reject,
-    };
-    socket.on("open", async () => {
-      try {
-        await onBeforeReadyRequest?.({
-          sendRequest,
-        });
-        readyState = "ready";
-        settleReady?.resolve();
-        settleReady = null;
-      } catch (error) {
-        readyState = "failed";
-        settleReady?.reject(error);
-        settleReady = null;
-        try {
-          socket.close();
-        } catch {
-          // Best effort only.
-        }
-        listeners.emitError(error);
-      }
-    });
-  });
-
-  socket.on("message", (chunk) => {
-    const message = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    const parsed = safeParseJSON(message);
-    if (parsed?.id != null && pendingInternalRequests.has(String(parsed.id))) {
-      const request = pendingInternalRequests.get(String(parsed.id));
-      pendingInternalRequests.delete(String(parsed.id));
-      clearTimeout(request.timeout);
-      if (parsed.error) {
-        request.reject(new Error(normalizeNonEmptyString(parsed.error?.message) || "T3 internal request failed."));
-      } else {
-        request.resolve(parsed.result ?? null);
-      }
-      return;
-    }
-
-    if (message.trim()) {
-      listeners.emitMessage(message);
-    }
-  });
-
-  socket.on("close", (code, reason) => {
-    const safeReason = reason ? reason.toString("utf8") : "no reason";
-    if (readyState !== "ready") {
-      readyState = "failed";
-      settleReady?.reject(new Error(`T3 endpoint closed during attach: ${safeReason}`));
-      settleReady = null;
-    }
-    rejectPendingInternalRequests(
-      pendingInternalRequests,
-      new Error(`T3 endpoint closed before the attach flow completed: ${safeReason}`)
-    );
-    listeners.emitClose(code, safeReason);
-  });
-
-  socket.on("error", (error) => {
-    if (readyState !== "ready") {
-      readyState = "failed";
-      settleReady?.reject(error);
-      settleReady = null;
-    }
-    rejectPendingInternalRequests(pendingInternalRequests, error);
-    listeners.emitError(error);
-  });
-
-  function sendRequest(method, params = {}, { timeoutMs = T3_ATTACH_TIMEOUT_MS } = {}) {
-    const requestId = `androdex-t3-probe-${++nextInternalRequestId}`;
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pendingInternalRequests.delete(requestId);
-        reject(new Error(`T3 request "${method}" timed out during attach suitability probing.`));
-      }, timeoutMs);
-      timeout.unref?.();
-
-      pendingInternalRequests.set(requestId, {
-        resolve,
-        reject,
-        timeout,
-      });
-      const payload = JSON.stringify({
-        id: requestId,
-        method,
-        params,
-      });
-      if (socket.readyState === openState) {
-        socket.send(payload);
-        return;
-      }
-
-      clearTimeout(timeout);
-      pendingInternalRequests.delete(requestId);
-      reject(new Error("The T3 endpoint is not open for attach probing."));
-    });
-  }
-
-  return {
-    mode: "websocket",
-    describe() {
-      return endpoint;
-    },
-    send(message) {
-      if (readyState !== "ready") {
-        return false;
-      }
-      if (socket.readyState === openState) {
-        socket.send(message);
-        return true;
-      }
-      return false;
-    },
-    onMessage(handler) {
-      listeners.onMessage = handler;
-    },
-    onClose(handler) {
-      listeners.onClose = handler;
-    },
-    onError(handler) {
-      listeners.onError = handler;
-    },
-    shutdown() {
-      if (socket.readyState === openState || socket.readyState === connectingState) {
-        socket.close();
-      }
-    },
-    request: sendRequest,
-    whenReady() {
-      return readyPromise;
     },
   };
 }
@@ -489,16 +546,16 @@ function createHandlerBag() {
   };
 }
 
-function rejectPendingInternalRequests(pendingRequests, error) {
-  for (const [requestId, request] of pendingRequests.entries()) {
-    pendingRequests.delete(requestId);
-    clearTimeout(request.timeout);
-    request.reject(error);
-  }
-}
-
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function normalizeSequenceNumber(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return 0;
+  }
+  return Math.trunc(numericValue);
 }
 
 function safeParseJSON(value) {
