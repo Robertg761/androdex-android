@@ -69,7 +69,7 @@ class FakeWebSocket {
                 {
                   id: "project-1",
                   title: "Project One",
-                  workspaceRoot: "/tmp/t3-state",
+                  workspaceRoot: "/tmp",
                   createdAt: "2026-04-07T11:00:00.000Z",
                   updatedAt: "2026-04-07T11:30:00.000Z",
                   deletedAt: null,
@@ -87,7 +87,7 @@ class FakeWebSocket {
                   runtimeMode: "full-access",
                   interactionMode: "default",
                   branch: "main",
-                  worktreePath: "/tmp/t3-state",
+                  worktreePath: "/tmp",
                   latestTurn: {
                     turnId: "turn-1",
                     state: "completed",
@@ -290,7 +290,7 @@ test("T3 runtime adapter synthesizes thread/read responses from the snapshot rea
   assert.equal(responses[0].result.thread.turns[0].items[1].type, "assistant_message");
 });
 
-test("T3 runtime adapter reports snapshot-only thread/resume results without claiming live reattach", async () => {
+test("T3 runtime adapter attaches bridge-managed live updates for supported thread/resume requests", async () => {
   const adapter = createRuntimeAdapter({
     targetKind: "t3-server",
     endpoint: "ws://127.0.0.1:7777",
@@ -319,7 +319,8 @@ test("T3 runtime adapter reports snapshot-only thread/resume results without cla
 
   assert.equal(responses.length, 1);
   assert.equal(responses[0].id, "req-thread-resume");
-  assert.equal(responses[0].result.ok, false);
-  assert.equal(responses[0].result.liveUpdatesAttached, false);
-  assert.match(responses[0].result.reason, /did not attach live updates/i);
+  assert.equal(responses[0].result.ok, true);
+  assert.equal(responses[0].result.resumed, true);
+  assert.equal(responses[0].result.liveUpdatesAttached, true);
+  assert.match(responses[0].result.reason, /attached bridge-managed live updates/i);
 });

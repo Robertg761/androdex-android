@@ -22,6 +22,10 @@ const { handleWorkspaceRequest } = require("./workspace/handler");
 const { createNotificationsHandler } = require("./notifications/handler");
 const { resolveRuntimeTargetConfig } = require("./runtime/target-config");
 const {
+  rewriteBridgeMessageThreadIdsForAndroid,
+  rewriteBridgeMessageThreadIdsForRuntime,
+} = require("./thread-identity");
+const {
   buildRuntimeTargetMethodRejectionMessage,
   isCodexNativeRuntimeTarget,
   isReadOnlyRuntimeTarget,
@@ -247,8 +251,12 @@ function startBridge({
       if (recoverForwardedRequestAfterColdCodexResponse(message)) {
         return;
       }
-      const forwardedRequestTiming = resolveForwardedRequestTiming(
+      const relayBoundMessage = rewriteBridgeMessageThreadIdsForAndroid(
         message,
+        workspaceRuntime.getRuntimeTarget(),
+      );
+      const forwardedRequestTiming = resolveForwardedRequestTiming(
+        relayBoundMessage,
         forwardedRequestTimingsById,
       );
       if (forwardedRequestTiming) {
@@ -257,7 +265,7 @@ function startBridge({
         );
       }
       const forwardedInitializeResponse = resolveForwardedInitializeResponse(
-        message,
+        relayBoundMessage,
         forwardedInitializeRequestIds,
         buildBridgeRuntimeMetadata({
           runtimeMetadata: workspaceRuntime.getRuntimeMetadata(),
@@ -279,9 +287,9 @@ function startBridge({
         return;
       }
       desktopRefresher.handleOutbound(message);
-      pushNotificationTracker.handleOutbound(message);
+      pushNotificationTracker.handleOutbound(relayBoundMessage);
       rememberThreadFromMessage("codex", message);
-      sendApplicationResponse(sanitizeRelayBoundCodexMessage(message));
+      sendApplicationResponse(sanitizeRelayBoundCodexMessage(relayBoundMessage));
     },
     onTransportClose() {
       desktopRefresher.handleTransportReset();
@@ -527,16 +535,28 @@ function startBridge({
     if (handleGitRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleThreadContextRequest(normalizedMessage, sendApplicationResponse)) {
-      return;
-    }
-
     if (!workspaceRuntime.hasActiveWorkspace()) {
       respondWorkspaceNotActive(normalizedMessage, workspaceRuntime.getRuntimeMetadata());
       return;
     }
 
     const activeRuntimeTarget = workspaceRuntime.getRuntimeTarget();
+    let runtimeBoundMessage = normalizedMessage;
+    try {
+      runtimeBoundMessage = rewriteBridgeMessageThreadIdsForRuntime(
+        normalizedMessage,
+        activeRuntimeTarget,
+      );
+    } catch (error) {
+      respondForwardingFailure(
+        normalizedMessage,
+        normalizeNonEmptyString(error?.message) || "The selected thread does not belong to the active runtime target.",
+      );
+      return;
+    }
+    if (handleThreadContextRequest(runtimeBoundMessage, sendApplicationResponse)) {
+      return;
+    }
     const parsed = safeParseJSON(normalizedMessage);
     const method = normalizeNonEmptyString(parsed?.method);
     if (!isRuntimeTargetMethodAllowed({
@@ -553,21 +573,21 @@ function startBridge({
       return;
     }
 
-    desktopRefresher.handleInbound(normalizedMessage);
-    rolloutLiveMirror?.observeInbound(normalizedMessage);
+    desktopRefresher.handleInbound(runtimeBoundMessage);
+    rolloutLiveMirror?.observeInbound(runtimeBoundMessage);
     rememberForwardedRequestMethod(normalizedMessage);
     rememberForwardedRequestTiming(
-      normalizedMessage,
+      runtimeBoundMessage,
       timedForwardedRequestMethods,
       forwardedRequestTimingsById,
     );
-    rememberThreadFromMessage("android", normalizedMessage);
-    logForwardedRequestToCodex(normalizedMessage, debugForwardedRequestMethods);
-    if (queueMessageUntilCodexWarm(normalizedMessage)) {
+    rememberThreadFromMessage("android", runtimeBoundMessage);
+    logForwardedRequestToCodex(runtimeBoundMessage, debugForwardedRequestMethods);
+    if (queueMessageUntilCodexWarm(runtimeBoundMessage)) {
       return;
     }
     try {
-      const didSend = workspaceRuntime.sendToRuntime(normalizedMessage);
+      const didSend = workspaceRuntime.sendToRuntime(runtimeBoundMessage);
       if (didSend === false) {
         const detail = "The host runtime transport is restarting. Retry the request once the session recovers.";
         console.warn(`[androdex] failed to forward request to Codex: ${detail}`);
@@ -781,9 +801,13 @@ function startBridge({
   }
 
   function sendApplicationResponse(rawMessage, options = {}) {
+    const relayBoundMessage = rewriteBridgeMessageThreadIdsForAndroid(
+      rawMessage,
+      workspaceRuntime.getRuntimeTarget(),
+    );
     const allowPreResume = options.allowPreResume === true
-      || shouldAllowPreResumeRelayResponse(rawMessage);
-    secureTransport.queueOutboundApplicationMessage(rawMessage, (wireMessage) => {
+      || shouldAllowPreResumeRelayResponse(relayBoundMessage);
+    secureTransport.queueOutboundApplicationMessage(relayBoundMessage, (wireMessage) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(wireMessage);
         return true;

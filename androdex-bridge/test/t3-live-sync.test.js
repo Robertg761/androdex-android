@@ -19,7 +19,7 @@ function createBaseSnapshot() {
       {
         id: "project-1",
         title: "Project One",
-        workspaceRoot: "/tmp/t3-state",
+        workspaceRoot: "/tmp",
         createdAt: "2026-04-07T11:00:00.000Z",
         updatedAt: "2026-04-07T11:30:00.000Z",
         deletedAt: null,
@@ -37,7 +37,7 @@ function createBaseSnapshot() {
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: "main",
-        worktreePath: "/tmp/t3-state",
+        worktreePath: "/tmp",
         latestTurn: null,
         createdAt: "2026-04-07T11:00:00.000Z",
         updatedAt: "2026-04-07T11:11:00.000Z",
@@ -379,6 +379,388 @@ test("T3 adapter keeps a live cache and suppresses duplicate events without re-f
   assert.equal(responses.length, 1);
   assert.equal(responses[0].result.thread.turns[0].items[1].content[0].text, "Live answer");
   assert.ok((metadataUpdates.at(-1)?.runtimeDuplicateSuppressionCount || 0) >= 1);
+});
+
+test("T3 adapter only emits bridge-managed live notifications after a supported thread is resumed", async () => {
+  let subscriptionRequestId = null;
+  const runningSessionEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "running",
+        activeTurnId: "turn-2",
+        updatedAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const assistantMessageEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: "thread-123",
+      messageId: "msg-2",
+      role: "assistant",
+      text: "Live answer after resume",
+      attachments: [],
+      turnId: "turn-2",
+      streaming: false,
+      createdAt: "2026-04-07T12:00:09.000Z",
+      updatedAt: "2026-04-07T12:00:09.000Z",
+    },
+  };
+  const completedSessionEvent = {
+    sequence: 10,
+    eventId: "event-10",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:10.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "ready",
+        activeTurnId: null,
+        updatedAt: "2026-04-07T12:00:10.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [runningSessionEvent],
+  });
+  await nextTick();
+
+  assert.deepEqual(responses, []);
+
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [assistantMessageEvent, completedSessionEvent],
+  });
+  await nextTick();
+
+  assert.equal(responses.length, 3);
+  assert.equal(responses[0].id, "req-thread-resume");
+  assert.equal(responses[0].result.liveUpdatesAttached, true);
+  assert.equal(responses[1].method, "codex/event/agent_message");
+  assert.equal(responses[1].params.threadId, "thread-123");
+  assert.equal(responses[1].params.turnId, "turn-2");
+  assert.equal(responses[1].params.messageId, "msg-2");
+  assert.equal(responses[1].params.message, "Live answer after resume");
+  assert.equal(responses[2].method, "turn/completed");
+  assert.equal(responses[2].params.threadId, "thread-123");
+  assert.equal(responses[2].params.turnId, "turn-2");
+  assert.equal(responses[2].params.status, "completed");
+});
+
+test("T3 adapter emits a fresh turn/started when T3 swaps the active running turn id", async () => {
+  let subscriptionRequestId = null;
+  const firstRunningSessionEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "running",
+        activeTurnId: "turn-1",
+        updatedAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const secondRunningSessionEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.session-set",
+    payload: {
+      threadId: "thread-123",
+      session: {
+        status: "running",
+        activeTurnId: "turn-2",
+        updatedAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [firstRunningSessionEvent, secondRunningSessionEvent],
+  });
+  await nextTick();
+
+  assert.equal(responses.length, 3);
+  assert.equal(responses[1].method, "turn/started");
+  assert.equal(responses[1].params.turnId, "turn-1");
+  assert.equal(responses[2].method, "turn/started");
+  assert.equal(responses[2].params.turnId, "turn-2");
+});
+
+test("T3 adapter stops emitting live notifications after a resumed thread becomes unsupported", async () => {
+  let subscriptionRequestId = null;
+  const providerSwitchEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.meta-updated",
+    payload: {
+      threadId: "thread-123",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-sonnet",
+      },
+      updatedAt: "2026-04-07T12:00:08.000Z",
+    },
+  };
+  const assistantMessageEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.message-sent",
+    payload: {
+      threadId: "thread-123",
+      messageId: "msg-unsupported",
+      role: "assistant",
+      text: "Should stay hidden",
+      attachments: [],
+      turnId: "turn-1",
+      streaming: false,
+      createdAt: "2026-04-07T12:00:09.000Z",
+      updatedAt: "2026-04-07T12:00:09.000Z",
+    },
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [providerSwitchEvent, assistantMessageEvent],
+  });
+  await nextTick();
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-resume");
 });
 
 test("T3 adapter clears transient replay failures and does not leak unhandled rejections during live recovery", async () => {

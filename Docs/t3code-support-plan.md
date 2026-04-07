@@ -667,12 +667,12 @@ Deliverables:
 
 Status update:
 
-- mostly completed
+- completed
 - landed bridge and Android runtime-target metadata
 - landed runtime-target-safe timeline cache scoping and per-thread runtime-override scoping
 - landed runtime-target-change invalidation in Android service state
 - metadata-first bootstrap ordering is in place for runtime-target identity before Android-visible thread hydration
-- canonical runtime-target-scoped Androdex thread identity is still pending as a distinct on-wire identity change
+- landed canonical runtime-target-scoped Androdex thread identity at the bridge boundary so Android no longer depends on raw backend thread ids on the wire
 
 Deliverables:
 
@@ -708,12 +708,13 @@ Status update:
   - readiness-gated workspace activation
   - bridge-managed read-only gating for mutating T3 actions
   - initial `orchestration.getSnapshot` bootstrap
-  - local synthesis of `thread/list`, `thread/read`, and best-effort `thread/resume` from the T3 snapshot
+  - local synthesis of `thread/list`, `thread/read`, and `thread/resume` from the T3 snapshot
   - Effect RPC transport alignment for real T3 request/exit/chunk envelopes
   - buffered `subscribeOrchestrationDomainEvents` handling with gap recovery through `orchestration.replayEvents`
   - state-root-scoped replay cursor persistence for the bridge-side T3 read model
+  - bridge-managed live notifications for resumed supported T3 Codex threads, currently scoped to turn lifecycle, assistant message completion, and title refresh events
 - not landed yet:
-  - Android-visible live thread/timeline push semantics on top of the synchronized bridge cache
+  - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread notification subset
   - reconnect hardening beyond the current subscription gap-recovery path
   - full duplicate suppression and replay idempotency coverage across broader event shapes
   - workspace/project remapping and orphaned-thread action gating beyond preview labeling
@@ -896,15 +897,17 @@ Completed so far:
 - explicit T3 attach suitability checks with loopback-only endpoint enforcement
 - readiness-gated T3 workspace activation so incompatible T3 instances never appear active
 - initial read-only T3 snapshot bootstrap via `server.getConfig` plus `orchestration.getSnapshot`
-- snapshot-backed synthesis for `thread/list`, `thread/read`, and best-effort `thread/resume`
+- snapshot-backed synthesis for `thread/list`, `thread/read`, and `thread/resume`
 - bridge-side T3 protocol transport now speaks the real Effect RPC request/exit/chunk envelope instead of a JSON-RPC-style placeholder
 - T3 live cache updates now come from `subscribeOrchestrationDomainEvents`, with replay-gap recovery through `orchestration.replayEvents`
 - T3 replay cursors are now persisted by runtime target plus state-root scope inside bridge daemon config
+- resumed supported T3 Codex threads now receive bridge-managed live turn/assistant/title notifications from the synchronized T3 cache
+- resumed-thread live notifications now re-check current Codex/workspace eligibility and handle active-turn replacement without leaving Android pinned to a stale turn id
+- Android-visible thread ids are now canonicalized by the bridge as runtime-target-scoped Androdex thread identities, while host-runtime forwarding still resolves back to raw backend thread ids for compatibility
 
 Still in progress:
 
-- canonical runtime-target-scoped Androdex thread identity as a first-class bridge contract
-- Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache
+- broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title subset
 - reconnect hardening and replay-based recovery across transport restarts, not just in-session subscription gaps
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage
 - richer unsupported/orphaned-thread capability metadata beyond summary/preview labeling
@@ -919,11 +922,10 @@ Not started yet:
 
 ## Immediate Next Steps
 
-1. Add the canonical runtime-target-scoped Androdex thread identity and start using it for cache keys, selected-thread restore, and active-turn state.
-2. Decide and implement the Android-visible live update contract for synchronized T3 cache changes so `thread/resume` can move beyond snapshot-only semantics safely.
-3. Harden reconnect around the persisted T3 replay cursor so a transport restart re-enters through snapshot plus replay without losing the current read-model watermark.
-4. Expand duplicate suppression and replay-idempotency coverage across a wider set of T3 event types.
-5. Replace preview-only unsupported/orphaned labeling with explicit bridge capability metadata for non-Codex and unresolved-workspace T3 threads.
-6. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
-7. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
-8. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
+1. Harden reconnect around the persisted T3 replay cursor so a transport restart re-enters through snapshot plus replay without losing the current read-model watermark.
+2. Expand the resumed-thread live contract beyond turn completion and assistant-message completion into the remaining safe item/timeline updates Android can already consume.
+3. Expand duplicate suppression and replay-idempotency coverage across a wider set of T3 event types.
+4. Replace preview-only unsupported/orphaned labeling with explicit bridge capability metadata for non-Codex and unresolved-workspace T3 threads.
+5. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
+6. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
+7. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.

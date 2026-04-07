@@ -4,6 +4,8 @@
 // Exports: createRuntimeAdapter
 // Depends on: ../codex/transport, ./method-policy, ./t3-protocol, ./t3-suitability, ./target-config
 
+const fs = require("fs");
+const path = require("path");
 const { createCodexTransport } = require("../codex/transport");
 const {
   applyT3EventsToSnapshot,
@@ -27,6 +29,12 @@ const {
 } = require("./target-config");
 
 const T3_ATTACH_TIMEOUT_MS = 5_000;
+const T3_LIVE_TURN_EVENT_TYPES = new Set([
+  "thread.runtime-mode-set",
+  "thread.session-set",
+  "thread.turn-diff-completed",
+  "thread.turn-interrupt-requested",
+]);
 
 function createRuntimeAdapter({
   targetKind = DEFAULT_RUNTIME_TARGET,
@@ -143,6 +151,7 @@ function createT3ServerRuntimeAdapter({
   let replayScope = null;
   let persistedReplayCursor = 0;
   let shuttingDown = false;
+  const resumedThreadIds = new Set();
   const transport = createT3EndpointTransport({
     endpoint: normalizedEndpoint,
     WebSocketImpl,
@@ -347,16 +356,132 @@ function createT3ServerRuntimeAdapter({
   }
 
   function applyEventsToReadModel(events) {
-    const result = applyT3EventsToSnapshot({
-      snapshot: snapshotCache,
-      events,
-    });
-    snapshotCache = result.snapshot;
-    appliedSequence = Math.max(appliedSequence, normalizeSequenceNumber(result.lastSequence));
-    duplicateSuppressionCount += normalizeSequenceNumber(result.duplicateCount);
+    let workingSnapshot = snapshotCache;
+    let appliedCount = 0;
+    let duplicateCount = 0;
+    let lastSequence = appliedSequence;
+    const orderedEvents = [...(Array.isArray(events) ? events : [])]
+      .filter((event) => event && typeof event === "object")
+      .sort((left, right) => normalizeSequenceNumber(left?.sequence) - normalizeSequenceNumber(right?.sequence));
+
+    for (const event of orderedEvents) {
+      const beforeSnapshot = workingSnapshot;
+      const result = applyT3EventsToSnapshot({
+        snapshot: beforeSnapshot,
+        events: [event],
+      });
+      workingSnapshot = result.snapshot;
+      appliedCount += normalizeSequenceNumber(result.appliedCount);
+      duplicateCount += normalizeSequenceNumber(result.duplicateCount);
+      lastSequence = Math.max(lastSequence, normalizeSequenceNumber(result.lastSequence));
+      if (normalizeSequenceNumber(result.appliedCount) > 0) {
+        emitLiveNotificationsForAppliedT3Event({
+          beforeSnapshot,
+          afterSnapshot: workingSnapshot,
+          event,
+        });
+      }
+    }
+
+    snapshotCache = workingSnapshot;
+    appliedSequence = Math.max(appliedSequence, lastSequence);
+    duplicateSuppressionCount += duplicateCount;
     persistAppliedReplaySequence(appliedSequence);
     publishReadModelMetadata();
-    return result;
+    return {
+      appliedCount,
+      duplicateCount,
+      lastSequence: appliedSequence,
+      snapshot: snapshotCache,
+    };
+  }
+
+  function emitLiveNotificationsForAppliedT3Event({
+    beforeSnapshot,
+    afterSnapshot,
+    event,
+  }) {
+    const eventType = normalizeNonEmptyString(event?.type);
+    if (!eventType.startsWith("thread.")) {
+      return;
+    }
+    const threadId = normalizeNonEmptyString(event?.payload?.threadId)
+      || normalizeNonEmptyString(event?.aggregateId);
+    if (!threadId || !resumedThreadIds.has(threadId)) {
+      return;
+    }
+
+    const beforeThread = findT3Thread(beforeSnapshot, threadId);
+    const afterThread = findT3Thread(afterSnapshot, threadId);
+    if (!afterThread) {
+      resumedThreadIds.delete(threadId);
+      return;
+    }
+    if (!isT3ThreadEligibleForLiveUpdates(afterSnapshot, afterThread)) {
+      resumedThreadIds.delete(threadId);
+      return;
+    }
+
+    if (eventType === "thread.meta-updated") {
+      const beforeTitle = normalizeNonEmptyString(beforeThread?.title);
+      const afterTitle = normalizeNonEmptyString(afterThread?.title);
+      if (afterTitle && afterTitle !== beforeTitle) {
+        emitNotification("thread/name/updated", {
+          threadId,
+          title: afterTitle,
+        });
+      }
+    }
+
+    if (eventType === "thread.message-sent") {
+      emitAssistantMessageNotification({
+        beforeThread,
+        afterThread,
+        event,
+        threadId,
+      });
+    }
+
+    if (T3_LIVE_TURN_EVENT_TYPES.has(eventType)) {
+      for (const notification of buildTurnLifecycleNotifications({
+        beforeThread,
+        afterThread,
+        threadId,
+      })) {
+        emitNotification(notification.method, notification.params);
+      }
+    }
+  }
+
+  function emitAssistantMessageNotification({
+    beforeThread,
+    afterThread,
+    event,
+    threadId,
+  }) {
+    const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+    if (normalizeNonEmptyString(payload.role).toLowerCase() !== "assistant") {
+      return;
+    }
+
+    const messageId = normalizeNonEmptyString(payload.messageId);
+    if (!messageId || findThreadMessage(beforeThread, messageId)) {
+      return;
+    }
+    const message = findThreadMessage(afterThread, messageId);
+    const messageText = typeof message?.text === "string" ? message.text : "";
+    if (!messageText) {
+      return;
+    }
+
+    emitNotification("codex/event/agent_message", {
+      threadId,
+      turnId: normalizeNonEmptyString(message?.turnId)
+        || normalizeNonEmptyString(afterThread?.latestTurn?.turnId)
+        || null,
+      messageId,
+      message: messageText,
+    });
   }
 
   function persistAppliedReplaySequence(sequence) {
@@ -402,6 +527,13 @@ function createT3ServerRuntimeAdapter({
     }));
   }
 
+  function emitNotification(method, params) {
+    emitMessage(JSON.stringify({
+      method,
+      params,
+    }));
+  }
+
   function handleReadOnlyRequest(rawMessage) {
     const parsed = safeParseJSON(rawMessage);
     const requestId = parsed?.id;
@@ -441,12 +573,19 @@ function createT3ServerRuntimeAdapter({
 
     if (method === "thread/resume") {
       void ensureSnapshotCache()
-        .then(() => {
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const resumeSupport = resolveT3ResumeSupport(snapshot, threadId);
+          if (!resumeSupport.ok) {
+            emitRpcResult(requestId, resumeSupport.result);
+            return;
+          }
+          resumedThreadIds.add(threadId);
           emitRpcResult(requestId, {
-            ok: false,
-            resumed: false,
-            liveUpdatesAttached: false,
-            reason: "The read-only T3 adapter refreshed snapshot state but did not attach live updates for this thread.",
+            ok: true,
+            resumed: true,
+            liveUpdatesAttached: true,
+            reason: "The read-only T3 adapter attached bridge-managed live updates for this T3 thread.",
           });
         })
         .catch((error) => {
@@ -544,6 +683,169 @@ function createHandlerBag() {
       }
     },
   };
+}
+
+function resolveT3ResumeSupport(snapshot, threadId) {
+  const normalizedThreadId = normalizeNonEmptyString(threadId);
+  if (!normalizedThreadId) {
+    throw new Error("T3 thread resume requires a threadId.");
+  }
+
+  const thread = findT3Thread(snapshot, normalizedThreadId);
+  if (!thread) {
+    throw new Error(`T3 thread not found: ${normalizedThreadId}`);
+  }
+
+  if (!isT3ThreadEligibleForLiveUpdates(snapshot, thread)) {
+    const provider = normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase();
+    const workspacePath = resolveT3ThreadWorkspacePath(snapshot, thread);
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        resumed: false,
+        liveUpdatesAttached: false,
+        reason: provider && provider !== "codex"
+          ? `The read-only T3 adapter only attaches live updates for Codex-backed threads; this thread uses ${provider}.`
+          : workspacePath
+            ? "The read-only T3 adapter only attaches live updates for threads whose local workspace mapping still resolves."
+            : "The read-only T3 adapter only attaches live updates for threads with a usable local workspace mapping.",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+  };
+}
+
+function buildTurnLifecycleNotifications({
+  beforeThread,
+  afterThread,
+  threadId,
+}) {
+  const beforeTurn = normalizeLatestTurn(beforeThread?.latestTurn);
+  const afterTurn = normalizeLatestTurn(afterThread?.latestTurn);
+  if (!afterTurn?.turnId) {
+    return [];
+  }
+
+  if (beforeTurn?.state !== "running" && afterTurn.state === "running") {
+    return [{
+      method: "turn/started",
+      params: {
+        threadId,
+        turnId: afterTurn.turnId,
+      },
+    }];
+  }
+
+  if (beforeTurn?.state === "running" && afterTurn.state === "running" && beforeTurn.turnId !== afterTurn.turnId) {
+    return [{
+      method: "turn/started",
+      params: {
+        threadId,
+        turnId: afterTurn.turnId,
+      },
+    }];
+  }
+
+  if (beforeTurn?.state === "running" && afterTurn.state !== "running") {
+    if (afterTurn.state === "error") {
+      return [{
+        method: "turn/failed",
+        params: {
+          threadId,
+          turnId: afterTurn.turnId,
+        },
+      }];
+    }
+
+    return [{
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId: afterTurn.turnId,
+        status: afterTurn.state === "interrupted" ? "interrupted" : "completed",
+      },
+    }];
+  }
+
+  return [];
+}
+
+function normalizeLatestTurn(latestTurn) {
+  if (!latestTurn || typeof latestTurn !== "object") {
+    return null;
+  }
+  const turnId = normalizeNonEmptyString(latestTurn.turnId);
+  if (!turnId) {
+    return null;
+  }
+
+  return {
+    turnId,
+    state: normalizeNonEmptyString(latestTurn.state).toLowerCase() || "completed",
+  };
+}
+
+function findT3Thread(snapshot, threadId) {
+  const normalizedThreadId = normalizeNonEmptyString(threadId);
+  if (!normalizedThreadId) {
+    return null;
+  }
+  const threads = Array.isArray(snapshot?.threads) ? snapshot.threads : [];
+  return threads.find((thread) =>
+    normalizeNonEmptyString(thread?.id) === normalizedThreadId && !thread?.deletedAt) || null;
+}
+
+function findT3Project(snapshot, projectId) {
+  const normalizedProjectId = normalizeNonEmptyString(projectId);
+  if (!normalizedProjectId) {
+    return null;
+  }
+  const projects = Array.isArray(snapshot?.projects) ? snapshot.projects : [];
+  return projects.find((project) =>
+    normalizeNonEmptyString(project?.id) === normalizedProjectId && !project?.deletedAt) || null;
+}
+
+function resolveT3ThreadWorkspacePath(snapshot, thread) {
+  const worktreePath = normalizeNonEmptyString(thread?.worktreePath);
+  if (worktreePath) {
+    return worktreePath;
+  }
+  const project = findT3Project(snapshot, thread?.projectId);
+  return normalizeNonEmptyString(project?.workspaceRoot) || "";
+}
+
+function isT3ThreadEligibleForLiveUpdates(snapshot, thread) {
+  const provider = normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase();
+  if (provider && provider !== "codex") {
+    return false;
+  }
+
+  const workspacePath = resolveT3ThreadWorkspacePath(snapshot, thread);
+  if (!workspacePath) {
+    return false;
+  }
+  return pathExists(workspacePath);
+}
+
+function findThreadMessage(thread, messageId) {
+  const normalizedMessageId = normalizeNonEmptyString(messageId);
+  if (!normalizedMessageId) {
+    return null;
+  }
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  return messages.find((message) => normalizeNonEmptyString(message?.id) === normalizedMessageId) || null;
+}
+
+function pathExists(candidatePath) {
+  try {
+    return fs.existsSync(path.normalize(candidatePath));
+  } catch {
+    return false;
+  }
 }
 
 function normalizeNonEmptyString(value) {
