@@ -29,6 +29,7 @@ const {
 } = require("./target-config");
 
 const T3_ATTACH_TIMEOUT_MS = 5_000;
+const T3_RECONNECT_DELAY_MS = 50;
 const T3_LIVE_TURN_EVENT_TYPES = new Set([
   "thread.runtime-mode-set",
   "thread.session-set",
@@ -148,18 +149,17 @@ function createT3ServerRuntimeAdapter({
   let liveDomainEventsReady = false;
   let replayRecoveryPromise = null;
   let resubscribePromise = null;
+  let reconnectPromise = null;
   let replayScope = null;
   let persistedReplayCursor = 0;
   let shuttingDown = false;
+  let hasReachedReadyState = false;
   const resumedThreadIds = new Set();
-  const transport = createT3EndpointTransport({
-    endpoint: normalizedEndpoint,
-    WebSocketImpl,
-    onBeforeReadyRequest: performSuitabilityProbe,
-  });
-  transport.onMessage((message) => {
-    messageListeners.emit(message);
-  });
+  const liveActivityStateByThread = new Map();
+  let transport = null;
+  const closeListeners = createHandlerBag();
+  const errorListeners = createHandlerBag();
+  const initialTransport = createAndBindTransport();
 
   function updateRuntimeMetadata(nextValues) {
     runtimeMetadata = {
@@ -196,13 +196,23 @@ function createT3ServerRuntimeAdapter({
       runtimeTarget: runtimeTarget.kind,
     };
     persistedReplayCursor = normalizeSequenceNumber(loadReplayCursor?.(replayScope));
+    const resumeSequence = Math.max(
+      appliedSequence,
+      persistedReplayCursor,
+    );
     updateRuntimeMetadata({
       runtimeReplaySequence: persistedReplayCursor,
     });
     startDomainEventSubscription();
     await refreshSnapshotCache();
     appliedSequence = normalizeSequenceNumber(snapshotCache?.snapshotSequence);
-    persistAppliedReplaySequence(appliedSequence);
+    if (resumeSequence > appliedSequence) {
+      await recoverMissingDomainEvents(appliedSequence, {
+        suppressNotificationsThroughSequence: resumeSequence,
+      });
+    } else {
+      persistAppliedReplaySequence(appliedSequence);
+    }
     liveDomainEventsReady = true;
     await flushPendingDomainEvents();
     updateRuntimeMetadata({
@@ -210,6 +220,7 @@ function createT3ServerRuntimeAdapter({
       runtimeAttachFailure: null,
       runtimeSubscriptionState: "live",
     });
+    hasReachedReadyState = true;
   }
 
   async function refreshSnapshotCache() {
@@ -328,7 +339,9 @@ function createT3ServerRuntimeAdapter({
     return pendingEventFlush;
   }
 
-  function recoverMissingDomainEvents(fromSequenceExclusive) {
+  function recoverMissingDomainEvents(fromSequenceExclusive, {
+    suppressNotificationsThroughSequence = 0,
+  } = {}) {
     if (replayRecoveryPromise) {
       return replayRecoveryPromise;
     }
@@ -341,7 +354,9 @@ function createT3ServerRuntimeAdapter({
     }, {
       timeoutMs: T3_ATTACH_TIMEOUT_MS,
     }).then((events) => {
-      applyEventsToReadModel(Array.isArray(events) ? events : []);
+      applyEventsToReadModel(Array.isArray(events) ? events : [], {
+        suppressNotificationsThroughSequence,
+      });
       return appliedSequence;
     }).finally(() => {
       replayRecoveryPromise = null;
@@ -355,7 +370,9 @@ function createT3ServerRuntimeAdapter({
     return replayRecoveryPromise;
   }
 
-  function applyEventsToReadModel(events) {
+  function applyEventsToReadModel(events, {
+    suppressNotificationsThroughSequence = 0,
+  } = {}) {
     let workingSnapshot = snapshotCache;
     let appliedCount = 0;
     let duplicateCount = 0;
@@ -375,11 +392,14 @@ function createT3ServerRuntimeAdapter({
       duplicateCount += normalizeSequenceNumber(result.duplicateCount);
       lastSequence = Math.max(lastSequence, normalizeSequenceNumber(result.lastSequence));
       if (normalizeSequenceNumber(result.appliedCount) > 0) {
-        emitLiveNotificationsForAppliedT3Event({
-          beforeSnapshot,
-          afterSnapshot: workingSnapshot,
-          event,
-        });
+        const eventSequence = normalizeSequenceNumber(event?.sequence);
+        if (eventSequence > suppressNotificationsThroughSequence) {
+          emitLiveNotificationsForAppliedT3Event({
+            beforeSnapshot,
+            afterSnapshot: workingSnapshot,
+            event,
+          });
+        }
       }
     }
 
@@ -447,6 +467,17 @@ function createT3ServerRuntimeAdapter({
         beforeThread,
         afterThread,
         threadId,
+      })) {
+        emitNotification(notification.method, notification.params);
+      }
+    }
+
+    if (eventType === "thread.activity-appended") {
+      const activity = event?.payload?.activity;
+      for (const notification of buildThreadActivityNotifications({
+        activity,
+        threadId,
+        threadActivityState: getOrCreateThreadLiveActivityState(threadId),
       })) {
         emitNotification(notification.method, notification.params);
       }
@@ -534,6 +565,118 @@ function createT3ServerRuntimeAdapter({
     }));
   }
 
+  function getOrCreateThreadLiveActivityState(threadId) {
+    const normalizedThreadId = normalizeNonEmptyString(threadId);
+    const existing = liveActivityStateByThread.get(normalizedThreadId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = {
+      taskItemIdsByTaskId: new Map(),
+      toolItemIdsByKey: new Map(),
+    };
+    liveActivityStateByThread.set(normalizedThreadId, created);
+    return created;
+  }
+
+  function createAndBindTransport() {
+    const nextTransport = createT3EndpointTransport({
+      endpoint: normalizedEndpoint,
+      WebSocketImpl,
+      onBeforeReadyRequest: performSuitabilityProbe,
+    });
+
+    nextTransport.onMessage((message) => {
+      if (transport !== nextTransport) {
+        return;
+      }
+      messageListeners.emit(message);
+    });
+
+    nextTransport.onClose((_code, reason) => {
+      if (transport !== nextTransport) {
+        return;
+      }
+      transport = null;
+      handleTransportDisconnect(
+        normalizeNonEmptyString(reason) || "The T3 endpoint connection closed."
+      );
+    });
+
+    nextTransport.onError((error) => {
+      if (transport !== nextTransport) {
+        return;
+      }
+      const detail = normalizeNonEmptyString(error?.message);
+      if (detail) {
+        updateRuntimeMetadata({
+          runtimeAttachFailure: detail,
+        });
+      }
+    });
+
+    transport = nextTransport;
+    return nextTransport;
+  }
+
+  function handleTransportDisconnect(detail) {
+    if (shuttingDown) {
+      closeListeners.emit();
+      return;
+    }
+
+    if (!hasReachedReadyState) {
+      return;
+    }
+
+    unsubscribeDomainEvents?.();
+    unsubscribeDomainEvents = null;
+    pendingDomainEvents = [];
+    pendingEventFlush = Promise.resolve();
+    liveDomainEventsReady = false;
+    replayRecoveryPromise = null;
+    resubscribePromise = null;
+    updateRuntimeMetadata({
+      runtimeAttachState: "reconnecting",
+      runtimeAttachFailure: normalizeNonEmptyString(detail) || runtimeMetadata.runtimeAttachFailure,
+      runtimeSubscriptionState: "reconnecting",
+    });
+    scheduleReconnect();
+  }
+
+  function scheduleReconnect() {
+    if (shuttingDown || reconnectPromise) {
+      return reconnectPromise;
+    }
+
+    reconnectPromise = Promise.resolve()
+      .then(async () => {
+        while (!shuttingDown) {
+          const nextTransport = createAndBindTransport();
+          try {
+            await nextTransport.whenReady();
+            return;
+          } catch (error) {
+            const detail = normalizeNonEmptyString(error?.message) || "T3 reconnect failed.";
+            updateRuntimeMetadata({
+              runtimeAttachState: "reconnecting",
+              runtimeAttachFailure: detail,
+              runtimeSubscriptionState: "error",
+            });
+            if (shuttingDown) {
+              return;
+            }
+            await wait(T3_RECONNECT_DELAY_MS);
+          }
+        }
+      })
+      .finally(() => {
+        reconnectPromise = null;
+      });
+    return reconnectPromise;
+  }
+
   function handleReadOnlyRequest(rawMessage) {
     const parsed = safeParseJSON(rawMessage);
     const requestId = parsed?.id;
@@ -599,14 +742,18 @@ function createT3ServerRuntimeAdapter({
 
   return {
     backendProviderKind: runtimeTarget.backendProviderKind,
-    describe: transport.describe,
+    describe: initialTransport.describe,
     getRuntimeMetadata() {
       return { ...runtimeMetadata };
     },
     kind: runtimeTarget.kind,
-    mode: transport.mode,
-    onClose: transport.onClose,
-    onError: transport.onError,
+    mode: initialTransport.mode,
+    onClose(handler) {
+      closeListeners.add(handler);
+    },
+    onError(handler) {
+      errorListeners.add(handler);
+    },
     onMessage(handler) {
       messageListeners.add(handler);
     },
@@ -633,15 +780,15 @@ function createT3ServerRuntimeAdapter({
         return true;
       }
 
-      return transport.send(message);
+      return transport?.send(message) ?? false;
     },
     shutdown() {
       shuttingDown = true;
       unsubscribeDomainEvents?.();
-      transport.shutdown();
+      transport?.shutdown();
     },
     whenReady() {
-      return transport.whenReady().catch((error) => {
+      return initialTransport.whenReady().catch((error) => {
         updateRuntimeMetadata({
           runtimeAttachState: "rejected",
           runtimeAttachFailure: normalizeNonEmptyString(error?.message) || "T3 attach failed.",
@@ -852,6 +999,248 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function buildThreadActivityNotifications({
+  activity,
+  threadId,
+  threadActivityState,
+}) {
+  if (!activity || typeof activity !== "object") {
+    return [];
+  }
+
+  const kind = normalizeNonEmptyString(activity.kind).toLowerCase();
+  const payload = activity.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const turnId = normalizeNonEmptyString(activity.turnId) || null;
+
+  if (kind === "turn.plan.updated") {
+    const steps = extractPlanStepsFromActivityPayload(payload);
+    const explanation = normalizeNonEmptyString(payload.explanation) || null;
+    if ((!steps || steps.length === 0) && !explanation) {
+      return [];
+    }
+    return [{
+      method: "turn/plan/updated",
+      params: {
+        threadId,
+        turnId,
+        ...(explanation ? { explanation } : {}),
+        ...(steps.length > 0 ? { steps } : {}),
+      },
+    }];
+  }
+
+  if (kind === "task.progress" || kind === "task.completed") {
+    const itemId = resolveTaskActivityItemId({
+      activity,
+      threadActivityState,
+      threadId,
+    });
+    const item = buildExecutionActivityItem({
+      activity,
+      itemId,
+      fallbackType: "activity",
+      fallbackStatus: kind === "task.completed"
+        ? normalizeNonEmptyString(payload.status) || "completed"
+        : "in_progress",
+      detail: firstNonEmptyString([
+        payload.detail,
+        payload.summary,
+      ]),
+    });
+    return [{
+      method: kind === "task.completed" ? "item/completed" : "item/updated",
+      params: {
+        threadId,
+        turnId,
+        itemId,
+        item,
+      },
+    }];
+  }
+
+  if (kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed") {
+    const itemId = resolveToolActivityItemId({
+      activity,
+      threadActivityState,
+      threadId,
+    });
+    const item = buildExecutionActivityItem({
+      activity,
+      itemId,
+      fallbackType: normalizeNonEmptyString(payload.itemType) || "activity",
+      fallbackStatus: kind === "tool.completed"
+        ? normalizeNonEmptyString(payload.status) || "completed"
+        : normalizeNonEmptyString(payload.status) || "in_progress",
+      detail: normalizeNonEmptyString(payload.detail),
+    });
+    return [{
+      method: kind === "tool.completed" ? "item/completed" : "item/updated",
+      params: {
+        threadId,
+        turnId,
+        itemId,
+        item,
+      },
+    }];
+  }
+
+  return [];
+}
+
+function extractPlanStepsFromActivityPayload(payload) {
+  const rawSteps = Array.isArray(payload?.plan) ? payload.plan : [];
+  return rawSteps
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const step = normalizeNonEmptyString(entry.step)
+        || normalizeNonEmptyString(entry.text)
+        || normalizeNonEmptyString(entry.title);
+      if (!step) {
+        return null;
+      }
+      const status = normalizeNonEmptyString(entry.status) || null;
+      return status ? { step, status } : { step };
+    })
+    .filter(Boolean);
+}
+
+function resolveTaskActivityItemId({
+  activity,
+  threadActivityState,
+  threadId,
+}) {
+  const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const taskId = normalizeNonEmptyString(payload.taskId);
+  if (taskId) {
+    const existing = threadActivityState.taskItemIdsByTaskId.get(taskId);
+    if (existing) {
+      return existing;
+    }
+    const created = `t3-task:${encodeURIComponent(threadId)}:${encodeURIComponent(taskId)}`;
+    threadActivityState.taskItemIdsByTaskId.set(taskId, created);
+    return created;
+  }
+  return `t3-task:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || Date.now())}`;
+}
+
+function resolveToolActivityItemId({
+  activity,
+  threadActivityState,
+  threadId,
+}) {
+  const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const explicitToolUseId = firstNonEmptyString([
+    payload.toolUseId,
+    payload.tool_use_id,
+    payload?.data?.toolUseId,
+    payload?.data?.tool_use_id,
+    payload?.data?.result?.toolUseId,
+    payload?.data?.result?.tool_use_id,
+    payload?.data?.callId,
+    payload?.data?.call_id,
+  ]);
+  if (explicitToolUseId) {
+    return `t3-tool:${encodeURIComponent(threadId)}:${encodeURIComponent(explicitToolUseId)}`;
+  }
+
+  const correlationKey = [
+    normalizeNonEmptyString(activity?.turnId) || "no-turn",
+    normalizeNonEmptyString(payload.itemType) || "activity",
+    normalizeNonEmptyString(payload.detail) || normalizeNonEmptyString(activity?.summary) || normalizeNonEmptyString(activity?.id),
+  ].join("|");
+  const existing = threadActivityState.toolItemIdsByKey.get(correlationKey);
+  const normalizedKind = normalizeNonEmptyString(activity?.kind).toLowerCase();
+  if (normalizedKind === "tool.started") {
+    const created = `t3-tool:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || correlationKey)}`;
+    threadActivityState.toolItemIdsByKey.set(correlationKey, [...(existing || []), created]);
+    return created;
+  }
+  if (Array.isArray(existing) && existing.length > 0) {
+    if (normalizedKind === "tool.completed") {
+      const [matchedItemId, ...remainingItemIds] = existing;
+      if (remainingItemIds.length > 0) {
+        threadActivityState.toolItemIdsByKey.set(correlationKey, remainingItemIds);
+      } else {
+        threadActivityState.toolItemIdsByKey.delete(correlationKey);
+      }
+      return matchedItemId;
+    }
+    return existing[0];
+  }
+
+  const created = `t3-tool:${encodeURIComponent(threadId)}:${encodeURIComponent(normalizeNonEmptyString(activity?.id) || correlationKey)}`;
+  if (normalizedKind !== "tool.completed") {
+    threadActivityState.toolItemIdsByKey.set(correlationKey, [created]);
+  }
+  return created;
+}
+
+function buildExecutionActivityItem({
+  activity,
+  itemId,
+  fallbackType,
+  fallbackStatus,
+  detail,
+}) {
+  const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+  const type = normalizeNonEmptyString(payload.itemType) || fallbackType || "activity";
+  const status = normalizeNonEmptyString(payload.status) || fallbackStatus || "completed";
+  const summary = normalizeNonEmptyString(detail)
+    || normalizeNonEmptyString(payload.summary)
+    || normalizeNonEmptyString(activity?.summary)
+    || null;
+  const title = normalizeNonEmptyString(payload.title)
+    || normalizeNonEmptyString(activity?.summary)
+    || null;
+  const item = {
+    id: itemId,
+    type,
+    status,
+  };
+
+  if (title) {
+    item.title = title;
+  }
+  if (summary) {
+    item.summary = summary;
+    item.message = summary;
+    item.text = summary;
+  }
+
+  if (type === "command_execution") {
+    const command = firstNonEmptyString([
+      payload.command,
+      payload.raw_command,
+      payload.rawCommand,
+      detail,
+      payload?.data?.command,
+      payload?.data?.raw_command,
+      payload?.data?.rawCommand,
+    ]);
+    if (command) {
+      item.command = command;
+    }
+  }
+
+  if (payload.data !== undefined) {
+    item.data = payload.data;
+  }
+
+  return item;
+}
+
+function firstNonEmptyString(values) {
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalizedValue = normalizeNonEmptyString(value);
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+  return "";
+}
+
 function normalizeSequenceNumber(value) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue < 0) {
@@ -866,6 +1255,13 @@ function safeParseJSON(value) {
   } catch {
     return null;
   }
+}
+
+function wait(durationMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, durationMs);
+    timer.unref?.();
+  });
 }
 
 module.exports = {
