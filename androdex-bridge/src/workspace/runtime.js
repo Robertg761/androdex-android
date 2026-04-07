@@ -17,9 +17,12 @@ function createWorkspaceRuntime({
   onBeforeTransportStart = null,
   onTransportClose = null,
   onTransportError = null,
+  onTransportMetadata = null,
   onTransportMessage = null,
 } = {}) {
   let activeRuntime = null;
+  let pendingRuntime = null;
+  let currentRuntimeMetadata = null;
   let currentCwd = normalizeWorkspacePath(config?.activeCwd || "");
   let recentWorkspaces = normalizeRecentWorkspaces(config?.recentWorkspaces);
   let activationQueue = Promise.resolve();
@@ -28,6 +31,7 @@ function createWorkspaceRuntime({
   return {
     activateWorkspace,
     getCurrentCwd,
+    getRuntimeMetadata,
     getRuntimeTarget,
     getStatus,
     getWorkspaceState,
@@ -46,6 +50,10 @@ function createWorkspaceRuntime({
     return Boolean(activeRuntime);
   }
 
+  function getRuntimeMetadata() {
+    return currentRuntimeMetadata ? { ...currentRuntimeMetadata } : null;
+  }
+
   function getRuntimeTarget() {
     return resolveConfiguredRuntimeTarget();
   }
@@ -53,6 +61,7 @@ function createWorkspaceRuntime({
   function getStatus() {
     return {
       currentCwd: currentCwd || null,
+      runtimeMetadata: getRuntimeMetadata(),
       runtimeTarget: resolveConfiguredRuntimeTarget(),
       workspaceActive: Boolean(activeRuntime),
     };
@@ -122,43 +131,71 @@ function createWorkspaceRuntime({
     });
 
     const nextRuntime = createRuntimeAdapter({
-      endpoint: config?.codexEndpoint,
+      endpoint: resolveConfiguredRuntimeEndpoint(),
       env: process.env,
       cwd,
       targetKind: resolveConfiguredRuntimeTarget(),
     });
-    activeRuntime = nextRuntime;
+    pendingRuntime = nextRuntime;
+    currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || null;
+    publishTransportMetadata();
 
     nextRuntime.onError((error) => {
-      if (activeRuntime !== nextRuntime) {
+      if (!isCurrentRuntime(nextRuntime)) {
         return;
       }
       activeRuntime = null;
+      pendingRuntime = null;
+      currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
+      publishTransportMetadata();
       onTransportError?.({
         error,
         currentCwd,
+        runtimeMetadata: getRuntimeMetadata(),
         runtimeTarget: resolveConfiguredRuntimeTarget(),
       });
     });
 
+    nextRuntime.onMetadata?.((metadata) => {
+      if (!isCurrentRuntime(nextRuntime)) {
+        return;
+      }
+      currentRuntimeMetadata = metadata ? { ...metadata } : null;
+      publishTransportMetadata();
+    });
+
     nextRuntime.onMessage((message) => {
-      if (activeRuntime !== nextRuntime) {
+      if (!isCurrentRuntime(nextRuntime)) {
         return;
       }
       onTransportMessage?.(message);
     });
 
     nextRuntime.onClose(() => {
-      if (activeRuntime !== nextRuntime) {
+      if (!isCurrentRuntime(nextRuntime)) {
         return;
       }
       activeRuntime = null;
+      pendingRuntime = null;
+      currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
+      publishTransportMetadata();
       onTransportClose?.({
         currentCwd,
+        runtimeMetadata: getRuntimeMetadata(),
         runtimeTarget: resolveConfiguredRuntimeTarget(),
       });
     });
 
+    await nextRuntime.whenReady?.();
+    if (activationId !== activationSequence || pendingRuntime !== nextRuntime) {
+      nextRuntime.shutdown?.();
+      return getStatus();
+    }
+
+    activeRuntime = nextRuntime;
+    pendingRuntime = null;
+    currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
+    publishTransportMetadata();
     return getStatus();
   }
 
@@ -168,12 +205,16 @@ function createWorkspaceRuntime({
   }
 
   async function shutdownTransport() {
-    const runtime = activeRuntime;
+    const runtime = activeRuntime || pendingRuntime;
     activeRuntime = null;
+    pendingRuntime = null;
+    currentRuntimeMetadata = null;
     await onBeforeTransportShutdown?.({
       currentCwd,
+      runtimeMetadata: null,
       runtimeTarget: resolveConfiguredRuntimeTarget(),
     });
+    publishTransportMetadata();
     if (!runtime) {
       return;
     }
@@ -206,6 +247,25 @@ function createWorkspaceRuntime({
     return normalizeNonEmptyString(config?.runtimeTarget)
       || normalizeNonEmptyString(config?.runtimeProvider)
       || "codex-native";
+  }
+
+  function resolveConfiguredRuntimeEndpoint() {
+    return normalizeNonEmptyString(config?.runtimeEndpoint)
+      || normalizeNonEmptyString(config?.codexEndpoint)
+      || "";
+  }
+
+  function isCurrentRuntime(runtime) {
+    return activeRuntime === runtime || pendingRuntime === runtime;
+  }
+
+  function publishTransportMetadata() {
+    onTransportMetadata?.({
+      currentCwd,
+      runtimeMetadata: getRuntimeMetadata(),
+      runtimeTarget: resolveConfiguredRuntimeTarget(),
+      workspaceActive: Boolean(activeRuntime),
+    });
   }
 }
 

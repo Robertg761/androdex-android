@@ -22,6 +22,13 @@ const { handleWorkspaceRequest } = require("./workspace/handler");
 const { createNotificationsHandler } = require("./notifications/handler");
 const { resolveRuntimeTargetConfig } = require("./runtime/target-config");
 const {
+  buildRuntimeTargetMethodRejectionMessage,
+  isCodexNativeRuntimeTarget,
+  isReadOnlyRuntimeTarget,
+  isRuntimeTargetMethodAllowed,
+  normalizeRuntimeMethod,
+} = require("./runtime/method-policy");
+const {
   getTrustedPhoneRecoveryIdentities,
   loadOrCreateBridgeDeviceState,
   resolveBridgeRelaySession,
@@ -91,7 +98,10 @@ function startBridge({
   let hasSeenInboundRelayTraffic = false;
   let lastPublishedBridgeStatus = null;
   let lastConnectionStatus = null;
-  let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
+  let codexHandshakeState = isCodexNativeRuntimeTarget(config.runtimeTarget || config.runtimeProvider || "codex-native")
+    && config.runtimeEndpoint
+    ? "warm"
+    : "cold";
   const forwardedInitializeRequestIds = new Set();
   let lastInitializeParams = null;
   let pendingAutoWarmPromise = null;
@@ -202,13 +212,16 @@ function startBridge({
       forwardedRequestTimingsById.clear();
       pendingBridgeRecoveryRequestsById.clear();
       bridgeRecoveryInitializePromise = null;
-      codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
+      codexHandshakeState = isCodexNativeRuntimeTarget(resolveConfiguredRuntimeTargetFromConfig(config))
+        && config.runtimeEndpoint
+        ? "warm"
+        : "cold";
       supportsNativeTokenUsageUpdates = false;
       pendingAutoWarmPromise = null;
     },
     onTransportError({ error, currentCwd }) {
-      if (config.codexEndpoint) {
-        console.error(`[androdex] Failed to connect to Codex endpoint: ${config.codexEndpoint}`);
+      if (config.runtimeEndpoint) {
+        console.error(`[androdex] Failed to connect to ${workspaceRuntime.getRuntimeTarget()} endpoint: ${config.runtimeEndpoint}`);
       } else {
         console.error("[androdex] Failed to start the active host runtime for the selected workspace.");
       }
@@ -219,6 +232,15 @@ function startBridge({
         pid: process.pid,
         currentCwd: currentCwd || null,
         lastError: error.message,
+      });
+    },
+    onTransportMetadata() {
+      publishBridgeStatus({
+        state: workspaceRuntime.hasActiveWorkspace() ? "running" : "starting",
+        connectionStatus: lastConnectionStatus || "connecting",
+        pid: process.pid,
+        currentCwd: workspaceRuntime.getCurrentCwd() || null,
+        lastError: lastPublishedBridgeStatus?.lastError || "",
       });
     },
     onTransportMessage(message) {
@@ -238,6 +260,7 @@ function startBridge({
         message,
         forwardedInitializeRequestIds,
         buildBridgeRuntimeMetadata({
+          runtimeMetadata: workspaceRuntime.getRuntimeMetadata(),
           runtimeTarget: workspaceRuntime.getRuntimeTarget(),
           fallbackTargetConfig: configuredRuntimeTarget,
         }),
@@ -324,6 +347,7 @@ function startBridge({
 
   function getStatus() {
     const runtimeMetadata = buildBridgeRuntimeMetadata({
+      runtimeMetadata: workspaceRuntime.getRuntimeMetadata(),
       runtimeTarget: workspaceRuntime.getRuntimeTarget(),
       fallbackTargetConfig: configuredRuntimeTarget,
     });
@@ -484,6 +508,9 @@ function startBridge({
     if (handleBridgeManagedHandshakeMessage(normalizedMessage)) {
       return;
     }
+    if (handleBridgeManagedRuntimeConfigRequest(normalizedMessage, sendApplicationResponse)) {
+      return;
+    }
     if (handleBridgeManagedAccountRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
@@ -505,7 +532,24 @@ function startBridge({
     }
 
     if (!workspaceRuntime.hasActiveWorkspace()) {
-      respondWorkspaceNotActive(normalizedMessage);
+      respondWorkspaceNotActive(normalizedMessage, workspaceRuntime.getRuntimeMetadata());
+      return;
+    }
+
+    const activeRuntimeTarget = workspaceRuntime.getRuntimeTarget();
+    const parsed = safeParseJSON(normalizedMessage);
+    const method = normalizeNonEmptyString(parsed?.method);
+    if (!isRuntimeTargetMethodAllowed({
+      targetKind: activeRuntimeTarget,
+      method,
+    })) {
+      respondForwardingFailure(
+        normalizedMessage,
+        buildRuntimeTargetMethodRejectionMessage({
+          targetKind: activeRuntimeTarget,
+          method,
+        }),
+      );
       return;
     }
 
@@ -542,6 +586,7 @@ function startBridge({
       rawMessage,
       codexHandshakeState,
       lastInitializeParams,
+      runtimeTarget: workspaceRuntime.getRuntimeTarget(),
     })) {
       return false;
     }
@@ -583,6 +628,9 @@ function startBridge({
 
   function maybeWarmCodexAfterBridgeInitialize() {
     if (!workspaceRuntime.hasActiveWorkspace()) {
+      return;
+    }
+    if (!isCodexNativeRuntimeTarget(workspaceRuntime.getRuntimeTarget())) {
       return;
     }
     if (!lastInitializeParams || typeof lastInitializeParams !== "object") {
@@ -657,6 +705,17 @@ function startBridge({
     }
 
     const requestId = parsed.id;
+    if (shouldServeBridgeManagedReadOnlySnapshot({
+      runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+      workspaceActive: workspaceRuntime.hasActiveWorkspace(),
+    })) {
+      sendResponse(JSON.stringify({
+        id: requestId,
+        result: buildUnavailableHostAccountStatus(),
+      }));
+      return true;
+    }
+
     readSanitizedAuthStatus()
       .then((result) => {
         sendResponse(JSON.stringify({ id: requestId, result }));
@@ -675,6 +734,33 @@ function startBridge({
       });
 
     return true;
+  }
+
+  function handleBridgeManagedRuntimeConfigRequest(rawMessage, sendResponse) {
+    if (!shouldServeBridgeManagedReadOnlySnapshot({
+      runtimeTarget: workspaceRuntime.getRuntimeTarget(),
+      workspaceActive: workspaceRuntime.hasActiveWorkspace(),
+    })) {
+      return false;
+    }
+
+    const parsed = safeParseJSON(rawMessage);
+    const method = normalizeNonEmptyString(parsed?.method);
+    if (parsed?.id == null) {
+      return false;
+    }
+
+    if (isBridgeManagedReadOnlyRuntimeConfigMethod(method)) {
+      sendResponse(JSON.stringify({
+        id: parsed.id,
+        result: {
+          items: [],
+        },
+      }));
+      return true;
+    }
+
+    return false;
   }
 
   async function readSanitizedAuthStatus() {
@@ -889,6 +975,7 @@ function startBridge({
         createBridgeManagedInitializeSuccessResponse(
           parsed.id,
           buildBridgeRuntimeMetadata({
+            runtimeMetadata: workspaceRuntime.getRuntimeMetadata(),
             runtimeTarget: workspaceRuntime.getRuntimeTarget(),
             fallbackTargetConfig: configuredRuntimeTarget,
           }),
@@ -905,17 +992,19 @@ function startBridge({
     return false;
   }
 
-  function respondWorkspaceNotActive(rawMessage) {
+  function respondWorkspaceNotActive(rawMessage, runtimeMetadata = null) {
     const parsed = safeParseJSON(rawMessage);
     if (!parsed || parsed.id == null) {
       return;
     }
 
+    const attachFailure = normalizeNonEmptyString(runtimeMetadata?.runtimeAttachFailure);
     sendApplicationResponse(JSON.stringify({
       id: parsed.id,
       error: {
         code: -32000,
-        message: "No active workspace on the host. Choose a project from the Android app to get started.",
+        message: attachFailure
+          || "No active workspace on the host. Choose a project from the Android app to get started.",
       },
     }));
   }
@@ -1018,6 +1107,7 @@ function startBridge({
 
   function publishBridgeStatus(status) {
     const runtimeMetadata = buildBridgeRuntimeMetadata({
+      runtimeMetadata: workspaceRuntime.getRuntimeMetadata(),
       runtimeTarget: workspaceRuntime.getRuntimeTarget(),
       fallbackTargetConfig: configuredRuntimeTarget,
     });
@@ -1074,6 +1164,10 @@ function startBridge({
   }
 
   function recoverForwardedRequestAfterColdCodexResponse(rawMessage) {
+    if (!isCodexNativeRuntimeTarget(workspaceRuntime.getRuntimeTarget())) {
+      return false;
+    }
+
     const replayableRequest = resolveForwardedRequestReplay(
       rawMessage,
       forwardedRequestTimingsById,
@@ -1373,11 +1467,13 @@ function createBridgeManagedInitializeSuccessResponse(requestId, runtimeMetadata
 }
 
 function buildBridgeRuntimeMetadata({
+  runtimeMetadata = null,
   runtimeTarget = "",
   fallbackTargetConfig = null,
 } = {}) {
   const resolvedTargetConfig = runCatchingResolveRuntimeTargetConfig(runtimeTarget) || fallbackTargetConfig;
   return {
+    ...(runtimeMetadata && typeof runtimeMetadata === "object" ? runtimeMetadata : {}),
     runtimeTarget: resolvedTargetConfig?.kind || normalizeNonEmptyString(runtimeTarget) || null,
     runtimeTargetDisplayName: resolvedTargetConfig?.displayName || null,
     backendProvider: resolvedTargetConfig?.backendProviderKind || null,
@@ -1417,6 +1513,39 @@ function titleCaseProviderName(value) {
   return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
 }
 
+function resolveConfiguredRuntimeTargetFromConfig(config) {
+  return normalizeNonEmptyString(config?.runtimeTarget)
+    || normalizeNonEmptyString(config?.runtimeProvider)
+    || "codex-native";
+}
+
+function buildUnavailableHostAccountStatus() {
+  return {
+    status: "unavailable",
+    authMethod: null,
+    email: null,
+    planType: null,
+    loginInFlight: false,
+    needsReauth: false,
+    tokenReady: false,
+    expiresAt: null,
+    bridgeVersion: null,
+    bridgeLatestVersion: null,
+  };
+}
+
+function shouldServeBridgeManagedReadOnlySnapshot({
+  runtimeTarget = "",
+  workspaceActive = false,
+} = {}) {
+  return isReadOnlyRuntimeTarget(runtimeTarget) && workspaceActive;
+}
+
+function isBridgeManagedReadOnlyRuntimeConfigMethod(method) {
+  const normalizedMethod = normalizeRuntimeMethod(method);
+  return normalizedMethod === "model/list" || normalizedMethod === "collaborationmode/list";
+}
+
 function isCodexInitializeRetryableError(error) {
   return error?.code === "codex_rpc_timeout";
 }
@@ -1445,7 +1574,11 @@ function shouldQueueMessageUntilCodexWarm({
   rawMessage,
   codexHandshakeState,
   lastInitializeParams,
+  runtimeTarget = "codex-native",
 }) {
+  if (!isCodexNativeRuntimeTarget(runtimeTarget)) {
+    return false;
+  }
   if (codexHandshakeState === "warm") {
     return false;
   }
@@ -1503,6 +1636,7 @@ function buildMacRegistration(deviceState) {
 }
 
 module.exports = {
+  buildUnavailableHostAccountStatus,
   createBridgeManagedInitializeSuccessResponse,
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
@@ -1513,7 +1647,9 @@ module.exports = {
   resolveForwardedInitializeResponse,
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
+  isBridgeManagedReadOnlyRuntimeConfigMethod,
   shouldAllowPreResumeRelayResponse,
+  shouldServeBridgeManagedReadOnlySnapshot,
   shouldQueueMessageUntilCodexWarm,
   startBridge,
 };

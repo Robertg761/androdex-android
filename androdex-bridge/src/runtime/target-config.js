@@ -20,13 +20,18 @@ const SUPPORTED_RUNTIME_TARGETS = Object.freeze({
     launchArgs: Object.freeze(["app-server"]),
     launchDescription: "`codex app-server`",
   }),
-});
-
-const PLANNED_RUNTIME_TARGETS = Object.freeze({
   "t3-server": Object.freeze({
     kind: "t3-server",
     legacyProviderKind: "t3code",
     displayName: "T3 Server",
+    backendProviderKind: null,
+    endpointEnvVars: ["ANDRODEX_T3_ENDPOINT"],
+    desktopBundleIdEnvVars: [],
+    defaultBundleId: "",
+    defaultAppPath: "",
+    launchCommand: "",
+    launchArgs: Object.freeze([]),
+    launchDescription: "an explicit host-local T3 endpoint",
   }),
 });
 
@@ -53,14 +58,11 @@ function readRuntimeTargetKind({ env = process.env } = {}) {
   }
 
   const normalized = normalizeRuntimeTargetKind(rawValue);
-  if (SUPPORTED_RUNTIME_TARGETS[normalized] || PLANNED_RUNTIME_TARGETS[normalized]) {
+  if (SUPPORTED_RUNTIME_TARGETS[normalized]) {
     return normalized;
   }
 
-  const supportedKinds = Object.keys({
-    ...SUPPORTED_RUNTIME_TARGETS,
-    ...PLANNED_RUNTIME_TARGETS,
-  }).sort().join(", ");
+  const supportedKinds = Object.keys(SUPPORTED_RUNTIME_TARGETS).sort().join(", ");
   throw new Error(
     `Unsupported runtime target "${rawValue}". Known targets: ${supportedKinds}. `
       + "Use ANDRODEX_RUNTIME_TARGET (preferred) or the legacy ANDRODEX_RUNTIME_PROVIDER."
@@ -85,14 +87,6 @@ function resolveRuntimeTargetConfig({ kind = DEFAULT_RUNTIME_TARGET } = {}) {
     return supportedTarget;
   }
 
-  const plannedTarget = PLANNED_RUNTIME_TARGETS[normalizedKind];
-  if (plannedTarget) {
-    throw new Error(
-      `${plannedTarget.displayName} support is planned but not implemented yet. `
-        + "Keep using the default Codex-native runtime target until the adapter lands."
-    );
-  }
-
   const supportedKinds = Object.keys(SUPPORTED_RUNTIME_TARGETS).sort().join(", ");
   throw new Error(
     `Unsupported runtime target "${kind}". Supported targets today: ${supportedKinds}.`
@@ -105,6 +99,19 @@ function createRuntimeLaunchPlan({
   cwd = "",
 } = {}) {
   const runtimeTarget = resolveRuntimeTargetConfig({ kind });
+  if (!normalizeRuntimeTargetKind(runtimeTarget.kind || "")
+    || !runtimeTarget.launchCommand
+    || !Array.isArray(runtimeTarget.launchArgs)
+    || runtimeTarget.launchArgs.length === 0) {
+    const endpointHint = Array.isArray(runtimeTarget.endpointEnvVars)
+      && runtimeTarget.endpointEnvVars.length > 0
+      ? runtimeTarget.endpointEnvVars.join(" or ")
+      : "an explicit endpoint";
+    throw new Error(
+      `${runtimeTarget.displayName} does not support bridge-managed launch yet. `
+        + `Configure ${endpointHint} to attach to an existing host-local instance.`
+    );
+  }
   return {
     command: runtimeTarget.launchCommand,
     args: [...runtimeTarget.launchArgs],

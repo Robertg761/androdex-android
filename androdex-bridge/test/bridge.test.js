@@ -8,9 +8,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const WebSocket = require("ws");
 const {
+  buildUnavailableHostAccountStatus,
   createBridgeManagedInitializeSuccessResponse,
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
+  isBridgeManagedReadOnlyRuntimeConfigMethod,
   logForwardedRequestToCodex,
   rememberForwardedRequestTiming,
   resolveForwardedRequestReplay,
@@ -19,6 +21,7 @@ const {
   runRelayWatchdogTick,
   sanitizeThreadHistoryImagesForRelay,
   shouldAllowPreResumeRelayResponse,
+  shouldServeBridgeManagedReadOnlySnapshot,
   shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
 
@@ -44,6 +47,52 @@ test("createBridgeManagedInitializeSuccessResponse can include runtime-target me
       },
     }
   );
+});
+
+test("buildUnavailableHostAccountStatus returns a neutral bridge-managed snapshot", () => {
+  assert.deepEqual(buildUnavailableHostAccountStatus(), {
+    status: "unavailable",
+    authMethod: null,
+    email: null,
+    planType: null,
+    loginInFlight: false,
+    needsReauth: false,
+    tokenReady: false,
+    expiresAt: null,
+    bridgeVersion: null,
+    bridgeLatestVersion: null,
+  });
+});
+
+test("shouldServeBridgeManagedReadOnlySnapshot waits for a ready workspace", () => {
+  assert.equal(
+    shouldServeBridgeManagedReadOnlySnapshot({
+      runtimeTarget: "t3-server",
+      workspaceActive: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldServeBridgeManagedReadOnlySnapshot({
+      runtimeTarget: "t3-server",
+      workspaceActive: true,
+    }),
+    true
+  );
+  assert.equal(
+    shouldServeBridgeManagedReadOnlySnapshot({
+      runtimeTarget: "codex-native",
+      workspaceActive: true,
+    }),
+    false
+  );
+});
+
+test("isBridgeManagedReadOnlyRuntimeConfigMethod accepts both collaboration mode spellings", () => {
+  assert.equal(isBridgeManagedReadOnlyRuntimeConfigMethod("model/list"), true);
+  assert.equal(isBridgeManagedReadOnlyRuntimeConfigMethod("collaborationMode/list"), true);
+  assert.equal(isBridgeManagedReadOnlyRuntimeConfigMethod("collaborationmode/list"), true);
+  assert.equal(isBridgeManagedReadOnlyRuntimeConfigMethod("turn/start"), false);
 });
 
 test("sanitizeThreadHistoryImagesForRelay replaces inline history images with lightweight references", () => {
@@ -295,6 +344,35 @@ test("shouldAllowPreResumeRelayResponse keeps notifications and server requests 
       })
     ),
     false
+  );
+});
+
+test("shouldQueueMessageUntilCodexWarm only queues Codex-native requests", () => {
+  assert.equal(
+    shouldQueueMessageUntilCodexWarm({
+      rawMessage: JSON.stringify({
+        id: "req-thread-list",
+        method: "thread/list",
+        params: {},
+      }),
+      codexHandshakeState: "cold",
+      lastInitializeParams: {},
+      runtimeTarget: "t3-server",
+    }),
+    false
+  );
+  assert.equal(
+    shouldQueueMessageUntilCodexWarm({
+      rawMessage: JSON.stringify({
+        id: "req-thread-list",
+        method: "thread/list",
+        params: {},
+      }),
+      codexHandshakeState: "cold",
+      lastInitializeParams: {},
+      runtimeTarget: "codex-native",
+    }),
+    true
   );
 });
 

@@ -26,6 +26,13 @@ test("readRuntimeTargetKind accepts the legacy provider env alias", () => {
   );
 });
 
+test("readRuntimeTargetKind accepts the T3 legacy provider alias", () => {
+  assert.equal(
+    readRuntimeTargetKind({ env: { ANDRODEX_RUNTIME_PROVIDER: "t3code" } }),
+    "t3-server"
+  );
+});
+
 test("readRuntimeTargetKind rejects unsupported configured target values", () => {
   assert.throws(
     () => readRuntimeTargetKind({ env: { ANDRODEX_RUNTIME_TARGET: "bogus" } }),
@@ -43,6 +50,16 @@ test("resolveRuntimeTargetConfig returns the codex-native target defaults", () =
   assert.deepEqual(target.desktopBundleIdEnvVars, ["ANDRODEX_CODEX_BUNDLE_ID"]);
 });
 
+test("resolveRuntimeTargetConfig returns the T3 server target defaults", () => {
+  const target = resolveRuntimeTargetConfig({ kind: "t3-server" });
+
+  assert.equal(target.kind, "t3-server");
+  assert.equal(target.legacyProviderKind, "t3code");
+  assert.equal(target.backendProviderKind, null);
+  assert.deepEqual(target.endpointEnvVars, ["ANDRODEX_T3_ENDPOINT"]);
+  assert.deepEqual(target.desktopBundleIdEnvVars, []);
+});
+
 test("createRuntimeLaunchPlan launches codex app-server in the selected workspace", () => {
   const launchPlan = createRuntimeLaunchPlan({
     kind: "codex-native",
@@ -54,6 +71,13 @@ test("createRuntimeLaunchPlan launches codex app-server in the selected workspac
   assert.deepEqual(launchPlan.args, ["app-server"]);
   assert.equal(launchPlan.options.cwd, "/tmp/workspace");
   assert.equal(launchPlan.options.env.PATH, "/usr/bin");
+});
+
+test("createRuntimeLaunchPlan refuses unmanaged T3 launch until managed mode lands", () => {
+  assert.throws(
+    () => createRuntimeLaunchPlan({ kind: "t3-server" }),
+    /does not support bridge-managed launch yet/i
+  );
 });
 
 test("legacy provider helpers still resolve codex for backwards compatibility", () => {
@@ -74,16 +98,9 @@ test("resolveRuntimeTargetConfig rejects unsupported explicit target values", ()
   );
 });
 
-test("planned runtime targets fail fast with a clear message until the adapter lands", () => {
-  assert.throws(
-    () => resolveRuntimeTargetConfig({ kind: "t3-server" }),
-    /planned but not implemented yet/i
-  );
-});
-
-test("createRuntimeAdapter preserves the T3 fast-fail path", () => {
+test("createRuntimeAdapter requires an explicit T3 endpoint for the read-only attach milestone", () => {
   assert.throws(
     () => createRuntimeAdapter({ targetKind: "t3-server" }),
-    /planned but not implemented yet/i
+    /read-only attach currently requires/i
   );
 });

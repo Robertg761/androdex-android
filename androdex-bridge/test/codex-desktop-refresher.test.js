@@ -36,6 +36,21 @@ test("readBridgeConfig keeps the public relay default and disables refresh unles
   assert.equal(enabledConfig.routeThreadTargets, true);
   assert.equal(enabledConfig.relayUrl, "ws://127.0.0.1:8787/relay");
   assert.equal(enabledConfig.codexEndpoint, "ws://127.0.0.1:8080");
+  assert.equal(enabledConfig.runtimeEndpoint, "ws://127.0.0.1:8080");
+});
+
+test("readBridgeConfig resolves the T3 endpoint into the generic runtime endpoint slot", () => {
+  const config = readBridgeConfig({
+    env: {
+      ANDRODEX_RUNTIME_TARGET: "t3-server",
+      ANDRODEX_T3_ENDPOINT: "ws://127.0.0.1:9090",
+    },
+  });
+
+  assert.equal(config.runtimeTarget, "t3-server");
+  assert.equal(config.runtimeProvider, "t3code");
+  assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:9090");
+  assert.equal(config.codexEndpoint, "");
 });
 
 test("macOS refresh AppleScript supports preserve-context relaunches without Accessibility automation", () => {

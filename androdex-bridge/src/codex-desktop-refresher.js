@@ -606,7 +606,8 @@ class CodexDesktopRefresher {
 function readBridgeConfig({ env = process.env } = {}) {
   const runtimeTarget = readRuntimeTargetKind({ env });
   const runtimeTargetConfig = resolveRuntimeTargetConfig({ kind: runtimeTarget });
-  const codexEndpoint = readFirstDefinedEnv(runtimeTargetConfig.endpointEnvVars, "", env);
+  const runtimeEndpoint = readFirstDefinedEnv(runtimeTargetConfig.endpointEnvVars, "", env);
+  const codexEndpoint = runtimeTarget === "codex-native" ? runtimeEndpoint : "";
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
   const routeThreadTargets = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ROUTE_TO_THREAD"], env);
@@ -635,6 +636,7 @@ function readBridgeConfig({ env = process.env } = {}) {
       readFirstDefinedEnv(["ANDRODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
       DEFAULT_DEBOUNCE_MS
     ),
+    runtimeEndpoint,
     codexEndpoint,
     runtimeTarget,
     runtimeProvider: runtimeTargetConfig.legacyProviderKind,
