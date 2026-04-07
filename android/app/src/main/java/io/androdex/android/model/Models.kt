@@ -300,6 +300,15 @@ data class HostRuntimeMetadata(
     val runtimeTargetDisplayName: String? = null,
     val backendProvider: String? = null,
     val backendProviderDisplayName: String? = null,
+    val runtimeAttachState: String? = null,
+    val runtimeAttachFailure: String? = null,
+    val runtimeProtocolVersion: String? = null,
+    val runtimeAuthMode: String? = null,
+    val runtimeEndpointHost: String? = null,
+    val runtimeSnapshotSequence: Int? = null,
+    val runtimeReplaySequence: Int? = null,
+    val runtimeSubscriptionState: String? = null,
+    val runtimeDuplicateSuppressionCount: Int? = null,
 )
 
 data class HostRateLimitBucket(

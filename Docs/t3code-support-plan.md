@@ -606,7 +606,44 @@ These are not optional nice-to-haves. They are the minimum controls needed to ma
 - log action gating reasons and stale-action rejection reasons for unsupported, orphaned, or already-resolved thread mutations
 - keep observability host-local and open-source-safe: no private domains, credentials, prompt contents, or sensitive payload dumps in normal logs
 
-### 7. Codex-native regression mitigation
+### 7. Adapter invariants
+
+- publish runtime target identity and bridge-managed runtime metadata before Android consumes any T3-backed thread payload for a fresh attach or same-host target switch
+- treat snapshot as the authoritative baseline, then apply replay, then begin draining buffered live events; never reverse that ordering
+- treat replay checkpoints as state-root-scoped, runtime-target-scoped watermarks; never reuse a replay cursor across a different runtime target or T3 state root
+- make replay application idempotent across bootstrap replay, reconnect replay, resubscribe recovery, and duplicate live delivery
+- derive Android-visible live notifications from snapshot deltas and item-aware activity identity, not from raw event count alone
+- keep canonical thread ids stable at the Android/bridge seam even when the host runtime keeps using raw backend ids internally
+- clear selected-thread and pending-action Android state on runtime-target identity changes before rehydrating thread data from the new target
+- treat stale approval, user-input, and interrupt attempts as state-reconciliation events: clear the stale local state, refresh from the host, and report a resolved-on-host outcome instead of a generic transport error
+- keep read-only T3 milestones honest: if a live surface or mutation path has not been explicitly proven safe, gate it and advertise the gate through capability metadata
+
+### 8. Structured log schema
+
+- required base fields:
+  - `component`
+  - `event`
+  - `runtimeTarget`
+  - `attachState`
+  - `subscriptionState`
+  - `protocolVersion`
+  - `authMode`
+  - `endpointHost`
+  - `stateRootId`
+  - `snapshotSequence`
+  - `replaySequence`
+  - `duplicateSuppressionCount`
+- required event-specific fields:
+  - attach suitability: `reasonCode`
+  - replay: `fromSequenceExclusive`, `toSequenceInclusive`, `appliedCount`, `duplicateCount`, `suppressNotificationsThroughSequence`
+  - action gating: `method`, `threadId`, `companionSupportState`, `reasonCode`
+  - reconnect/resubscribe: `reasonCode`
+- redaction rules:
+  - do not log raw local workspace paths or raw T3 state-root paths in normal logs
+  - do not log prompt contents, tool payload bodies, approval text, user-input answers, or model output text in adapter observability
+  - when local identity is needed for diagnosis, prefer hashed or canonicalized identifiers over raw path values
+
+### 9. Codex-native regression mitigation
 
 - keep a parity test suite for the extracted Codex-native adapter before enabling T3-backed runtime selection
 - avoid changing Android screens first; keep T3-specific branching in bridge and service layers
@@ -750,9 +787,14 @@ Status update:
 - expanded replay/idempotency coverage for resumed T3 live notifications:
   - duplicate live-plus-replay delivery is now explicitly covered for turn lifecycle notifications in addition to the existing title, assistant, plan, task, and tool surfaces
   - reconnect replay coverage now proves previously-emitted `turn/started` notifications do not re-fire after restart while new `turn/completed` notifications still surface
+- landed Android-visible runtime sync observability from bridge metadata:
+  - bridge status now shows runtime attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay sequences, and duplicate suppression counters when the host exposes them
+  - attach/replay failure text is now surfaced in the same status card without introducing T3-only labeling into the generic runtime-target UI
+- landed structured host-side adapter logging for T3 attach/replay/gating diagnostics:
+  - the bridge now emits structured host-local runtime log entries for suitability probe start/validation, snapshot bootstrap, replay requests/results, reconnect/resubscribe recovery, and read-only action gating
+  - logs use a hashed state-root identity plus safe reason codes instead of dumping local path details into normal output
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
-  - structured logging for attach, bootstrap, replay, and action-gating outcomes
 
 Deliverables:
 
@@ -930,12 +972,14 @@ Completed so far:
 - T3 summaries, reads, and resume responses now carry explicit bridge capability metadata for companion support state, workspace availability, live-update eligibility, and read-only action gating so Android no longer has to infer unsupported/orphaned state from preview text alone
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
+- Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
+- the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
+- the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
 
 Still in progress:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool subset
-- structured logging for attach, bootstrap, replay, and action-gating outcomes
 
 Not started yet:
 
@@ -945,7 +989,6 @@ Not started yet:
 ## Immediate Next Steps
 
 1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool subset.
-2. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
-3. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
-4. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
-5. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
+2. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
+3. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
+4. Start the first mutating T3 action slice only after the live-contract and replay-hardening backlog is narrow enough that write-side failures will be diagnosable from the current metadata and log surface.

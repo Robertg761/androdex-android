@@ -68,7 +68,16 @@ class AndrodexClientCapabilityBootstrapTest {
               "runtimeTarget": "codex-native",
               "runtimeTargetDisplayName": "Codex Native",
               "backendProvider": "codex",
-              "backendProviderDisplayName": "Codex"
+              "backendProviderDisplayName": "Codex",
+              "runtimeAttachState": "ready",
+              "runtimeAttachFailure": "Gap replay timed out",
+              "runtimeProtocolVersion": "2026-04-01",
+              "runtimeAuthMode": "bootstrap-token",
+              "runtimeEndpointHost": "127.0.0.1",
+              "runtimeSnapshotSequence": 7,
+              "runtimeReplaySequence": 9,
+              "runtimeSubscriptionState": "live",
+              "runtimeDuplicateSuppressionCount": 2
             }
             """.trimIndent()
         )
@@ -79,6 +88,42 @@ class AndrodexClientCapabilityBootstrapTest {
         assertEquals("Codex Native", decoded?.runtimeTargetDisplayName)
         assertEquals("codex", decoded?.backendProvider)
         assertEquals("Codex", decoded?.backendProviderDisplayName)
+        assertEquals("ready", decoded?.runtimeAttachState)
+        assertEquals("Gap replay timed out", decoded?.runtimeAttachFailure)
+        assertEquals("2026-04-01", decoded?.runtimeProtocolVersion)
+        assertEquals("bootstrap-token", decoded?.runtimeAuthMode)
+        assertEquals("127.0.0.1", decoded?.runtimeEndpointHost)
+        assertEquals(7, decoded?.runtimeSnapshotSequence)
+        assertEquals(9, decoded?.runtimeReplaySequence)
+        assertEquals("live", decoded?.runtimeSubscriptionState)
+        assertEquals(2, decoded?.runtimeDuplicateSuppressionCount)
+    }
+
+    @Test
+    fun decodeHostRuntimeMetadata_readsSnakeCaseRuntimeSyncFields() {
+        val result = JSONObject(
+            """
+            {
+              "runtime_target": "t3-server",
+              "runtime_target_display_name": "T3 Server",
+              "runtime_attach_state": "ready",
+              "runtime_snapshot_sequence": "11",
+              "runtime_replay_sequence": 13,
+              "runtime_subscription_state": "live",
+              "runtime_duplicate_suppression_count": "5"
+            }
+            """.trimIndent()
+        )
+
+        val decoded = decodeHostRuntimeMetadata(result)
+
+        assertEquals("t3-server", decoded?.runtimeTarget)
+        assertEquals("T3 Server", decoded?.runtimeTargetDisplayName)
+        assertEquals("ready", decoded?.runtimeAttachState)
+        assertEquals(11, decoded?.runtimeSnapshotSequence)
+        assertEquals(13, decoded?.runtimeReplaySequence)
+        assertEquals("live", decoded?.runtimeSubscriptionState)
+        assertEquals(5, decoded?.runtimeDuplicateSuppressionCount)
     }
 
     @Test

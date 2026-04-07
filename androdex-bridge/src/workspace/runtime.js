@@ -17,6 +17,7 @@ function createWorkspaceRuntime({
   onBeforeTransportStart = null,
   onTransportClose = null,
   onTransportError = null,
+  onTransportLog = null,
   onTransportMetadata = null,
   onTransportMessage = null,
 } = {}) {
@@ -135,6 +136,7 @@ function createWorkspaceRuntime({
       env: process.env,
       cwd,
       loadReplayCursor,
+      logEvent: onTransportLog,
       persistReplayCursor,
       targetKind: resolveConfiguredRuntimeTarget(),
     });

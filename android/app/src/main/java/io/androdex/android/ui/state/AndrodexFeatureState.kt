@@ -149,6 +149,9 @@ internal data class BridgeStatusUiState(
     val summary: String,
     val runtimeTargetLabel: String? = null,
     val backendProviderLabel: String? = null,
+    val runtimeSyncLabel: String? = null,
+    val runtimeSyncDetail: String? = null,
+    val runtimeFailureDetail: String? = null,
     val serviceTierMessage: String,
     val threadForkMessage: String,
     val updateCommand: String,
@@ -1211,6 +1214,11 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         ?: hostRuntimeMetadata?.backendProvider
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+    val runtimeSyncLabel = buildRuntimeSyncLabel(hostRuntimeMetadata)
+    val runtimeSyncDetail = buildRuntimeSyncDetail(hostRuntimeMetadata)
+    val runtimeFailureDetail = hostRuntimeMetadata?.runtimeAttachFailure
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
     val title = when (connectionStatus) {
         ConnectionStatus.CONNECTED -> "Bridge Ready"
         ConnectionStatus.CONNECTING, ConnectionStatus.HANDSHAKING -> "Connecting To Host"
@@ -1257,6 +1265,9 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         summary = summary,
         runtimeTargetLabel = runtimeTargetLabel,
         backendProviderLabel = backendProviderLabel,
+        runtimeSyncLabel = runtimeSyncLabel,
+        runtimeSyncDetail = runtimeSyncDetail,
+        runtimeFailureDetail = runtimeFailureDetail,
         serviceTierMessage = if (supportsServiceTier) {
             "Runtime speed tiers are available from Android."
         } else {
@@ -1269,6 +1280,44 @@ private fun AndrodexUiState.toBridgeStatusUiState(): BridgeStatusUiState {
         },
         updateCommand = AppEnvironment.bridgeUpdateCommand,
     )
+}
+
+private fun buildRuntimeSyncLabel(metadata: io.androdex.android.model.HostRuntimeMetadata?): String? {
+    val attachState = metadata?.runtimeAttachState
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.replace('_', ' ')
+    val subscriptionState = metadata?.runtimeSubscriptionState
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.replace('_', ' ')
+    val protocolVersion = metadata?.runtimeProtocolVersion?.trim()?.takeIf { it.isNotEmpty() }
+    val authMode = metadata?.runtimeAuthMode
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.replace('-', ' ')
+        ?.replace('_', ' ')
+    val parts = listOfNotNull(
+        attachState?.replaceFirstChar(Char::uppercaseChar),
+        subscriptionState?.replaceFirstChar(Char::uppercaseChar),
+        protocolVersion?.let { "Protocol $it" },
+        authMode?.let { "Auth ${it.replaceFirstChar(Char::uppercaseChar)}" },
+    )
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" • ")
+}
+
+private fun buildRuntimeSyncDetail(metadata: io.androdex.android.model.HostRuntimeMetadata?): String? {
+    val endpointHost = metadata?.runtimeEndpointHost?.trim()?.takeIf { it.isNotEmpty() }
+    val snapshotSequence = metadata?.runtimeSnapshotSequence?.let { "Snapshot $it" }
+    val replaySequence = metadata?.runtimeReplaySequence?.let { "Replay $it" }
+    val duplicateCount = metadata?.runtimeDuplicateSuppressionCount?.let { "Duplicates $it" }
+    val parts = listOfNotNull(
+        endpointHost?.let { "Endpoint $it" },
+        snapshotSequence,
+        replaySequence,
+        duplicateCount,
+    )
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" • ")
 }
 
 private fun TrustedPairSnapshot?.toTrustedPairUiState(

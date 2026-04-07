@@ -212,6 +212,14 @@ class AndrodexFeatureStateTest {
                 runtimeTargetDisplayName = "Codex Native",
                 backendProvider = "codex-native",
                 backendProviderDisplayName = "Codex Native",
+                runtimeAttachState = "ready",
+                runtimeProtocolVersion = "2026-04-01",
+                runtimeAuthMode = "bootstrap-token",
+                runtimeEndpointHost = "127.0.0.1",
+                runtimeSnapshotSequence = 7,
+                runtimeReplaySequence = 9,
+                runtimeSubscriptionState = "live",
+                runtimeDuplicateSuppressionCount = 2,
             ),
             activeWorkspacePath = "C:\\Projects\\Androdex",
             runningThreadIds = setOf("thread-1"),
@@ -262,6 +270,15 @@ class AndrodexFeatureStateTest {
         assertEquals(SharedStatusTone.Success, route.state.bridgeStatus.tone)
         assertEquals("Codex Native", route.state.bridgeStatus.runtimeTargetLabel)
         assertEquals("Codex Native", route.state.bridgeStatus.backendProviderLabel)
+        assertEquals(
+            "Ready • Live • Protocol 2026-04-01 • Auth Bootstrap token",
+            route.state.bridgeStatus.runtimeSyncLabel,
+        )
+        assertEquals(
+            "Endpoint 127.0.0.1 • Snapshot 7 • Replay 9 • Duplicates 2",
+            route.state.bridgeStatus.runtimeSyncDetail,
+        )
+        assertEquals(null, route.state.bridgeStatus.runtimeFailureDetail)
         assertNotNull(route.state.trustedPair)
         assertEquals("Authenticated", route.state.hostAccount?.statusLabel)
         assertEquals(SharedStatusTone.Success, route.state.hostAccount?.tone)
@@ -272,6 +289,27 @@ class AndrodexFeatureStateTest {
         assertEquals(
             WorkspaceRowAction.ACTIVATE,
             route.state.projectPicker?.browserEntries?.single()?.action,
+        )
+    }
+
+    @Test
+    fun homeRoute_surfacesRuntimeAttachFailureDetails() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            hostRuntimeMetadata = HostRuntimeMetadata(
+                runtimeTarget = "t3-server",
+                runtimeTargetDisplayName = "T3 Server",
+                runtimeAttachState = "attach_failed",
+                runtimeAttachFailure = "State root mismatch between host and bridge.",
+            ),
+        )
+
+        val homeState = state.toHomeScreenUiState()
+
+        assertEquals("Attach failed", homeState.bridgeStatus.runtimeSyncLabel)
+        assertEquals(
+            "State root mismatch between host and bridge.",
+            homeState.bridgeStatus.runtimeFailureDetail,
         )
     }
 

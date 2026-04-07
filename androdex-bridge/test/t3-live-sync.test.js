@@ -286,6 +286,175 @@ test("T3 adapter replays buffered snapshot gaps before it exposes the ready read
   assert.equal(metadataUpdates.at(-1)?.runtimeReplaySequence, 9);
 });
 
+test("T3 adapter emits structured replay logs with safe state-root identity", async () => {
+  const logEntries = [];
+  const replayedEvents = [
+    {
+      sequence: 8,
+      eventId: "event-8",
+      aggregateKind: "thread",
+      aggregateId: "thread-123",
+      occurredAt: "2026-04-07T12:00:08.000Z",
+      type: "thread.meta-updated",
+      payload: {
+        threadId: "thread-123",
+        title: "Recovered title",
+        updatedAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  ];
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+      return;
+    }
+
+    if (message.tag === "orchestration.replayEvents") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, replayedEvents);
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+    loadReplayCursor() {
+      return 9;
+    },
+    logEvent(entry) {
+      logEntries.push(entry);
+    },
+  });
+
+  await adapter.whenReady();
+
+  const replayRequestLog = logEntries.find((entry) => entry.event === "replay_requested");
+  assert.ok(replayRequestLog);
+  assert.equal(replayRequestLog.reasonCode, "bootstrap_resume");
+  assert.equal(replayRequestLog.fromSequenceExclusive, 7);
+  assert.match(replayRequestLog.stateRootId, /^[0-9a-f]{12}$/);
+  assert.equal(replayRequestLog.stateRootId, "22fb27b82037");
+  assert.equal(replayRequestLog.protocolVersion, "2026-04-01");
+  assert.equal(replayRequestLog.authMode, "bootstrap-token");
+
+  const replayAppliedLog = logEntries.find((entry) => entry.event === "replay_applied");
+  assert.ok(replayAppliedLog);
+  assert.equal(replayAppliedLog.toSequenceInclusive, 8);
+  assert.equal(replayAppliedLog.appliedCount, 1);
+  assert.equal(replayAppliedLog.duplicateCount, 0);
+
+  assert.ok(logEntries.every((entry) => !JSON.stringify(entry).includes("/tmp/t3-state")));
+});
+
+test("T3 adapter emits structured gating logs for rejected read-only actions", async () => {
+  const logEntries = [];
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+    logEvent(entry) {
+      logEntries.push(entry);
+    },
+  });
+
+  await adapter.whenReady();
+
+  assert.throws(() => {
+    adapter.send(JSON.stringify({
+      id: "req-turn-start",
+      method: "turn/start",
+      params: {
+        threadId: "thread-123",
+      },
+    }));
+  }, /read-only/i);
+
+  assert.deepEqual(
+    logEntries.find((entry) =>
+      entry.event === "action_gated" && entry.reasonCode === "runtime_method_rejected"
+    ),
+    {
+      component: "t3-runtime-adapter",
+      event: "action_gated",
+      runtimeTarget: "t3-server",
+      attachState: "ready",
+      subscriptionState: "live",
+      protocolVersion: "2026-04-01",
+      authMode: "bootstrap-token",
+      endpointHost: "127.0.0.1",
+      stateRootId: "22fb27b82037",
+      snapshotSequence: 7,
+      replaySequence: 7,
+      duplicateSuppressionCount: 0,
+      reasonCode: "runtime_method_rejected",
+      method: "turn/start",
+      threadId: "thread-123",
+    },
+  );
+});
+
 test("T3 adapter keeps a live cache and suppresses duplicate events without re-fetching the snapshot", async () => {
   let snapshotRequestCount = 0;
   let subscriptionRequestId = null;

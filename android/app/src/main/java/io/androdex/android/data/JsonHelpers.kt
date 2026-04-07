@@ -72,6 +72,20 @@ fun JSONObject.stringOrNull(vararg keys: String): String? {
     return null
 }
 
+fun JSONObject.intOrNull(vararg keys: String): Int? {
+    for (key in keys) {
+        val rawValue = opt(key)
+        if (rawValue == null || rawValue == JSONObject.NULL) {
+            continue
+        }
+        when (rawValue) {
+            is Number -> return rawValue.toInt()
+            is String -> rawValue.trim().toIntOrNull()?.let { return it }
+        }
+    }
+    return null
+}
+
 fun JSONObject.objectOrNull(vararg keys: String): JSONObject? {
     for (key in keys) {
         val value = optJSONObject(key)
@@ -523,10 +537,37 @@ fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
         "backendProviderDisplayName",
         "backend_provider_display_name",
     )
+    val runtimeAttachState = resultObject.stringOrNull("runtimeAttachState", "runtime_attach_state")
+    val runtimeAttachFailure = resultObject.stringOrNull("runtimeAttachFailure", "runtime_attach_failure")
+    val runtimeProtocolVersion = resultObject.stringOrNull("runtimeProtocolVersion", "runtime_protocol_version")
+    val runtimeAuthMode = resultObject.stringOrNull("runtimeAuthMode", "runtime_auth_mode")
+    val runtimeEndpointHost = resultObject.stringOrNull("runtimeEndpointHost", "runtime_endpoint_host")
+    val runtimeSnapshotSequence = resultObject.intOrNull(
+        "runtimeSnapshotSequence",
+        "runtime_snapshot_sequence",
+    )
+    val runtimeReplaySequence = resultObject.intOrNull(
+        "runtimeReplaySequence",
+        "runtime_replay_sequence",
+    )
+    val runtimeSubscriptionState = resultObject.stringOrNull("runtimeSubscriptionState", "runtime_subscription_state")
+    val runtimeDuplicateSuppressionCount = resultObject.intOrNull(
+        "runtimeDuplicateSuppressionCount",
+        "runtime_duplicate_suppression_count",
+    )
     if (runtimeTarget == null
         && runtimeTargetDisplayName == null
         && backendProvider == null
         && backendProviderDisplayName == null
+        && runtimeAttachState == null
+        && runtimeAttachFailure == null
+        && runtimeProtocolVersion == null
+        && runtimeAuthMode == null
+        && runtimeEndpointHost == null
+        && runtimeSnapshotSequence == null
+        && runtimeReplaySequence == null
+        && runtimeSubscriptionState == null
+        && runtimeDuplicateSuppressionCount == null
     ) {
         return null
     }
@@ -535,6 +576,15 @@ fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
         runtimeTargetDisplayName = runtimeTargetDisplayName,
         backendProvider = backendProvider,
         backendProviderDisplayName = backendProviderDisplayName,
+        runtimeAttachState = runtimeAttachState,
+        runtimeAttachFailure = runtimeAttachFailure,
+        runtimeProtocolVersion = runtimeProtocolVersion,
+        runtimeAuthMode = runtimeAuthMode,
+        runtimeEndpointHost = runtimeEndpointHost,
+        runtimeSnapshotSequence = runtimeSnapshotSequence,
+        runtimeReplaySequence = runtimeReplaySequence,
+        runtimeSubscriptionState = runtimeSubscriptionState,
+        runtimeDuplicateSuppressionCount = runtimeDuplicateSuppressionCount,
     )
 }
 

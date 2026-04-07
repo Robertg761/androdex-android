@@ -5,6 +5,7 @@
 // Depends on: ../codex/transport, ./method-policy, ./t3-protocol, ./t3-suitability, ./target-config
 
 const { createCodexTransport } = require("../codex/transport");
+const { createHash } = require("crypto");
 const {
   applyT3EventsToSnapshot,
   buildT3ThreadListResult,
@@ -42,6 +43,7 @@ function createRuntimeAdapter({
   env = process.env,
   cwd = "",
   loadReplayCursor = null,
+  logEvent = null,
   persistReplayCursor = null,
   WebSocketImpl,
 } = {}) {
@@ -62,6 +64,7 @@ function createRuntimeAdapter({
       endpoint,
       env,
       loadReplayCursor,
+      logEvent,
       persistReplayCursor,
       WebSocketImpl,
     });
@@ -110,6 +113,7 @@ function createT3ServerRuntimeAdapter({
   endpoint = "",
   env = process.env,
   loadReplayCursor = null,
+  logEvent = null,
   persistReplayCursor = null,
   WebSocketImpl,
 } = {}) {
@@ -156,6 +160,16 @@ function createT3ServerRuntimeAdapter({
   const resumedThreadIds = new Set();
   const liveActivityStateByThread = new Map();
   let transport = null;
+  const emitAdapterLog = createStructuredRuntimeLogger({
+    logEvent,
+    runtimeTarget: runtimeTarget.kind,
+    getReplayScope() {
+      return replayScope;
+    },
+    getRuntimeMetadata() {
+      return runtimeMetadata;
+    },
+  });
   const closeListeners = createHandlerBag();
   const errorListeners = createHandlerBag();
   const initialTransport = createAndBindTransport();
@@ -169,6 +183,9 @@ function createT3ServerRuntimeAdapter({
   }
 
   async function performSuitabilityProbe({ request }) {
+    emitAdapterLog("attach_probe_started", {
+      reasonCode: "attach_probe_started",
+    });
     updateRuntimeMetadata({
       runtimeAttachState: "probing",
       runtimeAttachFailure: null,
@@ -190,6 +207,9 @@ function createT3ServerRuntimeAdapter({
       runtimeAttachFailure: null,
       ...validatedMetadata,
     });
+    emitAdapterLog("attach_probe_validated", {
+      reasonCode: "attach_probe_validated",
+    });
     replayScope = {
       runtimeStateRoot: normalizeNonEmptyString(validatedMetadata.runtimeStateRoot),
       runtimeTarget: runtimeTarget.kind,
@@ -207,17 +227,23 @@ function createT3ServerRuntimeAdapter({
     appliedSequence = normalizeSequenceNumber(snapshotCache?.snapshotSequence);
     if (resumeSequence > appliedSequence) {
       await recoverMissingDomainEvents(appliedSequence, {
+        reason: "bootstrap_resume",
         suppressNotificationsThroughSequence: resumeSequence,
       });
     } else {
       persistAppliedReplaySequence(appliedSequence);
     }
+    publishReadModelMetadata();
     liveDomainEventsReady = true;
     await flushPendingDomainEvents();
     updateRuntimeMetadata({
       runtimeAttachState: "ready",
       runtimeAttachFailure: null,
       runtimeSubscriptionState: "live",
+    });
+    emitAdapterLog("attach_ready", {
+      reasonCode: "attach_ready",
+      restoredReplaySequence: resumeSequence,
     });
     hasReachedReadyState = true;
   }
@@ -229,6 +255,11 @@ function createT3ServerRuntimeAdapter({
     snapshotCache = snapshot && typeof snapshot === "object" ? snapshot : createEmptyT3Snapshot();
     updateRuntimeMetadata({
       runtimeSnapshotSequence: normalizeSequenceNumber(snapshotCache?.snapshotSequence),
+    });
+    emitAdapterLog("snapshot_loaded", {
+      reasonCode: hasReachedReadyState ? "snapshot_refresh" : "snapshot_bootstrap",
+      threadCount: Array.isArray(snapshotCache?.threads) ? snapshotCache.threads.length : 0,
+      projectCount: Array.isArray(snapshotCache?.projects) ? snapshotCache.projects.length : 0,
     });
     return snapshotCache;
   }
@@ -267,11 +298,16 @@ function createT3ServerRuntimeAdapter({
       .then(async () => {
         startDomainEventSubscription();
         if (liveDomainEventsReady) {
-          await recoverMissingDomainEvents(appliedSequence);
+          await recoverMissingDomainEvents(appliedSequence, {
+            reason: "resubscribe",
+          });
           await flushPendingDomainEvents();
           updateRuntimeMetadata({
             runtimeAttachFailure: null,
             runtimeSubscriptionState: "live",
+          });
+          emitAdapterLog("subscription_resynced", {
+            reasonCode: "subscription_resynced",
           });
         }
       })
@@ -279,6 +315,9 @@ function createT3ServerRuntimeAdapter({
         updateRuntimeMetadata({
           runtimeSubscriptionState: "error",
           runtimeAttachFailure: normalizeNonEmptyString(error?.message) || runtimeMetadata.runtimeAttachFailure,
+        });
+        emitAdapterLog("subscription_resync_failed", {
+          reasonCode: classifyRuntimeFailure(error?.message),
         });
       })
       .finally(() => {
@@ -315,7 +354,14 @@ function createT3ServerRuntimeAdapter({
         }
 
         if (appliedSequence > 0 && nextSequence > appliedSequence + 1) {
-          const recoveredSequence = await recoverMissingDomainEvents(appliedSequence);
+          emitAdapterLog("live_gap_detected", {
+            reasonCode: "live_gap_detected",
+            fromSequenceExclusive: appliedSequence,
+            nextSequence,
+          });
+          const recoveredSequence = await recoverMissingDomainEvents(appliedSequence, {
+            reason: "live_gap",
+          });
           if (recoveredSequence < nextSequence - 1) {
             throw new Error(
               `T3 event gap detected after sequence ${appliedSequence}; replay did not supply sequence ${nextSequence - 1}.`
@@ -339,6 +385,7 @@ function createT3ServerRuntimeAdapter({
   }
 
   function recoverMissingDomainEvents(fromSequenceExclusive, {
+    reason = "replay",
     suppressNotificationsThroughSequence = 0,
   } = {}) {
     if (replayRecoveryPromise) {
@@ -348,15 +395,34 @@ function createT3ServerRuntimeAdapter({
     updateRuntimeMetadata({
       runtimeSubscriptionState: "replaying",
     });
+    emitAdapterLog("replay_requested", {
+      reasonCode: reason,
+      fromSequenceExclusive,
+      suppressNotificationsThroughSequence,
+    });
     replayRecoveryPromise = transport.request("orchestration.replayEvents", {
       fromSequenceExclusive,
     }, {
       timeoutMs: T3_ATTACH_TIMEOUT_MS,
     }).then((events) => {
-      applyEventsToReadModel(Array.isArray(events) ? events : [], {
+      const replayResult = applyEventsToReadModel(Array.isArray(events) ? events : [], {
         suppressNotificationsThroughSequence,
       });
+      emitAdapterLog("replay_applied", {
+        reasonCode: reason,
+        fromSequenceExclusive,
+        suppressNotificationsThroughSequence,
+        appliedCount: replayResult.appliedCount,
+        duplicateCount: replayResult.duplicateCount,
+        toSequenceInclusive: replayResult.lastSequence,
+      });
       return appliedSequence;
+    }).catch((error) => {
+      emitAdapterLog("replay_failed", {
+        reasonCode: classifyRuntimeFailure(error?.message),
+        fromSequenceExclusive,
+      });
+      throw error;
     }).finally(() => {
       replayRecoveryPromise = null;
       if (!shuttingDown) {
@@ -642,6 +708,9 @@ function createT3ServerRuntimeAdapter({
       runtimeAttachFailure: normalizeNonEmptyString(detail) || runtimeMetadata.runtimeAttachFailure,
       runtimeSubscriptionState: "reconnecting",
     });
+    emitAdapterLog("transport_disconnected", {
+      reasonCode: classifyRuntimeFailure(detail),
+    });
     scheduleReconnect();
   }
 
@@ -663,6 +732,9 @@ function createT3ServerRuntimeAdapter({
               runtimeAttachState: "reconnecting",
               runtimeAttachFailure: detail,
               runtimeSubscriptionState: "error",
+            });
+            emitAdapterLog("reconnect_retry_failed", {
+              reasonCode: classifyRuntimeFailure(detail),
             });
             if (shuttingDown) {
               return;
@@ -720,6 +792,14 @@ function createT3ServerRuntimeAdapter({
           const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
           const resumeSupport = resolveT3ResumeSupport(snapshot, threadId);
           if (!resumeSupport.ok) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "resume_live_updates_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                resumeSupport.result?.threadCapabilities?.companionSupportState
+              ) || null,
+            });
             emitRpcResult(requestId, resumeSupport.result);
             return;
           }
@@ -769,6 +849,11 @@ function createT3ServerRuntimeAdapter({
         targetKind: runtimeTarget.kind,
         method,
       })) {
+        emitAdapterLog("action_gated", {
+          reasonCode: "runtime_method_rejected",
+          method,
+          threadId: normalizeNonEmptyString(parsed?.params?.threadId) || null,
+        });
         throw new Error(
           buildRuntimeTargetMethodRejectionMessage({
             targetKind: runtimeTarget.kind,
@@ -793,6 +878,9 @@ function createT3ServerRuntimeAdapter({
         updateRuntimeMetadata({
           runtimeAttachState: "rejected",
           runtimeAttachFailure: normalizeNonEmptyString(error?.message) || "T3 attach failed.",
+        });
+        emitAdapterLog("attach_rejected", {
+          reasonCode: classifyRuntimeFailure(error?.message),
         });
         throw error;
       });
@@ -1268,6 +1356,98 @@ function wait(durationMs) {
     const timer = setTimeout(resolve, durationMs);
     timer.unref?.();
   });
+}
+
+function createStructuredRuntimeLogger({
+  logEvent = null,
+  runtimeTarget = "",
+  getReplayScope = null,
+  getRuntimeMetadata = null,
+} = {}) {
+  return function emitStructuredRuntimeEvent(event, fields = {}) {
+    if (typeof logEvent !== "function") {
+      return;
+    }
+
+    const runtimeMetadata = getRuntimeMetadata?.() || {};
+    const replayScope = getReplayScope?.() || {};
+    try {
+      logEvent(compactObject({
+        component: "t3-runtime-adapter",
+        event: normalizeNonEmptyString(event) || "runtime_event",
+        runtimeTarget: normalizeNonEmptyString(runtimeTarget) || null,
+        attachState: normalizeNonEmptyString(runtimeMetadata.runtimeAttachState) || null,
+        subscriptionState: normalizeNonEmptyString(runtimeMetadata.runtimeSubscriptionState) || null,
+        protocolVersion: normalizeNonEmptyString(runtimeMetadata.runtimeProtocolVersion) || null,
+        authMode: normalizeNonEmptyString(runtimeMetadata.runtimeAuthMode) || null,
+        endpointHost: normalizeNonEmptyString(runtimeMetadata.runtimeEndpointHost) || null,
+        stateRootId: buildRuntimeStateRootId(
+          replayScope.runtimeStateRoot || runtimeMetadata.runtimeStateRoot
+        ),
+        snapshotSequence: normalizeSequenceNumber(runtimeMetadata.runtimeSnapshotSequence),
+        replaySequence: normalizeSequenceNumber(runtimeMetadata.runtimeReplaySequence),
+        duplicateSuppressionCount: normalizeSequenceNumber(
+          runtimeMetadata.runtimeDuplicateSuppressionCount
+        ),
+        ...compactObject(fields),
+      }));
+    } catch {
+      // Adapter observability must never interfere with the active runtime.
+    }
+  };
+}
+
+function buildRuntimeStateRootId(value) {
+  const normalizedValue = normalizeNonEmptyString(value);
+  if (!normalizedValue) {
+    return null;
+  }
+  return createHash("sha1").update(normalizedValue).digest("hex").slice(0, 12);
+}
+
+function compactObject(value) {
+  const entries = Object.entries(value || {}).filter(([, entryValue]) => {
+    if (entryValue == null) {
+      return false;
+    }
+    if (typeof entryValue === "string") {
+      return entryValue.trim() !== "";
+    }
+    return true;
+  });
+  return Object.fromEntries(entries);
+}
+
+function classifyRuntimeFailure(message) {
+  const normalizedMessage = normalizeNonEmptyString(message).toLowerCase();
+  if (!normalizedMessage) {
+    return "runtime_error";
+  }
+  if (normalizedMessage.includes("state root") && normalizedMessage.includes("does not match")) {
+    return "state_root_mismatch";
+  }
+  if (normalizedMessage.includes("protocol version") && normalizedMessage.includes("does not match")) {
+    return "protocol_version_mismatch";
+  }
+  if (normalizedMessage.includes("auth mode") && normalizedMessage.includes("does not match")) {
+    return "auth_mode_mismatch";
+  }
+  if (normalizedMessage.includes("missing required rpc method")) {
+    return "missing_required_method";
+  }
+  if (normalizedMessage.includes("missing required subscription")) {
+    return "missing_required_subscription";
+  }
+  if (normalizedMessage.includes("event gap detected")) {
+    return "replay_gap_unhealed";
+  }
+  if (normalizedMessage.includes("timeout")) {
+    return "timeout";
+  }
+  if (normalizedMessage.includes("closed")) {
+    return "connection_closed";
+  }
+  return "runtime_error";
 }
 
 module.exports = {

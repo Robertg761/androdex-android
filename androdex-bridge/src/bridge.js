@@ -238,6 +238,12 @@ function startBridge({
         lastError: error.message,
       });
     },
+    onTransportLog(entry) {
+      if (!entry || typeof entry !== "object") {
+        return;
+      }
+      console.log(`[androdex][runtime] ${JSON.stringify(entry)}`);
+    },
     onTransportMetadata() {
       publishBridgeStatus({
         state: workspaceRuntime.hasActiveWorkspace() ? "running" : "starting",
