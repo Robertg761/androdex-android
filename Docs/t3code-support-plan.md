@@ -743,8 +743,11 @@ Status update:
   - composer input, send, stop, plan/subagent toggles, and runtime access now disable from per-thread capability metadata instead of assuming every thread is safely mutable
   - pending tool-input cards now surface capability gating reasons and disable submission when the bridge marks tool-input responses unsupported
   - Android service actions now hard-reject blocked `send`, `review`, `interrupt`, `approval`, tool-input response, and rollback requests using the same per-thread capability reasons shown in the UI
+- landed stale-action reconciliation on Android for desktop-resolved approvals, tool-input requests, and interrupts:
+  - stale Android actions now clear the matching stale pending/running state locally
+  - selected threads force a fresh hydrate after stale approval/tool-input/interrupt failures so the phone catches back up to host state
+  - the user now gets an explicit "already resolved on the host" message instead of a raw transport/runtime failure
 - not landed yet:
-  - stale-action reconciliation after desktop resolves an approval, user-input request, or interruptible turn first
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
   - structured logging for attach, bootstrap, replay, and action-gating outcomes
 
@@ -928,7 +931,6 @@ Still in progress:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool subset
-- stale-action reconciliation for desktop-resolved approvals, user-input requests, and interrupts
 - structured logging for attach, bootstrap, replay, and action-gating outcomes
 
 Not started yet:
@@ -938,8 +940,8 @@ Not started yet:
 
 ## Immediate Next Steps
 
-1. Implement stale-action reconciliation for approvals, tool-input requests, and interrupts that desktop T3 may already have resolved before Android responds.
-2. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool subset.
-3. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
-4. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
-5. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
+1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool subset.
+2. Write the adapter invariants doc for snapshot merge order, replay checkpoints, duplicate suppression, metadata-first bootstrap ordering, stale-action handling, and item-aware timeline reconciliation.
+3. Define the structured logging fields needed to debug attach refusal, replay progression, duplicate suppression, gating, and stale-action outcomes without leaking sensitive payload data.
+4. Write a capability matrix for `codex-native` vs `t3-server` and explicitly mark the v1 T3 scope as companion support for Codex-backed threads only.
+5. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.

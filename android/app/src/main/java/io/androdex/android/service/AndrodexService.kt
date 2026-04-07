@@ -725,22 +725,37 @@ class AndrodexService(
 
     suspend fun interruptThread(threadId: String) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
-        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TURN_INTERRUPT)
-        when (val resolution = resolveActiveTurn(normalizedThreadId)) {
-            is ActiveTurnResolution.Resolved -> {
-                markThreadRunning(normalizedThreadId, resolution.turnId)
-                repository.interruptTurn(normalizedThreadId, resolution.turnId)
-            }
+        val wasRunning = isThreadConsideredRunning(normalizedThreadId)
+        try {
+            requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TURN_INTERRUPT)
+            when (val resolution = resolveActiveTurn(normalizedThreadId)) {
+                is ActiveTurnResolution.Resolved -> {
+                    markThreadRunning(normalizedThreadId, resolution.turnId)
+                    repository.interruptTurn(normalizedThreadId, resolution.turnId)
+                }
 
-            ActiveTurnResolution.WaitingForTurnId -> {
+                ActiveTurnResolution.WaitingForTurnId -> {
+                    throw IllegalStateException(
+                        "The active run has not published an interruptible turn ID yet. Please try again in a moment."
+                    )
+                }
+
+                ActiveTurnResolution.NoActiveTurn -> {
+                    throw IllegalStateException("No active run is available to stop.")
+                }
+            }
+        } catch (error: Throwable) {
+            if (wasRunning && shouldTreatAsStaleInterruptFailure(error)) {
+                val refreshed = reconcileStaleInterrupt(normalizedThreadId)
                 throw IllegalStateException(
-                    "The active run has not published an interruptible turn ID yet. Please try again in a moment."
+                    if (refreshed) {
+                        "This run was already resolved on the host. Androdex refreshed thread state."
+                    } else {
+                        "This run was already resolved on the host."
+                    }
                 )
             }
-
-            ActiveTurnResolution.NoActiveTurn -> {
-                throw IllegalStateException("No active run is available to stop.")
-            }
+            throw error
         }
     }
 
@@ -749,7 +764,21 @@ class AndrodexService(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.let { requireThreadCapabilitySupport(it, ThreadCapabilityAction.APPROVAL_RESPONSES) }
-        repository.respondToApproval(request, accept)
+        try {
+            repository.respondToApproval(request, accept)
+        } catch (error: Throwable) {
+            if (shouldTreatAsStaleApprovalFailure(error)) {
+                val refreshed = reconcileStaleApproval(request)
+                throw IllegalStateException(
+                    if (refreshed) {
+                        "This approval was already resolved on the host. Androdex refreshed thread state."
+                    } else {
+                        "This approval was already resolved on the host."
+                    }
+                )
+            }
+            throw error
+        }
     }
 
     suspend fun respondToToolUserInput(
@@ -769,14 +798,28 @@ class AndrodexService(
                 question.id to ToolUserInputAnswer(answers = listOf(answer))
             }.toMap()
         )
-        repository.respondToToolUserInput(request, response)
-        stateFlow.update { current ->
-            current.copy(
-                pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequest(
-                    threadId = normalizedThreadId,
-                    requestId = normalizedRequestId,
+        try {
+            repository.respondToToolUserInput(request, response)
+            stateFlow.update { current ->
+                current.copy(
+                    pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequest(
+                        threadId = normalizedThreadId,
+                        requestId = normalizedRequestId,
+                    )
                 )
-            )
+            }
+        } catch (error: Throwable) {
+            if (shouldTreatAsStaleToolInputFailure(error)) {
+                val refreshed = reconcileStaleToolInput(request)
+                throw IllegalStateException(
+                    if (refreshed) {
+                        "This tool input request was already resolved on the host. Androdex refreshed thread state."
+                    } else {
+                        "This tool input request was already resolved on the host."
+                    }
+                )
+            }
+            throw error
         }
     }
 
@@ -2548,6 +2591,97 @@ class AndrodexService(
 
     private fun AndrodexServiceState.findThreadSummary(threadId: String): ThreadSummary? {
         return threads.firstOrNull { it.id == threadId }
+    }
+
+    private fun shouldTreatAsStaleInterruptFailure(error: Throwable): Boolean {
+        val normalizedMessage = error.message?.trim()?.lowercase().orEmpty()
+        if (normalizedMessage.isEmpty()) {
+            return false
+        }
+        return normalizedMessage.contains("no active run")
+            || normalizedMessage.contains("not interruptible")
+            || normalizedMessage.contains("already completed")
+            || normalizedMessage.contains("already resolved")
+            || normalizedMessage.contains("not running")
+            || normalizedMessage.contains("turn not found")
+            || normalizedMessage.contains("thread not running")
+    }
+
+    private fun shouldTreatAsStaleApprovalFailure(error: Throwable): Boolean {
+        val normalizedMessage = error.message?.trim()?.lowercase().orEmpty()
+        if (normalizedMessage.isEmpty()) {
+            return false
+        }
+        val mentionsApproval = normalizedMessage.contains("approval")
+            || normalizedMessage.contains("requestapproval")
+        val mentionsResolvedState = normalizedMessage.contains("already resolved")
+            || normalizedMessage.contains("already handled")
+            || normalizedMessage.contains("already responded")
+            || normalizedMessage.contains("no longer pending")
+            || normalizedMessage.contains("not pending")
+            || normalizedMessage.contains("not found")
+        return mentionsApproval && mentionsResolvedState
+    }
+
+    private fun shouldTreatAsStaleToolInputFailure(error: Throwable): Boolean {
+        val normalizedMessage = error.message?.trim()?.lowercase().orEmpty()
+        if (normalizedMessage.isEmpty()) {
+            return false
+        }
+        val mentionsToolInput = normalizedMessage.contains("tool input")
+            || normalizedMessage.contains("requestuserinput")
+            || normalizedMessage.contains("user input")
+            || normalizedMessage.contains("prompt")
+            || normalizedMessage.contains("question")
+        val mentionsResolvedState = normalizedMessage.contains("already resolved")
+            || normalizedMessage.contains("already handled")
+            || normalizedMessage.contains("already responded")
+            || normalizedMessage.contains("no longer pending")
+            || normalizedMessage.contains("not pending")
+            || normalizedMessage.contains("not found")
+        return mentionsToolInput && mentionsResolvedState
+    }
+
+    private suspend fun reconcileStaleInterrupt(threadId: String): Boolean {
+        clearThreadRunningState(threadId)
+        return refreshThreadAfterStaleAction(threadId)
+    }
+
+    private suspend fun reconcileStaleApproval(request: ApprovalRequest): Boolean {
+        stateFlow.update { current ->
+            if (current.pendingApproval?.idValue != request.idValue) {
+                current
+            } else {
+                current.copy(pendingApproval = null)
+            }
+        }
+        return refreshThreadAfterStaleAction(request.threadId)
+    }
+
+    private suspend fun reconcileStaleToolInput(request: ToolUserInputRequest): Boolean {
+        val normalizedThreadId = request.threadId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedRequestId = request.requestId.trim().takeIf { it.isNotEmpty() }
+        if (normalizedThreadId != null && normalizedRequestId != null) {
+            stateFlow.update { current ->
+                current.copy(
+                    pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequest(
+                        threadId = normalizedThreadId,
+                        requestId = normalizedRequestId,
+                    )
+                )
+            }
+        }
+        return refreshThreadAfterStaleAction(request.threadId)
+    }
+
+    private suspend fun refreshThreadAfterStaleAction(threadId: String?): Boolean {
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() }
+        val selectedThreadId = stateFlow.value.selectedThreadId
+        if (normalizedThreadId != null && selectedThreadId == normalizedThreadId) {
+            return runCatching { ensureThreadHydrated(normalizedThreadId, forceRefresh = true) }.isSuccess
+        } else {
+            return runCatching { refreshThreadsInternal() }.isSuccess
+        }
     }
 
     private fun hasRuntimeTargetIdentityChanged(

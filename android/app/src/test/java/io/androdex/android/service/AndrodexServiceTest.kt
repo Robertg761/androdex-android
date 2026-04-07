@@ -311,6 +311,57 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun respondToApproval_staleResolutionClearsPendingApprovalAndRefreshesSelectedThread() = runTest {
+        val repository = FakeRepository().apply {
+            respondToApprovalError = IllegalStateException("Approval request is no longer pending.")
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val request = ApprovalRequest(
+            idValue = "request-rendered",
+            method = "item/commandExecution/requestApproval",
+            command = "rm -rf /tmp/demo",
+            reason = "Needs approval",
+            threadId = "thread-1",
+            turnId = "turn-1",
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            )
+        )
+        repository.emit(ClientUpdate.ApprovalRequested(request))
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val failure = runCatching {
+            service.respondToApproval(request, accept = true)
+        }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals(
+            "This approval was already resolved on the host. Androdex refreshed thread state.",
+            failure?.message,
+        )
+        assertNull(service.state.value.pendingApproval)
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertNull(repository.lastApprovalRequest)
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"
@@ -4887,6 +4938,82 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun respondToToolUserInput_staleResolutionClearsPendingRequestAndRefreshesSelectedThread() = runTest {
+        val repository = FakeRepository().apply {
+            respondToToolUserInputError = IllegalStateException("Tool input request is no longer pending.")
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val request = ToolUserInputRequest(
+            idValue = "request-1",
+            method = "item/tool/requestUserInput",
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemId = "item-1",
+            title = "Pick a branch",
+            message = "Select which branch to inspect.",
+            questions = listOf(
+                ToolUserInputQuestion(
+                    id = "branch",
+                    header = "Branch",
+                    question = "Which branch should we inspect?",
+                    options = emptyList(),
+                )
+            ),
+            rawPayload = "{}",
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        service.processClientUpdate(ClientUpdate.ToolUserInputRequested(request))
+        advanceUntilIdle()
+
+        val failure = runCatching {
+            service.respondToToolUserInput(
+                threadId = "thread-1",
+                requestId = "request-1",
+                answers = mapOf("branch" to "main"),
+            )
+        }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals(
+            "This tool input request was already resolved on the host. Androdex refreshed thread state.",
+            failure?.message,
+        )
+        assertTrue(service.state.value.pendingToolInputsByThread["thread-1"].isNullOrEmpty())
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertNull(repository.lastToolInputRequest)
+    }
+
+    @Test
     fun turnCompletion_clearsOnlyPendingToolInputForCompletedTurn() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
@@ -5126,6 +5253,49 @@ class AndrodexServiceTest {
         assertEquals("Stop this run from the desktop session.", failure?.message)
         assertTrue(repository.interruptedTurns.isEmpty())
         assertTrue(repository.readThreadRunSnapshotIds.isEmpty())
+    }
+
+    @Test
+    fun interruptThread_staleResolutionRefreshesSelectedThreadAndClearsRunningState() = runTest {
+        val repository = FakeRepository().apply {
+            interruptTurnError = IllegalStateException("Turn is not running anymore.")
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-live",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-live"))
+
+        val failure = runCatching {
+            service.interruptThread("thread-1")
+        }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals(
+            "This run was already resolved on the host. Androdex refreshed thread state.",
+            failure?.message,
+        )
+        assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertTrue(repository.interruptedTurns.isEmpty())
     }
 
     @Test
@@ -5793,6 +5963,9 @@ private class FakeRepository : AndrodexRepositoryContract {
     var lastToolInputResponse: ToolUserInputResponse? = null
     var lastRejectedToolInputRequest: ToolUserInputRequest? = null
     var lastRejectedToolInputMessage: String? = null
+    var interruptTurnError: Throwable? = null
+    var respondToApprovalError: Throwable? = null
+    var respondToToolUserInputError: Throwable? = null
     var loadThreadError: Throwable? = null
     var rollbackThreadResult = ThreadLoadResult(
         thread = null,
@@ -5878,6 +6051,7 @@ private class FakeRepository : AndrodexRepositoryContract {
     }
 
     override suspend fun interruptTurn(threadId: String, turnId: String) {
+        interruptTurnError?.let { throw it }
         interruptedTurns += "$threadId:$turnId"
     }
 
@@ -5920,11 +6094,13 @@ private class FakeRepository : AndrodexRepositoryContract {
     override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
+        respondToApprovalError?.let { throw it }
         lastApprovalRequest = request
         lastApprovalAccepted = accept
     }
 
     override suspend fun respondToToolUserInput(request: ToolUserInputRequest, response: ToolUserInputResponse) {
+        respondToToolUserInputError?.let { throw it }
         lastToolInputRequest = request
         lastToolInputResponse = response
     }
