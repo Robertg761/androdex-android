@@ -30,6 +30,7 @@ async function getBridgeDoctorReport({
   });
 
   let endpointProbe = null;
+  let desktopSessionProbe = null;
   let installedRuntime = null;
   const recommendations = [];
 
@@ -58,6 +59,24 @@ async function getBridgeDoctorReport({
     } else if (t3Availability.reasonCode === "unsupported-protocol" || t3Availability.reasonCode === "invalid-endpoint") {
       recommendations.push("Use a websocket endpoint such as ws://127.0.0.1:3773/ws for T3 companion attach.");
     }
+
+    const desktopSessionEndpoint = normalizeNonEmptyString(installedRuntime?.desktopSession?.endpoint);
+    if (desktopSessionEndpoint) {
+      const desktopSessionUrl = tryParseUrl(desktopSessionEndpoint);
+      if (desktopSessionUrl) {
+        desktopSessionProbe = await probeTcpEndpointImpl({
+          host: desktopSessionUrl.hostname,
+          port: desktopSessionUrl.port || "80",
+          timeoutMs,
+        });
+      }
+      if (desktopSessionEndpoint !== runtimeEndpoint) {
+        recommendations.push(`T3 desktop is currently exposing a different loopback websocket (${desktopSessionEndpoint}).`);
+      }
+      if (installedRuntime?.desktopSession?.authEnabled !== false) {
+        recommendations.push("The installed T3 desktop app uses auth-protected dynamic loopback sessions, so seamless attach still needs a desktop-to-Androdex auth handoff or local runtime descriptor.");
+      }
+    }
   } else {
     recommendations.push("Codex-native is still the default. Set ANDRODEX_RUNTIME_TARGET=t3-server when you want Androdex to attach to a host-local T3 runtime.");
   }
@@ -70,6 +89,7 @@ async function getBridgeDoctorReport({
     serviceRuntimeEndpoint: serviceStatus?.runtimeConfig?.runtimeEndpoint || "",
     t3Availability,
     endpointProbe,
+    desktopSessionProbe,
     tools: {
       t3Runtime: installedRuntime,
     },
@@ -117,6 +137,18 @@ async function runBridgeDoctor({
       consoleImpl.log(
         `[androdex] T3 install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
       );
+      const desktopSessionEndpoint = normalizeNonEmptyString(report.tools.t3Runtime.desktopSession?.endpoint);
+      if (desktopSessionEndpoint) {
+        const authSuffix = report.tools.t3Runtime.desktopSession?.authEnabled === true
+          ? " (auth enabled)"
+          : (report.tools.t3Runtime.desktopSession?.authEnabled === false ? " (auth disabled)" : "");
+        consoleImpl.log(`[androdex] T3 desktop session: ${desktopSessionEndpoint}${authSuffix}`);
+        if (report.desktopSessionProbe) {
+          consoleImpl.log(
+            `[androdex] T3 desktop session probe: ${report.desktopSessionProbe.reachable ? "reachable" : `unreachable (${report.desktopSessionProbe.reasonCode})`}`
+          );
+        }
+      }
     }
   } else {
     consoleImpl.log(`[androdex] T3 config: ${report.t3Availability.summary}`);
@@ -171,6 +203,14 @@ function probeTcpEndpoint({
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function tryParseUrl(rawValue) {
+  try {
+    return new URL(rawValue);
+  } catch {
+    return null;
+  }
 }
 
 module.exports = {

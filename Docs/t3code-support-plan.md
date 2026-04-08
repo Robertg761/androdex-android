@@ -1025,7 +1025,8 @@ Completed so far:
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
 - `androdex status` now also explains whether T3 companion mode is selected, whether a loopback websocket endpoint is configured, and why attach is blocked when `t3-server` is selected but unavailable
 - `androdex doctor` now provides an attach-first T3 companion diagnostic, including endpoint parsing, loopback enforcement, quick reachability probing, and installed T3 desktop-app / CLI detection when no local T3 listener is reachable
-- `t3-server` bridge config now defaults to the standard local T3 websocket (`ws://127.0.0.1:3773/ws`) when no explicit `ANDRODEX_T3_ENDPOINT` override is set, so the easiest supported user flow is "install/open T3, then run `ANDRODEX_RUNTIME_TARGET=t3-server androdex up`"
+- `t3-server` bridge config now defaults to the standard local T3 websocket (`ws://127.0.0.1:3773/ws`) when no explicit `ANDRODEX_T3_ENDPOINT` override is set, so the bridge has a stable attach-first fallback even before installed-desktop auto-discovery is fully complete
+- non-disruptive host inspection now confirms the installed T3 desktop app publishes its live dynamic loopback port in `~/.t3/userdata/logs/desktop-main.log`, but the companion auth token remains in-process only, so seamless attach to the installed desktop app still needs a small T3-side runtime descriptor or auth-handoff hook instead of more bridge guesswork
 - the bridge README now documents the attach-first T3 setup path explicitly, including `ANDRODEX_RUNTIME_TARGET=t3-server`, `ANDRODEX_T3_ENDPOINT`, and the expectation that T3 stays an optional host-local runtime instead of a bundled default dependency
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
 - companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
@@ -1037,6 +1038,7 @@ Still in progress:
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool/approval/user-input subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
 - deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
+- easy installed-desktop T3 attach still needs a T3-side local runtime descriptor or equivalent auth-handoff path so Androdex can attach to the desktop app's dynamic authenticated loopback session without asking users to extract tokens manually
 - end-to-end/manual smoke hardening for the same-host `codex-native -> t3-server -> codex-native` runtime switch is still pending a runnable host-local T3 instance on this machine
 
 Not started yet:

@@ -25,6 +25,10 @@ test("getBridgeDoctorReport diagnoses missing T3 endpoint configuration", async 
         desktopAppPath: "",
         cliInstalled: false,
         cliPath: "",
+        desktopSession: {
+          endpoint: "",
+          authEnabled: null,
+        },
       };
     },
     probeTcpEndpointImpl: async () => ({
@@ -67,6 +71,10 @@ test("getBridgeDoctorReport probes attach-ready T3 endpoints and suggests restar
         desktopAppPath: "/Applications/T3 Code (Alpha).app",
         cliInstalled: false,
         cliPath: "",
+        desktopSession: {
+          endpoint: "",
+          authEnabled: null,
+        },
       };
     },
   });
@@ -110,6 +118,10 @@ test("runBridgeDoctor prints actionable diagnostics for T3 companion mode", asyn
         desktopAppPath: "/Applications/T3 Code (Alpha).app",
         cliInstalled: false,
         cliPath: "",
+        desktopSession: {
+          endpoint: "",
+          authEnabled: null,
+        },
       };
     },
   });
@@ -119,4 +131,44 @@ test("runBridgeDoctor prints actionable diagnostics for T3 companion mode", asyn
   assert.ok(messages.some((message) => message.includes("Configured runtime endpoint: ws://127.0.0.1:3773/ws")));
   assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
   assert.ok(messages.some((message) => message.includes("Open /Applications/T3 Code (Alpha).app")));
+});
+
+test("getBridgeDoctorReport surfaces installed desktop-session endpoints and auth-handoff guidance", async () => {
+  const report = await getBridgeDoctorReport({
+    env: {
+      ANDRODEX_RUNTIME_TARGET: "t3-server",
+    },
+    getMacOSBridgeServiceStatusImpl() {
+      return {
+        runtimeConfig: {
+          runtimeTarget: "codex-native",
+          runtimeEndpoint: "",
+        },
+        bridgeStatus: {
+          runtimeTarget: "codex-native",
+        },
+      };
+    },
+    probeTcpEndpointImpl: async () => ({
+      reachable: false,
+      reasonCode: "ECONNREFUSED",
+    }),
+    detectInstalledT3RuntimeImpl() {
+      return {
+        desktopAppInstalled: true,
+        desktopAppPath: "/Applications/T3 Code (Alpha).app",
+        cliInstalled: false,
+        cliPath: "",
+        desktopSession: {
+          endpoint: "ws://127.0.0.1:57816",
+          authEnabled: true,
+        },
+      };
+    },
+  });
+
+  assert.equal(report.tools.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(report.desktopSessionProbe.reachable, false);
+  assert.ok(report.recommendations.some((message) => message.includes("ws://127.0.0.1:57816")));
+  assert.ok(report.recommendations.some((message) => message.includes("auth handoff")));
 });

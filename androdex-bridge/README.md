@@ -138,10 +138,11 @@ androdex up
 Important notes:
 
 - v1 only supports attach-first T3 companion mode; the bridge does not bundle or auto-install T3 by default
-- the easiest supported setup is: install the T3 desktop app, open it locally, then run `ANDRODEX_RUNTIME_TARGET=t3-server androdex up`
+- the explicit host-local websocket path above is the reliable attach flow today
+- Androdex can detect an installed T3 desktop app and its live local session details, but current desktop builds still use an auth-protected dynamic loopback session that is not yet handed off to Androdex automatically
 - the T3 endpoint should stay loopback-only (`127.0.0.1`, `localhost`, or `::1`)
 - `androdex status` will tell you whether the bridge sees a valid T3 endpoint configuration and why attach is blocked if it is not
-- `androdex doctor` will also try a quick reachability check against the local T3 loopback endpoint, detect an installed T3 desktop app or CLI when possible, and tell you whether the host bridge still needs to be restarted onto `t3-server`
+- `androdex doctor` will also try a quick reachability check against the local T3 loopback endpoint, detect an installed T3 desktop app or CLI when possible, and tell you when a desktop-session auth handoff is the remaining gap
 - if you switch back to the default host path, unset `ANDRODEX_RUNTIME_TARGET` or set it back to `codex-native`
 
 ## Source builds
