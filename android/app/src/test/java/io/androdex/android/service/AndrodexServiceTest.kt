@@ -1485,7 +1485,7 @@ class AndrodexServiceTest {
         service.openThread("thread-1")
         advanceUntilIdle()
 
-        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("thread-1", "thread-1", "thread-1"), repository.loadedThreadIds)
         assertEquals(listOf("Fresh reply"), service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text })
     }
 
@@ -5710,6 +5710,138 @@ class AndrodexServiceTest {
 
         assertEquals(listOf("D:\\Client\\SiteB"), repository.activatedWorkspaces)
         assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun openThread_reconcilesAuthoritativeLoadedWorkspaceAfterHydration() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-b",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-b", "Project B", true),
+                    WorkspacePathSummary("/tmp/project-c", "Project C", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Thread 1", null, "/tmp/project-c", null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-authoritative",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Authoritative reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "/tmp/project-b",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+
+        service.loadWorkspaceState()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        assertEquals(listOf("/tmp/project-c"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals("/tmp/project-c", service.state.value.activeWorkspacePath)
+        assertEquals(
+            "/tmp/project-c",
+            service.state.value.threads.firstOrNull { it.id == "thread-1" }?.cwd,
+        )
+        assertEquals(
+            listOf("Authoritative reply"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+    }
+
+    @Test
+    fun openThread_authoritativeWorkspaceActivationFailureRestoresPreviousPresentation() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-b",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-b", "Project B", true),
+                    WorkspacePathSummary("/tmp/project-c", "Project C", false),
+                )
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Thread 1", null, "/tmp/project-c", null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-authoritative",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Authoritative reply",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-1",
+                        itemId = "assistant-1",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            activateWorkspaceErrorsByPath["/tmp/project-c"] = IllegalStateException("workspace remap offline")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Thread 1",
+                        preview = null,
+                        cwd = "/tmp/project-b",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                    )
+                )
+            )
+        )
+
+        service.loadWorkspaceState()
+        val error = runCatching { service.openThread("thread-1") }.exceptionOrNull()
+        advanceUntilIdle()
+
+        assertEquals("workspace remap offline", error?.message)
+        assertEquals(listOf("/tmp/project-c"), repository.activatedWorkspaces)
+        assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+        assertEquals("/tmp/project-b", service.state.value.activeWorkspacePath)
+        assertNull(service.state.value.selectedThreadId)
+        assertTrue(service.state.value.timelineByThread["thread-1"].isNullOrEmpty())
     }
 
     @Test

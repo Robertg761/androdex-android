@@ -42,6 +42,7 @@ import io.androdex.android.model.TrustedPairSnapshot
 import io.androdex.android.model.hasBlockingState
 import io.androdex.android.model.readyAttachments
 import io.androdex.android.model.requestId
+import io.androdex.android.model.workspacePresentationNotice
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.buildThreadTimelineRenderSnapshot
 import java.net.URI
@@ -226,6 +227,7 @@ internal data class ThreadTimelineUiState(
     val threadId: String,
     val title: String,
     val subtitle: String?,
+    val workspaceNotice: String?,
     val timeline: ThreadTimelineRenderSnapshot,
     val focusedTurnId: String?,
     val runState: ThreadRunBadgeUiState?,
@@ -716,6 +718,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
         title = selectedThreadTitle ?: "Conversation",
         subtitle = selectedThread?.projectName
             ?.takeIf { it.isNotBlank() && it != (selectedThreadTitle ?: "Conversation") },
+        workspaceNotice = selectedThread?.workspacePresentationNotice(),
         timeline = timelineSnapshot,
         focusedTurnId = focusedTurnId,
         runState = threadRunBadge(threadId),

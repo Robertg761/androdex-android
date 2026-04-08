@@ -535,18 +535,18 @@ function buildProjectMap(projects) {
 }
 
 function buildThreadSummary(thread, project) {
-  const cwd = resolveThreadCwd(thread, project);
+  const workspace = resolveThreadWorkspace(thread, project);
   const provider = normalizeNonEmptyString(thread?.modelSelection?.provider);
   const threadCapabilities = describeT3ThreadCapabilities({
     thread,
     project,
   });
-  const preview = buildThreadPreview(thread, project, provider, cwd);
+  const preview = buildThreadPreview(thread, provider, workspace);
   return {
     id: normalizeNonEmptyString(thread?.id),
     title: normalizeNonEmptyString(thread?.title) || "Conversation",
     preview,
-    cwd,
+    cwd: workspace.path,
     createdAt: normalizeNonEmptyString(thread?.createdAt) || null,
     updatedAt: normalizeNonEmptyString(thread?.updatedAt) || normalizeNonEmptyString(thread?.createdAt) || null,
     model: normalizeNonEmptyString(thread?.modelSelection?.model) || null,
@@ -555,12 +555,14 @@ function buildThreadSummary(thread, project) {
   };
 }
 
-function buildThreadPreview(thread, project, provider, cwd) {
+function buildThreadPreview(thread, provider, workspace) {
   const notices = [];
   if (provider && provider !== "codex") {
     notices.push(`Unsupported T3 provider: ${provider}`);
   }
-  if (cwd && !pathExists(cwd)) {
+  if (workspace.fallbackToProjectRoot) {
+    notices.push("Using project workspace root fallback");
+  } else if (workspace.path && !workspace.pathAvailable) {
     notices.push("Workspace unavailable locally");
   }
   if (thread?.archivedAt) {
@@ -582,10 +584,74 @@ function latestMessagePreview(thread) {
   return "";
 }
 
-function resolveThreadCwd(thread, project) {
-  return normalizeNonEmptyString(thread?.worktreePath)
-    || normalizeNonEmptyString(project?.workspaceRoot)
-    || null;
+function resolveThreadWorkspace(thread, project) {
+  const worktreePath = normalizeNonEmptyString(thread?.worktreePath) || null;
+  const projectWorkspaceRoot = normalizeNonEmptyString(project?.workspaceRoot) || null;
+  const worktreePathAvailable = worktreePath ? pathExists(worktreePath) : false;
+  const projectWorkspaceRootAvailable = projectWorkspaceRoot ? pathExists(projectWorkspaceRoot) : false;
+
+  if (worktreePath && worktreePathAvailable) {
+    return {
+      path: worktreePath,
+      pathAvailable: true,
+      pathSource: "worktree_path",
+      worktreePath,
+      worktreePathAvailable,
+      projectWorkspaceRoot,
+      projectWorkspaceRootAvailable,
+      fallbackToProjectRoot: false,
+    };
+  }
+
+  if (projectWorkspaceRoot && projectWorkspaceRootAvailable) {
+    return {
+      path: projectWorkspaceRoot,
+      pathAvailable: true,
+      pathSource: "project_workspace_root",
+      worktreePath,
+      worktreePathAvailable,
+      projectWorkspaceRoot,
+      projectWorkspaceRootAvailable,
+      fallbackToProjectRoot: Boolean(worktreePath && !worktreePathAvailable),
+    };
+  }
+
+  if (worktreePath) {
+    return {
+      path: worktreePath,
+      pathAvailable: false,
+      pathSource: "worktree_path",
+      worktreePath,
+      worktreePathAvailable,
+      projectWorkspaceRoot,
+      projectWorkspaceRootAvailable,
+      fallbackToProjectRoot: false,
+    };
+  }
+
+  if (projectWorkspaceRoot) {
+    return {
+      path: projectWorkspaceRoot,
+      pathAvailable: false,
+      pathSource: "project_workspace_root",
+      worktreePath,
+      worktreePathAvailable,
+      projectWorkspaceRoot,
+      projectWorkspaceRootAvailable,
+      fallbackToProjectRoot: false,
+    };
+  }
+
+  return {
+    path: null,
+    pathAvailable: false,
+    pathSource: null,
+    worktreePath,
+    worktreePathAvailable,
+    projectWorkspaceRoot,
+    projectWorkspaceRootAvailable,
+    fallbackToProjectRoot: false,
+  };
 }
 
 function describeT3ThreadCapabilities({
@@ -600,8 +666,9 @@ function describeT3ThreadCapabilities({
   );
   const backendProvider = normalizeNonEmptyString(thread?.modelSelection?.provider) || null;
   const normalizedProvider = normalizeNonEmptyString(backendProvider).toLowerCase();
-  const workspacePath = resolveThreadCwd(thread, resolvedProject);
-  const workspaceAvailable = workspacePath ? pathExists(workspacePath) : false;
+  const workspace = resolveThreadWorkspace(thread, resolvedProject);
+  const workspacePath = workspace.path;
+  const workspaceAvailable = workspace.pathAvailable;
   const providerSupported = !normalizedProvider || normalizedProvider === "codex";
   const workspaceResolved = Boolean(workspacePath);
   const companionSupportState = resolveCompanionSupportState({
@@ -624,8 +691,14 @@ function describeT3ThreadCapabilities({
     companionSupportState,
     companionSupportReason,
     workspacePath: workspacePath || null,
+    workspacePathSource: workspace.pathSource,
     workspaceResolved,
     workspaceAvailable,
+    workspaceFallbackUsed: workspace.fallbackToProjectRoot,
+    recordedWorktreePath: workspace.worktreePath,
+    recordedWorktreeAvailable: workspace.worktreePathAvailable,
+    projectWorkspaceRoot: workspace.projectWorkspaceRoot,
+    projectWorkspaceRootAvailable: workspace.projectWorkspaceRootAvailable,
     read: {
       supported: true,
       reason: null,

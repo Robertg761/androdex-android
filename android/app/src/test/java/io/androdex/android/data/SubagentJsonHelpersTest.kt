@@ -39,8 +39,14 @@ class SubagentJsonHelpersTest {
                     "companionSupportState" to "unsupported_provider",
                     "companionSupportReason" to "Unsupported provider for Androdex companion support.",
                     "workspacePath" to "/tmp/project",
+                    "workspacePathSource" to "project_workspace_root",
                     "workspaceResolved" to true,
                     "workspaceAvailable" to true,
+                    "workspaceFallbackUsed" to true,
+                    "recordedWorktreePath" to "/tmp/project-worktree",
+                    "recordedWorktreeAvailable" to false,
+                    "projectWorkspaceRoot" to "/tmp/project",
+                    "projectWorkspaceRootAvailable" to true,
                     "liveUpdates" to mapOf(
                         "supported" to false,
                         "reason" to "Only Codex-backed threads can attach live updates.",
@@ -59,6 +65,12 @@ class SubagentJsonHelpersTest {
 
         assertEquals("claudeAgent", summary?.backendProvider)
         assertEquals("unsupported_provider", summary?.threadCapabilities?.companionSupportState)
+        assertEquals("project_workspace_root", summary?.threadCapabilities?.workspacePathSource)
+        assertEquals(true, summary?.threadCapabilities?.workspaceFallbackUsed)
+        assertEquals("/tmp/project-worktree", summary?.threadCapabilities?.recordedWorktreePath)
+        assertEquals(false, summary?.threadCapabilities?.recordedWorktreeAvailable)
+        assertEquals("/tmp/project", summary?.threadCapabilities?.projectWorkspaceRoot)
+        assertEquals(true, summary?.threadCapabilities?.projectWorkspaceRootAvailable)
         assertEquals(false, summary?.threadCapabilities?.liveUpdates?.supported)
         assertEquals(
             "Only Codex-backed threads can attach live updates.",

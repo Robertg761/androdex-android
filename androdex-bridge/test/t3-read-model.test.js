@@ -163,10 +163,17 @@ test("buildT3ThreadReadResult exposes explicit capability metadata for orphaned 
     threadId: "thread-orphaned",
   });
 
-  assert.equal(result.thread.threadCapabilities.companionSupportState, "workspace_unavailable");
-  assert.equal(result.thread.threadCapabilities.liveUpdates.supported, false);
-  assert.match(result.thread.threadCapabilities.liveUpdates.reason, /recorded local workspace path no longer resolves/i);
-  assert.equal(result.thread.threadCapabilities.workspacePath, "/tmp/androdex-missing-worktree");
+  assert.equal(result.thread.cwd, "/tmp");
+  assert.match(result.thread.preview, /project workspace root fallback/i);
+  assert.equal(result.thread.threadCapabilities.companionSupportState, "supported");
+  assert.equal(result.thread.threadCapabilities.liveUpdates.supported, true);
+  assert.equal(result.thread.threadCapabilities.workspacePath, "/tmp");
+  assert.equal(result.thread.threadCapabilities.workspacePathSource, "project_workspace_root");
+  assert.equal(result.thread.threadCapabilities.workspaceFallbackUsed, true);
+  assert.equal(result.thread.threadCapabilities.recordedWorktreePath, "/tmp/androdex-missing-worktree");
+  assert.equal(result.thread.threadCapabilities.recordedWorktreeAvailable, false);
+  assert.equal(result.thread.threadCapabilities.projectWorkspaceRoot, "/tmp");
+  assert.equal(result.thread.threadCapabilities.projectWorkspaceRootAvailable, true);
 });
 
 test("buildT3ThreadReadResult preserves image attachments as structured content", () => {

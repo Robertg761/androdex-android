@@ -753,12 +753,13 @@ Status update:
   - reconnect recovery across T3 transport restarts now re-enters through snapshot plus replay using the persisted state-root-scoped watermark, without duplicating already-delivered resumed-thread notifications
   - resumed-thread activity notifications now suppress duplicate plan/task/tool emissions when replay or live overlap re-delivers the same T3 activity identity, and reconnect coverage now proves only newly recovered activity completions surface after restart
   - replay/idempotency coverage now also explicitly proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
-  - `thread/list`, `thread/read`, and `thread/resume` now expose explicit bridge capability metadata for supported, unsupported-provider, and unresolved-workspace T3 threads instead of relying on preview text alone
+  - `thread/list`, `thread/read`, and `thread/resume` now expose explicit bridge capability metadata for supported, unsupported-provider, unresolved-workspace, and project-root-fallback T3 threads instead of relying on preview text alone
+  - when a thread's recorded `worktreePath` no longer resolves locally but its project's `workspaceRoot` still does, the bridge now keeps that thread companion-eligible on the read side using the project root as an explicit fallback instead of collapsing it into the unresolved-workspace bucket
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
-  - workspace/project remapping and orphaned-thread action gating beyond the new capability metadata surface
+  - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
   - mutating T3 actions
 
 Deliverables:
@@ -781,6 +782,8 @@ Status update:
   - composer input, send, stop, plan/subagent toggles, and runtime access now disable from per-thread capability metadata instead of assuming every thread is safely mutable
   - pending tool-input cards now surface capability gating reasons and disable submission when the bridge marks tool-input responses unsupported
   - Android service actions now hard-reject blocked `send`, `review`, `interrupt`, `approval`, tool-input response, and rollback requests using the same per-thread capability reasons shown in the UI
+  - threads using a project-root workspace fallback now surface an explicit Android timeline notice so the phone does not silently present a remapped project root as if it were the original exact worktree
+  - `openThread()` now re-checks the authoritative `thread/read` workspace after hydration, merges that corrected thread summary back into service state, and performs a second explicit workspace activation plus refresh when the loaded T3 thread resolves to a different local project than the stale list snapshot suggested
 - landed stale-action reconciliation on Android for desktop-resolved approvals, tool-input requests, and interrupts:
   - stale Android actions now clear the matching stale pending/running state locally
   - selected threads force a fresh hydrate after stale approval/tool-input/interrupt failures so the phone catches back up to host state
@@ -971,7 +974,9 @@ Completed so far:
 - T3 transport restarts now recover through snapshot plus replay from the persisted state-root-scoped watermark, while suppressing duplicate live notifications for already-delivered resumed-thread events
 - resumed-thread plan/task/tool notifications now suppress duplicate emissions when the same T3 activity id is re-delivered, and reconnect regression coverage now proves old activity notifications stay suppressed while newly replayed completions still surface with stable item identity
 - T3 summaries, reads, and resume responses now carry explicit bridge capability metadata for companion support state, workspace availability, live-update eligibility, and read-only action gating so Android no longer has to infer unsupported/orphaned state from preview text alone
+- T3 summaries, reads, and resume responses now also preserve workspace remap details end to end, including whether the bridge is using the recorded worktree path or a project `workspaceRoot` fallback and whether each underlying local path still resolves
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
+- Android thread opening now reconciles stale list-side workspace mappings against the authoritative `thread/read` summary, so selecting a T3 thread can still switch the device-visible local project after hydration if the snapshot summary was out of date
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity
@@ -983,6 +988,7 @@ Still in progress:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool/approval/user-input subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
+- deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
 
 Not started yet:
 
@@ -1010,6 +1016,7 @@ Not started yet:
 - `thread/resume`: supported for companion-eligible Codex-backed threads only
 - live turn, assistant, title, plan, task, tool, approval, and user-input activity updates: supported for resumed companion-eligible threads only
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
+- missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
 - send / plan / subagent flows: not supported yet
 - interrupt: not supported yet
 - approval responses: not supported yet

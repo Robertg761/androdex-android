@@ -220,6 +220,88 @@ class UnsupportedThreadFakeWebSocket extends FakeWebSocket {
   }
 }
 
+class FallbackWorkspaceFakeWebSocket extends FakeWebSocket {
+  send(message) {
+    this.sentMessages.push(message);
+    const parsed = JSON.parse(message);
+    if (parsed.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (parsed.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              snapshotSequence: 7,
+              updatedAt: "2026-04-07T12:00:00.000Z",
+              projects: [
+                {
+                  id: "project-1",
+                  title: "Project One",
+                  workspaceRoot: "/tmp",
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:30:00.000Z",
+                  deletedAt: null,
+                },
+              ],
+              threads: [
+                {
+                  id: "thread-fallback",
+                  projectId: "project-1",
+                  title: "Fallback workspace thread",
+                  modelSelection: {
+                    provider: "codex",
+                    model: "gpt-5.4",
+                  },
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: "/tmp/androdex-missing-worktree",
+                  latestTurn: null,
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:11:00.000Z",
+                  archivedAt: null,
+                  deletedAt: null,
+                  messages: [],
+                  proposedPlans: [],
+                  activities: [],
+                  checkpoints: [],
+                  session: null,
+                },
+              ],
+            },
+          },
+        })));
+      });
+    }
+  }
+}
+
 test("runtime method policy recognizes codex-native and T3 read-only targets", () => {
   assert.equal(isCodexNativeRuntimeTarget("codex-native"), true);
   assert.equal(isCodexNativeRuntimeTarget("t3-server"), false);
@@ -445,4 +527,46 @@ test("T3 runtime adapter returns explicit capability metadata when thread/resume
   assert.equal(responses[0].result.threadCapabilities.companionSupportState, "unsupported_provider");
   assert.equal(responses[0].result.threadCapabilities.liveUpdates.supported, false);
   assert.match(responses[0].result.reason, /only attaches live updates for codex-backed threads/i);
+});
+
+test("T3 runtime adapter keeps supported thread/resume live when project workspace root is used as a fallback", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FallbackWorkspaceFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-fallback",
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-resume");
+  assert.equal(responses[0].result.ok, true);
+  assert.equal(responses[0].result.resumed, true);
+  assert.equal(responses[0].result.liveUpdatesAttached, true);
+  assert.equal(responses[0].result.threadCapabilities.companionSupportState, "supported");
+  assert.equal(responses[0].result.threadCapabilities.workspacePath, "/tmp");
+  assert.equal(responses[0].result.threadCapabilities.workspacePathSource, "project_workspace_root");
+  assert.equal(responses[0].result.threadCapabilities.workspaceFallbackUsed, true);
+  assert.equal(responses[0].result.threadCapabilities.recordedWorktreePath, "/tmp/androdex-missing-worktree");
+  assert.equal(responses[0].result.threadCapabilities.recordedWorktreeAvailable, false);
+  assert.equal(responses[0].result.threadCapabilities.projectWorkspaceRoot, "/tmp");
+  assert.equal(responses[0].result.threadCapabilities.projectWorkspaceRootAvailable, true);
 });

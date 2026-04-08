@@ -517,15 +517,41 @@ class AndrodexService(
 
             val shouldForceHydrate = forceRefresh
                 || isThreadConsideredRunning(threadId, previousState)
+            var authoritativeWorkspaceSwitched = false
             val hydrateStartedAt = System.currentTimeMillis()
             try {
                 ensureThreadHydrated(threadId, forceRefresh = shouldForceHydrate)
-            } catch (error: Throwable) {
-                if (workspaceSwitched && isCurrentThreadOpenAttempt(openAttemptRevision)) {
-                    restoreWorkspaceSwitchFailure(
-                        previousState = previousState,
-                        previousWorkspacePath = previousWorkspacePath,
+                if (!isCurrentThreadOpenAttempt(openAttemptRevision)) {
+                    return@measure
+                }
+                val authoritativeWorkspacePath = stateFlow.value.findThreadSummary(threadId)
+                    ?.cwd
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                if (authoritativeWorkspacePath != null
+                    && authoritativeWorkspacePath != stateFlow.value.activeWorkspacePath
+                ) {
+                    authoritativeWorkspaceSwitched = ensureWorkspaceActivated(
+                        path = authoritativeWorkspacePath,
+                        incomingThreadId = threadId,
                     )
+                    if (authoritativeWorkspaceSwitched) {
+                        if (!isCurrentThreadOpenAttempt(openAttemptRevision)) {
+                            return@measure
+                        }
+                        ensureThreadHydrated(threadId, forceRefresh = true)
+                    }
+                }
+            } catch (error: Throwable) {
+                if (isCurrentThreadOpenAttempt(openAttemptRevision)) {
+                    if (workspaceSwitched || authoritativeWorkspaceSwitched) {
+                        restoreWorkspaceSwitchFailure(
+                            previousState = previousState,
+                            previousWorkspacePath = previousWorkspacePath,
+                        )
+                    } else {
+                        restoreThreadPresentationState(previousState)
+                    }
                 }
                 throw error
             }
@@ -1303,7 +1329,9 @@ class AndrodexService(
                     keepStreamingRows = keepStreamingRows,
                 )
                 mergedMessageCount = mergedMessages.size
+                val updatedThreads = mergeRecoveredNotificationThread(current.threads, result.thread)
                 current.copy(
+                    threads = updatedThreads,
                     selectedThreadTitle = if (current.selectedThreadId == threadId) {
                         result.thread?.title ?: current.selectedThreadTitle
                     } else {

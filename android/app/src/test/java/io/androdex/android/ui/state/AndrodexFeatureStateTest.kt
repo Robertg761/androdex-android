@@ -863,6 +863,42 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun threadRoute_surfacesWorkspaceFallbackNoticeWhenBridgeUsesProjectRootFallback() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "/workspace/project",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    threadCapabilities = ThreadCapabilities(
+                        readOnly = true,
+                        workspacePath = "/workspace/project",
+                        workspacePathSource = "project_workspace_root",
+                        workspaceFallbackUsed = true,
+                        recordedWorktreePath = "/workspace/project-worktree",
+                        recordedWorktreeAvailable = false,
+                        projectWorkspaceRoot = "/workspace/project",
+                        projectWorkspaceRootAvailable = true,
+                    ),
+                )
+            ),
+        )
+
+        val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
+
+        assertEquals(
+            "Using the project workspace root because this thread's recorded worktree no longer resolves locally.",
+            route.state.workspaceNotice,
+        )
+    }
+
+    @Test
     fun threadRoute_disablesStopAndToolInputSubmitWhenCapabilitiesBlockThem() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,

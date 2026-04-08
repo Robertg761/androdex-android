@@ -39,6 +39,14 @@ fun ThreadSummary.capabilityBlockReason(action: ThreadCapabilityAction): String?
         ?: defaultCapabilityBlockReason(action)
 }
 
+fun ThreadSummary.workspacePresentationNotice(): String? {
+    val capabilities = threadCapabilities ?: return null
+    if (!capabilities.workspaceFallbackUsed) {
+        return null
+    }
+    return "Using the project workspace root because this thread's recorded worktree no longer resolves locally."
+}
+
 private fun defaultCapabilityBlockReason(action: ThreadCapabilityAction): String {
     return when (action) {
         ThreadCapabilityAction.TURN_START -> "This thread can't start new turns from Androdex right now."

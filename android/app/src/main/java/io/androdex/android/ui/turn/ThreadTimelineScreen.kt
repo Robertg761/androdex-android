@@ -658,6 +658,11 @@ internal fun ThreadTimelineScreen(
                                 ForkedThreadBanner()
                             }
                         }
+                        state.workspaceNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                            item(key = "workspace-banner") {
+                                WorkspaceFallbackBanner(message = notice)
+                            }
+                        }
                         items(timelineCache.items, key = { it.message.id }) { ctx ->
                             MessageBubble(
                                 message = ctx.message,
@@ -914,6 +919,45 @@ private fun ForkedThreadBanner(modifier: Modifier = Modifier) {
             }
             Text(
                 text = "This conversation branched from an earlier thread so you can explore a different direction without losing the original path.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textSecondary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceFallbackBanner(
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
+
+    RemodexGroupedSurface(
+        modifier = modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.secondarySurface.copy(alpha = 0.84f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing12),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+        ) {
+            Surface(
+                color = colors.accentOrange.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier.widthIn(max = 168.dp),
+            ) {
+                Text(
+                    text = "Workspace fallback",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.accentOrange,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = geometry.spacing10, vertical = geometry.spacing4),
+                )
+            }
+            Text(
+                text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textSecondary,
             )

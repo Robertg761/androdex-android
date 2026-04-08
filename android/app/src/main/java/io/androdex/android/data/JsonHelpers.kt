@@ -224,11 +224,23 @@ private fun decodeThreadCapabilitiesSpec(values: Map<String, Any?>): ThreadCapab
         companionSupportState = values.stringOrNull("companionSupportState", "companion_support_state"),
         companionSupportReason = values.stringOrNull("companionSupportReason", "companion_support_reason"),
         workspacePath = values.stringOrNull("workspacePath", "workspace_path"),
+        workspacePathSource = values.stringOrNull("workspacePathSource", "workspace_path_source"),
         workspaceResolved = values["workspaceResolved"] as? Boolean
             ?: values["workspace_resolved"] as? Boolean
             ?: false,
         workspaceAvailable = values["workspaceAvailable"] as? Boolean
             ?: values["workspace_available"] as? Boolean
+            ?: false,
+        workspaceFallbackUsed = values["workspaceFallbackUsed"] as? Boolean
+            ?: values["workspace_fallback_used"] as? Boolean
+            ?: false,
+        recordedWorktreePath = values.stringOrNull("recordedWorktreePath", "recorded_worktree_path"),
+        recordedWorktreeAvailable = values["recordedWorktreeAvailable"] as? Boolean
+            ?: values["recorded_worktree_available"] as? Boolean
+            ?: false,
+        projectWorkspaceRoot = values.stringOrNull("projectWorkspaceRoot", "project_workspace_root"),
+        projectWorkspaceRootAvailable = values["projectWorkspaceRootAvailable"] as? Boolean
+            ?: values["project_workspace_root_available"] as? Boolean
             ?: false,
         read = values.mapOrNull("read")?.let(::decodeThreadCapabilityFlagSpec),
         liveUpdates = values.mapOrNull("liveUpdates", "live_updates")?.let(::decodeThreadCapabilityFlagSpec),
