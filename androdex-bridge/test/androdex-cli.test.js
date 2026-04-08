@@ -93,6 +93,27 @@ test("androdex up waits for pairing and binds the current cwd", async () => {
   ]);
 });
 
+test("androdex doctor runs the diagnostic helper", async () => {
+  const calls = [];
+
+  await main({
+    argv: ["node", "androdex", "doctor"],
+    platform: "darwin",
+    exitImpl(code) {
+      throw new Error(`unexpected exit ${code}`);
+    },
+    deps: {
+      async runBridgeDoctor(options) {
+        calls.push(options);
+      },
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0]);
+  assert.equal(typeof calls[0].consoleImpl.log, "function");
+});
+
 test("macOS-only commands fail early on non-darwin platforms", async () => {
   const messages = [];
 

@@ -119,7 +119,7 @@ function buildDetail({ validProtocol, loopbackOnly, port, pathname }) {
   if (!loopbackOnly) {
     return "Point ANDRODEX_T3_ENDPOINT at a loopback address like 127.0.0.1 or localhost instead of a LAN or public host.";
   }
-  return `Expected host-local websocket route on port ${port || "3773"}${pathname || "/ws"}.`;
+  return `Expected a host-local websocket listener on port ${port || "3773"} at path ${pathname || "/ws"}.`;
 }
 
 function isLoopbackHost(hostname) {

@@ -1024,6 +1024,7 @@ Completed so far:
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
 - `androdex status` now also explains whether T3 companion mode is selected, whether a loopback websocket endpoint is configured, and why attach is blocked when `t3-server` is selected but unavailable
+- `androdex doctor` now provides an attach-first T3 companion diagnostic, including endpoint parsing, loopback enforcement, quick reachability probing, and a source-build Bun hint when no local T3 listener is reachable
 - the bridge README now documents the attach-first T3 setup path explicitly, including `ANDRODEX_RUNTIME_TARGET=t3-server`, `ANDRODEX_T3_ENDPOINT`, and the expectation that T3 stays an optional host-local runtime instead of a bundled default dependency
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
 - companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
@@ -1041,7 +1042,7 @@ Not started yet:
 
 - the remaining T3 mutating command mapping beyond thread creation, existing-thread turn start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response
 - the remaining end-to-end smoke matrix beyond the reconnect/project-switch/cross-repo-create/reopen/relaunch flows already exercised on hardware
-- any optional `androdex doctor` / managed-launch helper for discovering or launching an already-installed T3 runtime without changing the default lightweight install path
+- any future managed-launch helper for discovering or launching an already-installed T3 runtime without changing the default lightweight install path
 
 ## Runtime Capability Matrix
 

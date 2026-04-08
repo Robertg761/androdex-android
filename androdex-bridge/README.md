@@ -18,6 +18,7 @@ androdex start
 androdex restart
 androdex stop
 androdex status
+androdex doctor
 androdex reset-pairing
 androdex resume
 androdex watch [threadId]
@@ -35,6 +36,8 @@ androdex watch [threadId]
   Stops the macOS bridge service and clears stale in-memory runtime state.
 - `androdex status`
   Prints launchd status, persisted bridge status, runtime-target diagnostics, and the stdout/stderr log paths under `~/.androdex`.
+- `androdex doctor`
+  Runs a focused runtime-target diagnostic, including T3 endpoint configuration, loopback checks, and a quick reachability probe for attach-first T3 companion mode.
 - `androdex run`
   Runs the bridge in the foreground.
 - `androdex run-service`
@@ -127,6 +130,7 @@ Important notes:
 - v1 only supports attach-first T3 companion mode; the bridge does not bundle or auto-install T3 by default
 - the T3 endpoint should stay loopback-only (`127.0.0.1`, `localhost`, or `::1`)
 - `androdex status` will tell you whether the bridge sees a valid T3 endpoint configuration and why attach is blocked if it is not
+- `androdex doctor` will also try a quick reachability check against the configured T3 loopback endpoint and tell you whether the host bridge still needs to be restarted onto `t3-server`
 - if you switch back to the default host path, unset `ANDRODEX_RUNTIME_TARGET` or set it back to `codex-native`
 
 ## Source builds

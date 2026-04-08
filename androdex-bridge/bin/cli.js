@@ -11,6 +11,7 @@ const {
   readBridgeConfig,
   resetMacOSBridgePairing,
   runMacOSBridgeService,
+  runBridgeDoctor,
   startBridge,
   startMacOSBridgeService,
   stopMacOSBridgeService,
@@ -26,6 +27,7 @@ const defaultDeps = {
   readBridgeConfig,
   resetMacOSBridgePairing,
   runMacOSBridgeService,
+  runBridgeDoctor,
   startBridge,
   startMacOSBridgeService,
   stopMacOSBridgeService,
@@ -138,6 +140,18 @@ async function main({
     return;
   }
 
+  if (command === "doctor") {
+    assertMacOSCommand(command, {
+      platform,
+      consoleImpl,
+      exitImpl,
+    });
+    await deps.runBridgeDoctor({
+      consoleImpl,
+    });
+    return;
+  }
+
   if (command === "reset-pairing") {
     try {
       if (platform === "darwin") {
@@ -179,7 +193,7 @@ async function main({
 
   consoleImpl.error(`Unknown command: ${command}`);
   consoleImpl.error(
-    "Usage: androdex up | androdex run | androdex start | androdex restart | androdex stop | androdex status | "
+    "Usage: androdex up | androdex run | androdex start | androdex restart | androdex stop | androdex status | androdex doctor | "
     + "androdex reset-pairing | androdex resume | androdex watch [threadId] | androdex --version"
   );
   exitImpl(1);

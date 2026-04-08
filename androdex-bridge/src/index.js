@@ -5,6 +5,7 @@
 // Depends on: ./bridge, ./pairing/device-state, ./session-state, ./rollout/watch, ./macos-launch-agent
 
 const { startBridge } = require("./bridge");
+const { runBridgeDoctor } = require("./doctor");
 const { resetBridgeDeviceState } = require("./pairing/device-state");
 const { openLastActiveThread } = require("./session-state");
 const { watchThreadRollout } = require("./rollout/watch");
@@ -25,6 +26,7 @@ module.exports = {
   printMacOSBridgeServiceStatus,
   readBridgeConfig,
   resetMacOSBridgePairing,
+  runBridgeDoctor,
   startBridge,
   runMacOSBridgeService,
   startMacOSBridgeService,
