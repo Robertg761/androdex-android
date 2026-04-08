@@ -1037,7 +1037,7 @@ sealed interface ClientUpdate {
         val request: ToolUserInputRequest,
     ) : ClientUpdate
 
-    data object ApprovalCleared : ClientUpdate
+    data class ApprovalCleared(val requestId: String? = null) : ClientUpdate
 
     data class TurnCompleted(
         val threadId: String?,

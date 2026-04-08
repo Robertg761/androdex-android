@@ -1249,8 +1249,18 @@ class AndrodexClient(
     }
 
     suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
-        sendResponse(request.idValue, if (accept) "accept" else "decline")
-        updatesFlow.emit(ClientUpdate.ApprovalCleared)
+        val decision = if (accept) "accept" else "decline"
+        if (isBridgeManagedApprovalRequestId(request.idValue)) {
+            sendRequest(
+                "bridge/approval/respond",
+                JSONObject()
+                    .put("bridgeRequestId", request.idValue.toString())
+                    .put("decision", decision)
+            )
+        } else {
+            sendResponse(request.idValue, decision)
+        }
+        updatesFlow.emit(ClientUpdate.ApprovalCleared(request.idValue.toString()))
     }
 
     suspend fun respondToToolUserInput(
@@ -2303,6 +2313,15 @@ class AndrodexClient(
                 true
             }
 
+            "approval/cleared" -> {
+                updatesFlow.emit(
+                    ClientUpdate.ApprovalCleared(
+                        requestId = params?.stringOrNull("requestId", "request_id")
+                    )
+                )
+                true
+            }
+
             else -> false
         }
     }
@@ -3105,6 +3124,10 @@ class AndrodexClient(
         return method == "item/commandExecution/requestApproval"
             || method == "item/fileChange/requestApproval"
             || method.endsWith("requestApproval")
+    }
+
+    private fun isBridgeManagedApprovalRequestId(idValue: Any): Boolean {
+        return idValue.toString().startsWith("t3-approval-request:")
     }
 
     private fun isToolUserInputRequestMethod(method: String): Boolean {

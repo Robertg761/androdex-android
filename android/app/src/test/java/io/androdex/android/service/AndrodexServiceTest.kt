@@ -362,6 +362,31 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun approvalCleared_onlyClearsMatchingPendingApproval() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        val pendingApproval = ApprovalRequest(
+            idValue = "approval-1",
+            method = "item/commandExecution/requestApproval",
+            command = "rm -rf /tmp/demo",
+            reason = "Needs approval",
+            threadId = "thread-1",
+            turnId = "turn-1",
+        )
+
+        service.processClientUpdate(ClientUpdate.ApprovalRequested(pendingApproval))
+        assertEquals("approval-1", service.state.value.pendingApproval?.idValue)
+
+        service.processClientUpdate(ClientUpdate.ApprovalCleared(requestId = "approval-2"))
+        assertEquals("approval-1", service.state.value.pendingApproval?.idValue)
+
+        service.processClientUpdate(ClientUpdate.ApprovalCleared(requestId = "approval-1"))
+        assertNull(service.state.value.pendingApproval)
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"

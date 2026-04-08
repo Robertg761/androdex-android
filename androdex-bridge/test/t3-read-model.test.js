@@ -111,12 +111,14 @@ test("buildT3ThreadListResult maps snapshot threads into the Android summary con
   assert.equal(result.data[0].threadCapabilities.liveUpdates.supported, true);
   assert.equal(result.data[0].threadCapabilities.turnStart.supported, false);
   assert.equal(result.data[0].threadCapabilities.turnInterrupt.supported, true);
+  assert.equal(result.data[0].threadCapabilities.approvalResponses.supported, true);
   assert.equal(result.data[0].threadCapabilities.toolInputResponses.supported, false);
   assert.equal(result.data[0].backendProvider, "codex");
   assert.match(result.data[1].preview, /unsupported t3 provider/i);
   assert.equal(result.data[1].threadCapabilities.companionSupportState, "unsupported_provider");
   assert.equal(result.data[1].threadCapabilities.liveUpdates.supported, false);
   assert.equal(result.data[1].threadCapabilities.turnInterrupt.supported, false);
+  assert.equal(result.data[1].threadCapabilities.approvalResponses.supported, false);
   assert.match(result.data[1].threadCapabilities.liveUpdates.reason, /only attaches live updates for codex-backed threads/i);
   assert.equal(result.nextCursor, null);
 });

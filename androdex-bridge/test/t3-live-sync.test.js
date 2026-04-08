@@ -1759,27 +1759,39 @@ test("T3 adapter projects approval and user-input activity lifecycles into stabl
   });
   await nextTick();
 
-  assert.equal(responses.length, 5);
-  assert.equal(responses[1].method, "item/updated");
-  assert.equal(responses[1].params.itemId, "t3-approval:thread-123:approval-1");
-  assert.equal(responses[1].params.item.status, "in_progress");
-  assert.equal(responses[1].params.item.title, "Command approval requested");
-  assert.equal(responses[1].params.item.summary, "Run git diff --stat");
+  assert.equal(responses.length, 7);
+  const approvalRequest = responses.find((entry) =>
+    entry.id === "t3-approval-request:thread-123:approval-1"
+  );
+  const approvalOpened = responses.find((entry) =>
+    entry.method === "item/updated" && entry.params?.itemId === "t3-approval:thread-123:approval-1"
+  );
+  const approvalCleared = responses.find((entry) =>
+    entry.method === "approval/cleared" && entry.params?.requestId === "approval-1"
+  );
+  const approvalCompleted = responses.find((entry) =>
+    entry.method === "item/completed" && entry.params?.itemId === "t3-approval:thread-123:approval-1"
+  );
+  const userInputOpened = responses.find((entry) =>
+    entry.method === "item/updated" && entry.params?.itemId === "t3-user-input:thread-123:user-input-1"
+  );
+  const userInputCompleted = responses.find((entry) =>
+    entry.method === "item/completed" && entry.params?.itemId === "t3-user-input:thread-123:user-input-1"
+  );
 
-  assert.equal(responses[2].method, "item/completed");
-  assert.equal(responses[2].params.itemId, "t3-approval:thread-123:approval-1");
-  assert.equal(responses[2].params.item.status, "completed");
-  assert.equal(responses[2].params.item.title, "Approval resolved");
-
-  assert.equal(responses[3].method, "item/updated");
-  assert.equal(responses[3].params.itemId, "t3-user-input:thread-123:user-input-1");
-  assert.equal(responses[3].params.item.status, "in_progress");
-  assert.equal(responses[3].params.item.title, "User input requested");
-
-  assert.equal(responses[4].method, "item/completed");
-  assert.equal(responses[4].params.itemId, "t3-user-input:thread-123:user-input-1");
-  assert.equal(responses[4].params.item.status, "completed");
-  assert.equal(responses[4].params.item.title, "User input submitted");
+  assert.equal(approvalRequest?.method, "item/commandExecution/requestApproval");
+  assert.equal(approvalRequest?.params?.command, "Run git diff --stat");
+  assert.equal(approvalRequest?.params?.requestId, "approval-1");
+  assert.equal(approvalOpened?.params?.item.status, "in_progress");
+  assert.equal(approvalOpened?.params?.item.title, "Command approval requested");
+  assert.equal(approvalOpened?.params?.item.summary, "Run git diff --stat");
+  assert.equal(approvalCleared?.params?.threadId, "thread-123");
+  assert.equal(approvalCompleted?.params?.item.status, "completed");
+  assert.equal(approvalCompleted?.params?.item.title, "Approval resolved");
+  assert.equal(userInputOpened?.params?.item.status, "in_progress");
+  assert.equal(userInputOpened?.params?.item.title, "User input requested");
+  assert.equal(userInputCompleted?.params?.item.status, "completed");
+  assert.equal(userInputCompleted?.params?.item.title, "User input submitted");
 });
 
 test("T3 adapter keeps repeated same-command tool activities distinct within one resumed turn", async () => {
@@ -2170,10 +2182,16 @@ test("T3 adapter suppresses duplicate approval activity notifications when the s
   });
   await nextTick();
 
-  assert.equal(responses.length, 2);
-  assert.equal(responses[1].method, "item/updated");
-  assert.equal(responses[1].params.itemId, "t3-approval:thread-123:approval-1");
-  assert.equal(responses[1].params.item.summary, "Run npm test");
+  assert.equal(responses.length, 3);
+  const approvalRequests = responses.filter((entry) =>
+    entry.method === "item/commandExecution/requestApproval"
+  );
+  const approvalUpdates = responses.filter((entry) =>
+    entry.method === "item/updated" && entry.params?.itemId === "t3-approval:thread-123:approval-1"
+  );
+  assert.equal(approvalRequests.length, 1);
+  assert.equal(approvalUpdates.length, 1);
+  assert.equal(approvalUpdates[0].params.item.summary, "Run npm test");
 });
 
 test("T3 adapter clears transient replay failures and does not leak unhandled rejections during live recovery", async () => {

@@ -7,6 +7,7 @@
 const { normalizeRuntimeTargetKind } = require("./target-config");
 
 const T3_SERVER_READ_ONLY_METHODS = new Set([
+  "bridge/approval/respond",
   "thread/list",
   "thread/read",
   "thread/resume",

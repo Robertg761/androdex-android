@@ -2040,8 +2040,17 @@ class AndrodexService(
                 }
             }
 
-            ClientUpdate.ApprovalCleared -> {
-                stateFlow.update { it.copy(pendingApproval = null) }
+            is ClientUpdate.ApprovalCleared -> {
+                stateFlow.update { current ->
+                    val clearedRequestId = update.requestId?.trim()?.takeIf { it.isNotEmpty() }
+                    if (clearedRequestId != null
+                        && current.pendingApproval?.idValue?.toString() != clearedRequestId
+                    ) {
+                        current
+                    } else {
+                        current.copy(pendingApproval = null)
+                    }
+                }
             }
 
             is ClientUpdate.TurnCompleted -> {

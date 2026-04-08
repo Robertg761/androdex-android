@@ -758,11 +758,12 @@ Status update:
   - Android now explicitly gates project-level thread creation for `t3-server`, so home/sidebar affordances and `createThread()` no longer rely on a bridge-side `thread/start` rejection to enforce the read-only milestone
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
   - `turn/interrupt` is now the first supported mutating T3 action for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
+  - approval responses are now supported for companion-eligible Codex-backed T3 threads through a bridge-managed compatibility layer: resumed threads surface outstanding/open T3 approvals as synthetic Android approval requests, Android responses are translated into `thread.approval.respond`, and `approval.resolved` now clears the phone overlay by request id
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
   - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
-  - the rest of the mutating T3 actions beyond interrupt
+  - the remaining T3 mutating actions beyond interrupt and approval response
 
 Deliverables:
 
@@ -989,6 +990,7 @@ Completed so far:
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity
 - companion-eligible T3 Codex threads now advertise `turn/interrupt` support in bridge capability metadata, and the bridge dispatches `turn/interrupt` through `orchestration.dispatchCommand` while rejecting obviously stale no-active-run interrupts before they hit the host runtime
+- companion-eligible T3 Codex threads now also advertise approval-response support, resumed threads surface outstanding/open approvals as synthetic Android approval requests, and Android approval decisions are translated back into `thread.approval.respond` with host-resolved clear notifications
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
@@ -1001,7 +1003,7 @@ Still in progress:
 
 Not started yet:
 
-- the remaining T3 mutating command mapping beyond interrupt
+- the remaining T3 mutating command mapping beyond interrupt and approval response
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Runtime Capability Matrix
@@ -1028,7 +1030,7 @@ Not started yet:
 - missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
 - send / plan / subagent flows: not supported yet
 - interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
-- approval responses: not supported yet
+- approval responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic approval requests and `thread.approval.respond`
 - tool and user-input responses: not supported yet
 - rollback / compaction / background terminal cleanup: not supported yet
 

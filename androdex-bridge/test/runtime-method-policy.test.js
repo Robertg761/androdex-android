@@ -341,6 +341,114 @@ class InterruptibleThreadFakeWebSocket extends FakeWebSocket {
   }
 }
 
+class ApprovalThreadFakeWebSocket extends FakeWebSocket {
+  send(message) {
+    this.sentMessages.push(message);
+    const parsed = JSON.parse(message);
+    if (parsed.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (parsed.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              snapshotSequence: 7,
+              updatedAt: "2026-04-07T12:00:00.000Z",
+              projects: [
+                {
+                  id: "project-1",
+                  title: "Project One",
+                  workspaceRoot: "/tmp",
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:30:00.000Z",
+                  deletedAt: null,
+                },
+              ],
+              threads: [
+                {
+                  id: "thread-123",
+                  projectId: "project-1",
+                  title: "Approval thread",
+                  modelSelection: {
+                    provider: "codex",
+                    model: "gpt-5.4",
+                  },
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: "/tmp",
+                  latestTurn: {
+                    turnId: "turn-1",
+                    state: "running",
+                    requestedAt: "2026-04-07T11:10:00.000Z",
+                    startedAt: "2026-04-07T11:10:05.000Z",
+                    completedAt: null,
+                    assistantMessageId: null,
+                  },
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:11:00.000Z",
+                  archivedAt: null,
+                  deletedAt: null,
+                  messages: [],
+                  proposedPlans: [],
+                  activities: [
+                    {
+                      id: "activity-approval-1-open",
+                      kind: "approval.requested",
+                      summary: "Command approval requested",
+                      payload: {
+                        requestId: "approval-1",
+                        requestKind: "command",
+                        detail: "Run git diff --stat",
+                      },
+                      turnId: "turn-1",
+                      createdAt: "2026-04-07T11:10:10.000Z",
+                    },
+                  ],
+                  checkpoints: [],
+                  session: {
+                    status: "running",
+                    activeTurnId: "turn-1",
+                    updatedAt: "2026-04-07T11:10:10.000Z",
+                  },
+                },
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    super.send(message);
+  }
+}
+
 class FallbackWorkspaceFakeWebSocket extends FakeWebSocket {
   send(message) {
     this.sentMessages.push(message);
@@ -431,6 +539,10 @@ test("runtime method policy recognizes codex-native and T3 read-only targets", (
 });
 
 test("T3 read-only policy allows snapshot/bootstrap-safe read methods", () => {
+  assert.equal(
+    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "bridge/approval/respond" }),
+    true
+  );
   assert.equal(
     isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "thread/list" }),
     true
@@ -554,6 +666,56 @@ test("T3 runtime adapter dispatches turn/interrupt for companion-supported threa
   assert.equal(dispatched.payload.threadId, "thread-123");
   assert.equal(dispatched.payload.turnId, "turn-1");
   assert.match(dispatched.payload.commandId, /^[0-9a-f-]{36}$/i);
+});
+
+test("T3 runtime adapter dispatches bridge/approval/respond for pending synthetic T3 approvals", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: ApprovalThreadFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  })), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-approval-respond",
+    method: "bridge/approval/respond",
+    params: {
+      bridgeRequestId: "t3-approval-request:thread-123:approval-1",
+      decision: "accept",
+    },
+  })), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const response = responses.find((entry) => entry.id === "req-approval-respond");
+  assert.equal(response?.result?.ok, true);
+  assert.equal(response?.result?.accepted, true);
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatched = JSON.parse(socket.sentMessages.at(-1));
+  assert.equal(dispatched.tag, "orchestration.dispatchCommand");
+  assert.equal(dispatched.payload.type, "thread.approval.respond");
+  assert.equal(dispatched.payload.threadId, "thread-123");
+  assert.equal(dispatched.payload.requestId, "approval-1");
+  assert.equal(dispatched.payload.decision, "accept");
 });
 
 test("T3 runtime adapter rejects turn/interrupt when the synchronized thread is no longer interruptible", async () => {

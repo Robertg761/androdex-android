@@ -159,6 +159,8 @@ function createT3ServerRuntimeAdapter({
   let hasReachedReadyState = false;
   const resumedThreadIds = new Set();
   const liveActivityStateByThread = new Map();
+  const syntheticApprovalRequestsByBridgeId = new Map();
+  const syntheticApprovalBridgeIdByThreadRequest = new Map();
   let transport = null;
   const emitAdapterLog = createStructuredRuntimeLogger({
     logEvent,
@@ -541,6 +543,20 @@ function createT3ServerRuntimeAdapter({
       const activity = event?.payload?.activity;
       for (const notification of buildThreadActivityNotifications({
         activity,
+        onApprovalCleared({ requestId }) {
+          emitSyntheticApprovalCleared({
+            requestId,
+            threadId,
+          });
+        },
+        onApprovalRequested({ activity: nextActivity, payload, turnId }) {
+          emitSyntheticApprovalRequest({
+            activity: nextActivity,
+            payload,
+            threadId,
+            turnId,
+          });
+        },
         threadId,
         threadActivityState: getOrCreateThreadLiveActivityState(threadId),
       })) {
@@ -646,6 +662,113 @@ function createT3ServerRuntimeAdapter({
     };
     liveActivityStateByThread.set(normalizedThreadId, created);
     return created;
+  }
+
+  function buildSyntheticApprovalRequestId({
+    threadId,
+    requestId,
+  }) {
+    return `t3-approval-request:${threadId}:${requestId}`;
+  }
+
+  function buildSyntheticApprovalMethod(requestKind) {
+    const normalizedRequestKind = normalizeApprovalRequestKind(requestKind);
+    if (normalizedRequestKind === "file-read") {
+      return "item/fileRead/requestApproval";
+    }
+    if (normalizedRequestKind === "file-change") {
+      return "item/fileChange/requestApproval";
+    }
+    return "item/commandExecution/requestApproval";
+  }
+
+  function emitSyntheticApprovalRequest({
+    activity,
+    payload,
+    threadId,
+    turnId,
+  }) {
+    const requestId = normalizeNonEmptyString(payload?.requestId);
+    const requestKind = normalizeApprovalRequestKind(
+      payload?.requestKind || payload?.requestType
+    );
+    if (!requestId || !requestKind) {
+      return;
+    }
+
+    const key = `${threadId}:${requestId}`;
+    if (syntheticApprovalBridgeIdByThreadRequest.has(key)) {
+      return;
+    }
+
+    const bridgeRequestId = buildSyntheticApprovalRequestId({
+      threadId,
+      requestId,
+    });
+    syntheticApprovalBridgeIdByThreadRequest.set(key, bridgeRequestId);
+    syntheticApprovalRequestsByBridgeId.set(bridgeRequestId, {
+      requestId,
+      requestKind,
+      threadId,
+      turnId,
+    });
+
+    emitMessage(JSON.stringify({
+      id: bridgeRequestId,
+      method: buildSyntheticApprovalMethod(requestKind),
+      params: {
+        command: requestKind === "command"
+          ? firstNonEmptyString([
+            payload?.detail,
+            activity?.summary,
+          ])
+          : null,
+        reason: firstNonEmptyString([
+          payload?.detail,
+          activity?.summary,
+        ]),
+        requestId,
+        requestKind,
+        threadId,
+        turnId,
+      },
+    }));
+  }
+
+  function emitSyntheticApprovalCleared({
+    requestId,
+    threadId,
+  }) {
+    if (!requestId || !threadId) {
+      return;
+    }
+    const key = `${threadId}:${requestId}`;
+    const bridgeRequestId = syntheticApprovalBridgeIdByThreadRequest.get(key);
+    if (bridgeRequestId) {
+      syntheticApprovalBridgeIdByThreadRequest.delete(key);
+      syntheticApprovalRequestsByBridgeId.delete(bridgeRequestId);
+    }
+    emitNotification("approval/cleared", {
+      requestId,
+      threadId,
+    });
+  }
+
+  function emitOutstandingSyntheticApprovalRequest({
+    threadId,
+    thread,
+  }) {
+    const pendingApprovals = listPendingT3Approvals(thread);
+    if (pendingApprovals.length === 0) {
+      return;
+    }
+    const latestPendingApproval = pendingApprovals[pendingApprovals.length - 1];
+    emitSyntheticApprovalRequest({
+      activity: latestPendingApproval,
+      payload: latestPendingApproval.payload,
+      threadId,
+      turnId: normalizeNonEmptyString(latestPendingApproval.turnId) || null,
+    });
   }
 
   function createAndBindTransport() {
@@ -806,6 +929,10 @@ function createT3ServerRuntimeAdapter({
             return;
           }
           resumedThreadIds.add(threadId);
+          emitOutstandingSyntheticApprovalRequest({
+            threadId,
+            thread: findT3Thread(snapshot, threadId),
+          });
           emitRpcResult(requestId, {
             ok: true,
             resumed: true,
@@ -816,6 +943,71 @@ function createT3ServerRuntimeAdapter({
         })
         .catch((error) => {
           emitRpcError(requestId, normalizeNonEmptyString(error?.message) || "Failed to resume the T3 thread.");
+        });
+      return true;
+    }
+
+    if (method === "bridge/approval/respond") {
+      void ensureSnapshotCache()
+        .then(() => {
+          const bridgeRequestId = normalizeNonEmptyString(
+            parsed?.params?.bridgeRequestId || parsed?.params?.requestId
+          );
+          if (!bridgeRequestId) {
+            throw new Error("T3 approval response requires a bridgeRequestId.");
+          }
+
+          const pendingApproval = syntheticApprovalRequestsByBridgeId.get(bridgeRequestId);
+          if (!pendingApproval) {
+            throw new Error("Approval request is no longer pending.");
+          }
+
+          const thread = findT3Thread(snapshotCache, pendingApproval.threadId);
+          if (!thread || !isT3ApprovalRequestPending(thread, pendingApproval.requestId)) {
+            syntheticApprovalRequestsByBridgeId.delete(bridgeRequestId);
+            syntheticApprovalBridgeIdByThreadRequest.delete(
+              `${pendingApproval.threadId}:${pendingApproval.requestId}`
+            );
+            throw new Error("Approval request is no longer pending.");
+          }
+
+          const decision = normalizeApprovalDecision(
+            parsed?.params?.decision || parsed?.params?.result
+          );
+          if (!decision) {
+            throw new Error(
+              "T3 approval responses must be one of: accept, acceptForSession, decline, cancel."
+            );
+          }
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.approval.respond",
+            commandId: randomUUID(),
+            threadId: pendingApproval.threadId,
+            requestId: pendingApproval.requestId,
+            decision,
+            createdAt: new Date().toISOString(),
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then((dispatchResult) => {
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "approval_response_dispatched",
+              method,
+              threadId: pendingApproval.threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              accepted: decision === "accept" || decision === "acceptForSession",
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to respond to the T3 approval request."
+          );
         });
       return true;
     }
@@ -1146,6 +1338,8 @@ function normalizeNonEmptyString(value) {
 
 function buildThreadActivityNotifications({
   activity,
+  onApprovalCleared = () => {},
+  onApprovalRequested = () => {},
   threadId,
   threadActivityState,
 }) {
@@ -1212,6 +1406,18 @@ function buildThreadActivityNotifications({
   }
 
   if (kind === "approval.requested" || kind === "approval.resolved") {
+    const requestId = normalizeNonEmptyString(payload.requestId);
+    if (kind === "approval.requested") {
+      onApprovalRequested({
+        activity,
+        payload,
+        turnId,
+      });
+    } else if (requestId) {
+      onApprovalCleared({
+        requestId,
+      });
+    }
     const itemId = resolveApprovalActivityItemId({
       activity,
       threadActivityState,
@@ -1301,6 +1507,47 @@ function buildThreadActivityNotifications({
   }
 
   return [];
+}
+
+function isT3ApprovalRequestPending(thread, requestId) {
+  const normalizedRequestId = normalizeNonEmptyString(requestId);
+  if (!normalizedRequestId) {
+    return false;
+  }
+
+  return listPendingT3Approvals(thread).some((activity) => {
+    const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+    return normalizeNonEmptyString(payload.requestId) === normalizedRequestId;
+  });
+}
+
+function listPendingT3Approvals(thread) {
+  const openApprovalsByRequestId = new Map();
+  const activities = [...(Array.isArray(thread?.activities) ? thread.activities : [])]
+    .filter((activity) => activity && typeof activity === "object")
+    .sort(compareActivitiesBySequenceAndTime);
+
+  for (const activity of activities) {
+    const kind = normalizeNonEmptyString(activity?.kind).toLowerCase();
+    const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+    const activityRequestId = normalizeNonEmptyString(payload.requestId);
+    if (!activityRequestId) {
+      continue;
+    }
+    if (kind === "approval.requested") {
+      openApprovalsByRequestId.set(activityRequestId, activity);
+      continue;
+    }
+    if (
+      kind === "approval.resolved"
+      || (kind === "provider.approval.respond.failed"
+        && isStalePendingRequestFailureDetail(payload.detail))
+    ) {
+      openApprovalsByRequestId.delete(activityRequestId);
+    }
+  }
+
+  return [...openApprovalsByRequestId.values()];
 }
 
 function dedupeActivityNotifications({
@@ -1517,6 +1764,57 @@ function firstNonEmptyString(values) {
     if (normalizedValue) {
       return normalizedValue;
     }
+  }
+  return "";
+}
+
+function compareActivitiesBySequenceAndTime(left, right) {
+  const sequenceDelta = normalizeSequenceNumber(left?.sequence) - normalizeSequenceNumber(right?.sequence);
+  if (sequenceDelta !== 0) {
+    return sequenceDelta;
+  }
+  const leftCreatedAt = normalizeNonEmptyString(left?.createdAt);
+  const rightCreatedAt = normalizeNonEmptyString(right?.createdAt);
+  if (leftCreatedAt && rightCreatedAt && leftCreatedAt !== rightCreatedAt) {
+    return leftCreatedAt.localeCompare(rightCreatedAt);
+  }
+  return normalizeNonEmptyString(left?.id).localeCompare(normalizeNonEmptyString(right?.id));
+}
+
+function isStalePendingRequestFailureDetail(value) {
+  const normalizedValue = normalizeNonEmptyString(value).toLowerCase();
+  if (!normalizedValue) {
+    return false;
+  }
+  return normalizedValue.includes("stale pending approval request")
+    || normalizedValue.includes("unknown pending permission request")
+    || normalizedValue.includes("approval request is no longer pending")
+    || normalizedValue.includes("approval request not found");
+}
+
+function normalizeApprovalDecision(value) {
+  const normalizedValue = normalizeNonEmptyString(value);
+  if (
+    normalizedValue === "accept"
+    || normalizedValue === "acceptForSession"
+    || normalizedValue === "decline"
+    || normalizedValue === "cancel"
+  ) {
+    return normalizedValue;
+  }
+  return "";
+}
+
+function normalizeApprovalRequestKind(value) {
+  const normalizedValue = normalizeNonEmptyString(value).toLowerCase();
+  if (normalizedValue === "command" || normalizedValue === "command_approval") {
+    return "command";
+  }
+  if (normalizedValue === "file-read" || normalizedValue === "file_read" || normalizedValue === "file_read_approval") {
+    return "file-read";
+  }
+  if (normalizedValue === "file-change" || normalizedValue === "file_change" || normalizedValue === "file_change_approval") {
+    return "file-change";
   }
   return "";
 }

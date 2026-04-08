@@ -719,8 +719,10 @@ function describeT3ThreadCapabilities({
       reason: interruptReason,
     },
     approvalResponses: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported"
+        ? null
+        : interruptReason,
     },
     userInputResponses: {
       supported: false,
