@@ -172,3 +172,43 @@ test("getBridgeDoctorReport surfaces installed desktop-session endpoints and aut
   assert.ok(report.recommendations.some((message) => message.includes("ws://127.0.0.1:57816")));
   assert.ok(report.recommendations.some((message) => message.includes("auth handoff")));
 });
+
+test("getBridgeDoctorReport does not warn about missing auth handoff when a runtime-session descriptor is present", async () => {
+  const report = await getBridgeDoctorReport({
+    env: {
+      ANDRODEX_RUNTIME_TARGET: "t3-server",
+    },
+    getMacOSBridgeServiceStatusImpl() {
+      return {
+        runtimeConfig: {
+          runtimeTarget: "codex-native",
+          runtimeEndpoint: "",
+        },
+        bridgeStatus: {
+          runtimeTarget: "codex-native",
+        },
+      };
+    },
+    probeTcpEndpointImpl: async () => ({
+      reachable: true,
+      reasonCode: "reachable",
+    }),
+    detectInstalledT3RuntimeImpl() {
+      return {
+        desktopAppInstalled: true,
+        desktopAppPath: "/Applications/T3 Code (Alpha).app",
+        cliInstalled: false,
+        cliPath: "",
+        desktopSession: {
+          endpoint: "ws://127.0.0.1:57816",
+          authEnabled: true,
+          authToken: "secret-token",
+          source: "runtime-session-file",
+        },
+      };
+    },
+  });
+
+  assert.equal(report.desktopSessionProbe.reachable, true);
+  assert.equal(report.recommendations.some((message) => message.includes("auth handoff")), false);
+});

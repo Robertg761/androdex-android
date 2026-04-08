@@ -164,3 +164,25 @@ test("T3 protocol transport delivers stream chunks and completes on exit", async
   ]);
   assert.equal(ended, true);
 });
+
+test("createT3EndpointTransport appends auth tokens to the live websocket URL without changing describe()", async () => {
+  let capturedSocket = null;
+  class CapturingWebSocket extends FakeWebSocket {
+    constructor(url) {
+      super(url);
+      capturedSocket = this;
+    }
+  }
+
+  const transport = createT3EndpointTransport({
+    endpoint: "ws://127.0.0.1:57816",
+    authToken: "secret-token",
+    WebSocketImpl: CapturingWebSocket,
+  });
+
+  await transport.whenReady();
+
+  assert.ok(capturedSocket);
+  assert.equal(capturedSocket.url, "ws://127.0.0.1:57816/?token=secret-token");
+  assert.equal(transport.describe(), "ws://127.0.0.1:57816");
+});

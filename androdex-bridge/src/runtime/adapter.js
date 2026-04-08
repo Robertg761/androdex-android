@@ -41,6 +41,7 @@ const T3_LIVE_TURN_EVENT_TYPES = new Set([
 function createRuntimeAdapter({
   targetKind = DEFAULT_RUNTIME_TARGET,
   endpoint = "",
+  endpointAuthToken = "",
   env = process.env,
   cwd = "",
   loadReplayCursor = null,
@@ -63,6 +64,7 @@ function createRuntimeAdapter({
     return createT3ServerRuntimeAdapter({
       runtimeTarget,
       endpoint,
+      endpointAuthToken,
       env,
       loadReplayCursor,
       logEvent,
@@ -112,6 +114,7 @@ function createCodexNativeRuntimeAdapter({
 function createT3ServerRuntimeAdapter({
   runtimeTarget,
   endpoint = "",
+  endpointAuthToken = "",
   env = process.env,
   loadReplayCursor = null,
   logEvent = null,
@@ -951,6 +954,7 @@ function createT3ServerRuntimeAdapter({
   function createAndBindTransport() {
     const nextTransport = createT3EndpointTransport({
       endpoint: normalizedEndpoint,
+      authToken: endpointAuthToken,
       WebSocketImpl,
       onBeforeReadyRequest: performSuitabilityProbe,
     });

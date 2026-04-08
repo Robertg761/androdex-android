@@ -17,17 +17,33 @@ const KNOWN_T3_DESKTOP_APP_PATHS = Object.freeze([
 
 function resolveT3RuntimeEndpoint({
   env = process.env,
+  fsImpl = fs,
+  homeDir = os.homedir(),
 } = {}) {
   const explicitEndpoint = normalizeNonEmptyString(env?.ANDRODEX_T3_ENDPOINT);
   if (explicitEndpoint) {
     return {
       endpoint: explicitEndpoint,
+      authToken: "",
       source: "explicit",
+    };
+  }
+
+  const desktopSession = readDesktopT3Session({
+    fsImpl,
+    homeDir,
+  });
+  if (normalizeNonEmptyString(desktopSession.endpoint) && normalizeNonEmptyString(desktopSession.authToken)) {
+    return {
+      endpoint: desktopSession.endpoint,
+      authToken: desktopSession.authToken,
+      source: "runtime-session-file",
     };
   }
 
   return {
     endpoint: DEFAULT_T3_LOOPBACK_ENDPOINT,
+    authToken: "",
     source: "default-loopback",
   };
 }
@@ -52,17 +68,27 @@ function readDesktopT3Session({
   fsImpl = fs,
   homeDir = os.homedir(),
 } = {}) {
+  const runtimeSessionPath = path.join(homeDir, ".t3", "userdata", "runtime-session.json");
   const desktopLogPath = path.join(homeDir, ".t3", "userdata", "logs", "desktop-main.log");
   const serverLogPath = path.join(homeDir, ".t3", "userdata", "logs", "server.log");
+  const runtimeSession = readRuntimeSessionDescriptor({
+    fsImpl,
+    filePath: runtimeSessionPath,
+  });
   const desktopLog = safeReadUtf8(fsImpl, desktopLogPath);
   const serverLog = safeReadUtf8(fsImpl, serverLogPath);
-  const endpoint = extractLatestDesktopBaseUrl(desktopLog);
+  const endpoint = normalizeNonEmptyString(runtimeSession?.baseUrl) || extractLatestDesktopBaseUrl(desktopLog);
   const authEnabled = extractLatestAuthEnabled(serverLog);
   return {
+    runtimeSessionPath,
     desktopLogPath,
     serverLogPath,
     endpoint,
-    authEnabled,
+    authEnabled: typeof runtimeSession?.authToken === "string" && runtimeSession.authToken
+      ? true
+      : authEnabled,
+    authToken: normalizeNonEmptyString(runtimeSession?.authToken),
+    source: runtimeSession ? "runtime-session-file" : "desktop-log",
   };
 }
 
@@ -89,6 +115,29 @@ function safeReadUtf8(fsImpl, filePath) {
     return fsImpl.readFileSync(filePath, "utf8");
   } catch {
     return "";
+  }
+}
+
+function readRuntimeSessionDescriptor({
+  fsImpl,
+  filePath,
+}) {
+  try {
+    const parsed = JSON.parse(fsImpl.readFileSync(filePath, "utf8"));
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const baseUrl = normalizeNonEmptyString(parsed.baseUrl);
+    const authToken = normalizeNonEmptyString(parsed.authToken);
+    if (!baseUrl || !authToken) {
+      return null;
+    }
+    return {
+      baseUrl,
+      authToken,
+    };
+  } catch {
+    return null;
   }
 }
 

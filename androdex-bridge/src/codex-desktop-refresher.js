@@ -614,6 +614,7 @@ function readBridgeConfig({ env = process.env } = {}) {
         source: "explicit",
       };
   const runtimeEndpoint = runtimeEndpointResolution.endpoint;
+  const runtimeEndpointAuthToken = runtimeEndpointResolution.authToken || "";
   const codexEndpoint = runtimeTarget === "codex-native" ? runtimeEndpoint : "";
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
@@ -644,6 +645,7 @@ function readBridgeConfig({ env = process.env } = {}) {
       DEFAULT_DEBOUNCE_MS
     ),
     runtimeEndpoint,
+    runtimeEndpointAuthToken,
     runtimeEndpointSource: runtimeEndpointResolution.source,
     codexEndpoint,
     runtimeTarget,

@@ -133,6 +133,7 @@ function createWorkspaceRuntime({
 
     const nextRuntime = createRuntimeAdapter({
       endpoint: resolveConfiguredRuntimeEndpoint(),
+      endpointAuthToken: resolveConfiguredRuntimeEndpointAuthToken(),
       env: process.env,
       cwd,
       loadReplayCursor,
@@ -297,6 +298,11 @@ function createWorkspaceRuntime({
   function resolveConfiguredRuntimeEndpoint() {
     return normalizeNonEmptyString(config?.runtimeEndpoint)
       || normalizeNonEmptyString(config?.codexEndpoint)
+      || "";
+  }
+
+  function resolveConfiguredRuntimeEndpointAuthToken() {
+    return normalizeNonEmptyString(config?.runtimeEndpointAuthToken)
       || "";
   }
 

@@ -63,7 +63,37 @@ test("readBridgeConfig defaults T3 companion mode to the standard loopback endpo
 
   assert.equal(config.runtimeTarget, "t3-server");
   assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:3773/ws");
+  assert.equal(config.runtimeEndpointAuthToken, "");
   assert.equal(config.runtimeEndpointSource, "default-loopback");
+});
+
+test("readBridgeConfig prefers the local T3 runtime-session descriptor and keeps auth token separate", () => {
+  const originalHome = process.env.HOME;
+  const tempRoot = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "androdex-t3-runtime-session-"));
+  process.env.HOME = tempRoot;
+  fs.mkdirSync(path.join(tempRoot, ".t3", "userdata"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tempRoot, ".t3", "userdata", "runtime-session.json"),
+    JSON.stringify({
+      baseUrl: "ws://127.0.0.1:57816",
+      authToken: "secret-token",
+    }),
+    "utf8"
+  );
+
+  const config = readBridgeConfig({
+    env: {
+      HOME: tempRoot,
+      ANDRODEX_RUNTIME_TARGET: "t3-server",
+    },
+  });
+
+  process.env.HOME = originalHome;
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+
+  assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:57816");
+  assert.equal(config.runtimeEndpointAuthToken, "secret-token");
+  assert.equal(config.runtimeEndpointSource, "runtime-session-file");
 });
 
 test("macOS refresh AppleScript supports preserve-context relaunches without Accessibility automation", () => {

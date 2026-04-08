@@ -10,10 +10,11 @@ const DEFAULT_T3_REQUEST_TIMEOUT_MS = 5_000;
 
 function createT3EndpointTransport({
   endpoint,
+  authToken = "",
   WebSocketImpl = WebSocket,
   onBeforeReadyRequest = null,
 } = {}) {
-  const socket = new WebSocketImpl(endpoint);
+  const socket = new WebSocketImpl(composeT3EndpointUrl(endpoint, authToken));
   const listeners = createListenerBag();
   const openState = WebSocketImpl.OPEN ?? WebSocket.OPEN ?? 1;
   const connectingState = WebSocketImpl.CONNECTING ?? WebSocket.CONNECTING ?? 0;
@@ -261,6 +262,24 @@ function createT3EndpointTransport({
       return readyPromise;
     },
   };
+}
+
+function composeT3EndpointUrl(endpoint, authToken = "") {
+  const normalizedEndpoint = normalizeNonEmptyString(endpoint);
+  const normalizedAuthToken = normalizeNonEmptyString(authToken);
+  if (!normalizedAuthToken) {
+    return normalizedEndpoint;
+  }
+
+  try {
+    const parsed = new URL(normalizedEndpoint);
+    if (!parsed.searchParams.has("token")) {
+      parsed.searchParams.set("token", normalizedAuthToken);
+    }
+    return parsed.toString();
+  } catch {
+    return normalizedEndpoint;
+  }
 }
 
 function createRequestId(sequence) {

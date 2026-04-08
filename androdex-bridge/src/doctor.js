@@ -73,7 +73,8 @@ async function getBridgeDoctorReport({
       if (desktopSessionEndpoint !== runtimeEndpoint) {
         recommendations.push(`T3 desktop is currently exposing a different loopback websocket (${desktopSessionEndpoint}).`);
       }
-      if (installedRuntime?.desktopSession?.authEnabled !== false) {
+      if (installedRuntime?.desktopSession?.source !== "runtime-session-file"
+        && installedRuntime?.desktopSession?.authEnabled !== false) {
         recommendations.push("The installed T3 desktop app uses auth-protected dynamic loopback sessions, so seamless attach still needs a desktop-to-Androdex auth handoff or local runtime descriptor.");
       }
     }
