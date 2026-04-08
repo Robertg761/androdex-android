@@ -25,12 +25,19 @@ test("resolveT3RuntimeEndpoint prefers the local runtime-session descriptor when
       readFileSync(filePath) {
         if (filePath.endsWith("runtime-session.json")) {
           return JSON.stringify({
+            version: 1,
+            source: "desktop",
+            transport: "websocket",
             baseUrl: "ws://127.0.0.1:57816",
             authToken: "secret-token",
+            backendPid: 1234,
           });
         }
         throw new Error(`missing file ${filePath}`);
       },
+    },
+    isProcessAliveImpl() {
+      return true;
     },
   });
 
@@ -70,8 +77,12 @@ test("readDesktopT3Session extracts the latest desktop baseUrl and auth flag fro
 test("readDesktopT3Session prefers the runtime-session descriptor and keeps the auth token private to callers", () => {
   const files = new Map([
     ["/tmp/home/.t3/userdata/runtime-session.json", JSON.stringify({
+      version: 1,
+      source: "desktop",
+      transport: "websocket",
       baseUrl: "ws://127.0.0.1:60000",
       authToken: "secret-token",
+      backendPid: 1234,
     })],
     ["/tmp/home/.t3/userdata/logs/desktop-main.log", "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:57816"],
     ["/tmp/home/.t3/userdata/logs/server.log", 'timestamp=... message="{\\"authEnabled\\":true}"'],
@@ -87,12 +98,80 @@ test("readDesktopT3Session prefers the runtime-session descriptor and keeps the 
         return files.get(filePath);
       },
     },
+    isProcessAliveImpl() {
+      return true;
+    },
   });
 
   assert.equal(session.endpoint, "ws://127.0.0.1:60000");
   assert.equal(session.authEnabled, true);
   assert.equal(session.authToken, "secret-token");
   assert.equal(session.source, "runtime-session-file");
+  assert.equal(session.descriptorStatus, "trusted");
+});
+
+test("readDesktopT3Session ignores stale runtime-session descriptors and falls back to logs", () => {
+  const files = new Map([
+    ["/tmp/home/.t3/userdata/runtime-session.json", JSON.stringify({
+      version: 1,
+      source: "desktop",
+      transport: "websocket",
+      baseUrl: "ws://127.0.0.1:60000",
+      authToken: "secret-token",
+      backendPid: 9999,
+    })],
+    ["/tmp/home/.t3/userdata/logs/desktop-main.log", "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:57816"],
+    ["/tmp/home/.t3/userdata/logs/server.log", 'timestamp=... message="{\\"authEnabled\\":true}"'],
+  ]);
+
+  const session = readDesktopT3Session({
+    homeDir: "/tmp/home",
+    fsImpl: {
+      readFileSync(filePath) {
+        if (!files.has(filePath)) {
+          throw new Error(`missing file ${filePath}`);
+        }
+        return files.get(filePath);
+      },
+    },
+    isProcessAliveImpl() {
+      return false;
+    },
+  });
+
+  assert.equal(session.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(session.authToken, "");
+  assert.equal(session.source, "desktop-log");
+  assert.equal(session.descriptorStatus, "stale-backend-pid");
+});
+
+test("resolveT3RuntimeEndpoint ignores invalid non-loopback runtime-session descriptors", () => {
+  const resolved = resolveT3RuntimeEndpoint({
+    env: {},
+    homeDir: "/tmp/home",
+    fsImpl: {
+      readFileSync(filePath) {
+        if (filePath.endsWith("runtime-session.json")) {
+          return JSON.stringify({
+            version: 1,
+            source: "desktop",
+            transport: "websocket",
+            baseUrl: "ws://192.168.1.50:3773",
+            authToken: "secret-token",
+            backendPid: 1234,
+          });
+        }
+        throw new Error(`missing file ${filePath}`);
+      },
+    },
+    isProcessAliveImpl() {
+      return true;
+    },
+  });
+
+  assert.equal(resolved.endpoint, "ws://127.0.0.1:3773/ws");
+  assert.equal(resolved.authToken, "");
+  assert.equal(resolved.source, "default-loopback");
 });
 
 test("detectInstalledT3Runtime returns desktop session data alongside app discovery", () => {

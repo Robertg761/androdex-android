@@ -19,6 +19,7 @@ function resolveT3RuntimeEndpoint({
   env = process.env,
   fsImpl = fs,
   homeDir = os.homedir(),
+  isProcessAliveImpl = isProcessAlive,
 } = {}) {
   const explicitEndpoint = normalizeNonEmptyString(env?.ANDRODEX_T3_ENDPOINT);
   if (explicitEndpoint) {
@@ -32,6 +33,7 @@ function resolveT3RuntimeEndpoint({
   const desktopSession = readDesktopT3Session({
     fsImpl,
     homeDir,
+    isProcessAliveImpl,
   });
   if (normalizeNonEmptyString(desktopSession.endpoint) && normalizeNonEmptyString(desktopSession.authToken)) {
     return {
@@ -67,6 +69,7 @@ function detectInstalledT3Runtime({
 function readDesktopT3Session({
   fsImpl = fs,
   homeDir = os.homedir(),
+  isProcessAliveImpl = isProcessAlive,
 } = {}) {
   const runtimeSessionPath = path.join(homeDir, ".t3", "userdata", "runtime-session.json");
   const desktopLogPath = path.join(homeDir, ".t3", "userdata", "logs", "desktop-main.log");
@@ -74,21 +77,25 @@ function readDesktopT3Session({
   const runtimeSession = readRuntimeSessionDescriptor({
     fsImpl,
     filePath: runtimeSessionPath,
+    isProcessAliveImpl,
   });
   const desktopLog = safeReadUtf8(fsImpl, desktopLogPath);
   const serverLog = safeReadUtf8(fsImpl, serverLogPath);
-  const endpoint = normalizeNonEmptyString(runtimeSession?.baseUrl) || extractLatestDesktopBaseUrl(desktopLog);
+  const trustedRuntimeSession = runtimeSession?.descriptor || null;
+  const endpoint = normalizeNonEmptyString(trustedRuntimeSession?.baseUrl) || extractLatestDesktopBaseUrl(desktopLog);
   const authEnabled = extractLatestAuthEnabled(serverLog);
   return {
     runtimeSessionPath,
     desktopLogPath,
     serverLogPath,
     endpoint,
-    authEnabled: typeof runtimeSession?.authToken === "string" && runtimeSession.authToken
+    authEnabled: typeof trustedRuntimeSession?.authToken === "string" && trustedRuntimeSession.authToken
       ? true
       : authEnabled,
-    authToken: normalizeNonEmptyString(runtimeSession?.authToken),
-    source: runtimeSession ? "runtime-session-file" : "desktop-log",
+    authToken: normalizeNonEmptyString(trustedRuntimeSession?.authToken),
+    source: trustedRuntimeSession ? "runtime-session-file" : "desktop-log",
+    descriptorStatus: runtimeSession?.problem?.code || (trustedRuntimeSession ? "trusted" : "missing"),
+    descriptorDetail: runtimeSession?.problem?.detail || "",
   };
 }
 
@@ -121,23 +128,126 @@ function safeReadUtf8(fsImpl, filePath) {
 function readRuntimeSessionDescriptor({
   fsImpl,
   filePath,
+  isProcessAliveImpl = isProcessAlive,
 }) {
   try {
     const parsed = JSON.parse(fsImpl.readFileSync(filePath, "utf8"));
     if (!parsed || typeof parsed !== "object") {
-      return null;
+      return {
+        descriptor: null,
+        problem: {
+          code: "invalid-json",
+          detail: "Runtime session descriptor must be a JSON object.",
+        },
+      };
     }
-    const baseUrl = normalizeNonEmptyString(parsed.baseUrl);
+    if (parsed.version !== 1) {
+      return {
+        descriptor: null,
+        problem: {
+          code: "unsupported-version",
+          detail: "Runtime session descriptor version is unsupported.",
+        },
+      };
+    }
+    if (normalizeNonEmptyString(parsed.source) !== "desktop") {
+      return {
+        descriptor: null,
+        problem: {
+          code: "invalid-source",
+          detail: "Runtime session descriptor source must be \"desktop\".",
+        },
+      };
+    }
+    if (normalizeNonEmptyString(parsed.transport) !== "websocket") {
+      return {
+        descriptor: null,
+        problem: {
+          code: "invalid-transport",
+          detail: "Runtime session descriptor transport must be \"websocket\".",
+        },
+      };
+    }
+
+    const baseUrl = normalizeLoopbackWebSocketUrl(parsed.baseUrl);
     const authToken = normalizeNonEmptyString(parsed.authToken);
-    if (!baseUrl || !authToken) {
-      return null;
+    if (!baseUrl) {
+      return {
+        descriptor: null,
+        problem: {
+          code: "invalid-endpoint",
+          detail: "Runtime session descriptor baseUrl must be a loopback ws:// URL.",
+        },
+      };
     }
+    if (!authToken) {
+      return {
+        descriptor: null,
+        problem: {
+          code: "missing-auth-token",
+          detail: "Runtime session descriptor is missing its auth token.",
+        },
+      };
+    }
+
+    const backendPid = Number.isInteger(parsed.backendPid) && parsed.backendPid > 0
+      ? parsed.backendPid
+      : null;
+    if (backendPid && !isProcessAliveImpl(backendPid)) {
+      return {
+        descriptor: null,
+        problem: {
+          code: "stale-backend-pid",
+          detail: `Runtime session descriptor references a backend process (${backendPid}) that is no longer running.`,
+        },
+      };
+    }
+
     return {
-      baseUrl,
-      authToken,
+      descriptor: {
+        baseUrl,
+        authToken,
+      },
+      problem: null,
     };
   } catch {
-    return null;
+    return {
+      descriptor: null,
+      problem: {
+        code: "missing",
+        detail: "",
+      },
+    };
+  }
+}
+
+function normalizeLoopbackWebSocketUrl(value) {
+  const rawValue = normalizeNonEmptyString(value);
+  if (!rawValue) {
+    return "";
+  }
+  try {
+    const parsed = new URL(rawValue);
+    const protocol = normalizeNonEmptyString(parsed.protocol).toLowerCase();
+    if (protocol !== "ws:" && protocol !== "wss:") {
+      return "";
+    }
+    const hostname = normalizeNonEmptyString(parsed.hostname).toLowerCase();
+    if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1" && hostname !== "[::1]") {
+      return "";
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return normalizeNonEmptyString(error?.code) === "EPERM";
   }
 }
 
@@ -165,6 +275,8 @@ module.exports = {
   DEFAULT_T3_LOOPBACK_ENDPOINT,
   KNOWN_T3_DESKTOP_APP_PATHS,
   detectInstalledT3Runtime,
+  isProcessAlive,
+  normalizeLoopbackWebSocketUrl,
   readDesktopT3Session,
   resolveT3RuntimeEndpoint,
 };

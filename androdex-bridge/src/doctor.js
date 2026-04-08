@@ -61,6 +61,13 @@ async function getBridgeDoctorReport({
     }
 
     const desktopSessionEndpoint = normalizeNonEmptyString(installedRuntime?.desktopSession?.endpoint);
+    const desktopDescriptorStatus = normalizeNonEmptyString(installedRuntime?.desktopSession?.descriptorStatus);
+    const desktopDescriptorDetail = normalizeNonEmptyString(installedRuntime?.desktopSession?.descriptorDetail);
+    if (desktopDescriptorStatus && desktopDescriptorStatus !== "trusted" && desktopDescriptorStatus !== "missing") {
+      recommendations.push(
+        `The local T3 desktop runtime descriptor looks ${desktopDescriptorStatus.replace(/-/g, " ")}. Restart T3 Code to refresh ${installedRuntime?.desktopSession?.runtimeSessionPath || "the descriptor"}${desktopDescriptorDetail ? ` (${desktopDescriptorDetail})` : ""}.`
+      );
+    }
     if (desktopSessionEndpoint) {
       const desktopSessionUrl = tryParseUrl(desktopSessionEndpoint);
       if (desktopSessionUrl) {
@@ -149,6 +156,13 @@ async function runBridgeDoctor({
             `[androdex] T3 desktop session probe: ${report.desktopSessionProbe.reachable ? "reachable" : `unreachable (${report.desktopSessionProbe.reasonCode})`}`
           );
         }
+      }
+      const descriptorStatus = normalizeNonEmptyString(report.tools.t3Runtime.desktopSession?.descriptorStatus);
+      if (descriptorStatus && descriptorStatus !== "missing") {
+        const descriptorLine = descriptorStatus === "trusted"
+          ? `trusted descriptor at ${report.tools.t3Runtime.desktopSession.runtimeSessionPath}`
+          : `${descriptorStatus.replace(/-/g, " ")} descriptor at ${report.tools.t3Runtime.desktopSession.runtimeSessionPath}`;
+        consoleImpl.log(`[androdex] T3 desktop descriptor: ${descriptorLine}`);
       }
     }
   } else {

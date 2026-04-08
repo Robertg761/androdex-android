@@ -75,6 +75,9 @@ test("readBridgeConfig prefers the local T3 runtime-session descriptor and keeps
   fs.writeFileSync(
     path.join(tempRoot, ".t3", "userdata", "runtime-session.json"),
     JSON.stringify({
+      version: 1,
+      source: "desktop",
+      transport: "websocket",
       baseUrl: "ws://127.0.0.1:57816",
       authToken: "secret-token",
     }),
