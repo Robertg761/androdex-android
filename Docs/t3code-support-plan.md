@@ -134,7 +134,16 @@ This keeps the first integration aligned with Androdex's existing product expect
 
 For companion continuity, the bridge should prefer attaching to an already-running host-local T3 server/state when one is explicitly configured or safely discoverable for the paired host.
 
-The bridge may spawn `t3` itself as a fallback or managed mode when no suitable existing T3 instance is available.
+The bridge may spawn `t3` itself as a fallback or managed mode when no suitable existing T3 instance is available, but that should not be the primary product assumption for v1.
+
+Packaging and install stance for v1:
+
+- treat T3 as an attachable host-local runtime first, not as code that must be bundled into the default `androdex` npm package
+- keep the default `androdex` install path lightweight for Codex-native users
+- optimize the T3 path for "I already run T3 Code on this computer and want Android access to it"
+- if install ergonomics need improvement, prefer an optional sidecar/runtime install helper or bridge-managed launch path over making every Androdex install ship T3 by default
+- do not make Androdex's T3 support depend on cloning a second repo manually in the common case; if we need a managed launch story, it should be packaged as an explicit optional runtime artifact
+- do not treat bundling T3 into the bridge package as a requirement for shipping T3 companion support
 
 For v1, "suitable existing T3 instance" must be an explicit compatibility check, not a loose best-effort attach. At minimum the bridge should verify:
 
@@ -155,6 +164,12 @@ Expected launch characteristics:
 - `autoBootstrapProjectFromCwd` disabled so the bridge's workspace-to-project resolver stays authoritative
 
 The first implementation should treat "continue the same host-local T3 state the user already has" as more important than "always spawn a fresh bridge-owned T3 instance."
+
+Managed-launch note:
+
+- if we add a managed T3 launch path, it should behave like optional setup assistance layered on top of existing-instance attach
+- a good future shape would be "attach if available, otherwise launch an already-installed optional T3 runtime"
+- a bad future shape would be forcing every Androdex user to install or download T3 components just to keep Codex-native working
 
 ### 4. V1 workspace authority
 
@@ -552,6 +567,14 @@ The bridge should eventually report something like:
 - document loopback/auth-token/no-browser launch expectations
 - document the companion boundary clearly: what Android continues versus what still belongs to the T3 desktop/web app
 - add a runtime-target switch smoke matrix
+
+### I. T3 discovery and install guidance
+
+- keep the default `androdex` install story lightweight and Codex-native-first
+- make attach-to-existing-host-local-T3 the primary documented path
+- surface T3 endpoint availability, loopback enforcement, and attach-failure reasons in `androdex status`
+- document the minimal supported T3 setup path in the bridge README without assuming a private internal runbook
+- leave any future `androdex doctor` or managed-launch helper as optional setup assistance layered on top of attach-first companion mode
 
 ## Required Risk Mitigations
 
@@ -1000,20 +1023,25 @@ Completed so far:
 - companion-eligible T3 Codex threads now also advertise approval-response support, resumed threads surface outstanding/open approvals as synthetic Android approval requests, and Android approval decisions are translated back into `thread.approval.respond` with host-resolved clear notifications
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
+- `androdex status` now also explains whether T3 companion mode is selected, whether a loopback websocket endpoint is configured, and why attach is blocked when `t3-server` is selected but unavailable
+- the bridge README now documents the attach-first T3 setup path explicitly, including `ANDRODEX_RUNTIME_TARGET=t3-server`, `ANDRODEX_T3_ENDPOINT`, and the expectation that T3 stays an optional host-local runtime instead of a bundled default dependency
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
 - companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
 - Android `thread/start` is now bridged into T3 `thread.create` for known project workspaces, with runtime-mode derivation from Android access-mode hints and immediate synthesized thread summaries on success
+- manual hardware smoke on Android now proves trusted reconnect succeeds against the saved pair once the real host bridge is running, project switching works against live host-local workspace data, cross-repo `New chat` opens in the newly selected repo instead of bleeding back to the bridge repo, reopening an existing recent thread rehydrates cleanly in that switched workspace, and force-stop relaunch restores the saved pairing without falling back to repair-pairing UI
 
 Still in progress:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool/approval/user-input subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
 - deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
+- end-to-end/manual smoke hardening for the same-host `codex-native -> t3-server -> codex-native` runtime switch is still pending a runnable host-local T3 instance on this machine
 
 Not started yet:
 
 - the remaining T3 mutating command mapping beyond thread creation, existing-thread turn start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response
-- end-to-end smoke hardening for T3 reconnect and cross-repo continuity
+- the remaining end-to-end smoke matrix beyond the reconnect/project-switch/cross-repo-create/reopen/relaunch flows already exercised on hardware
+- any optional `androdex doctor` / managed-launch helper for discovering or launching an already-installed T3 runtime without changing the default lightweight install path
 
 ## Runtime Capability Matrix
 
@@ -1059,3 +1087,4 @@ Scope note:
 1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
 2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
 3. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
+4. Run the remaining hardware/manual smoke matrix once a local T3 server endpoint is available for the same-host runtime-target switch path.

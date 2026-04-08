@@ -34,7 +34,7 @@ androdex watch [threadId]
 - `androdex stop`
   Stops the macOS bridge service and clears stale in-memory runtime state.
 - `androdex status`
-  Prints launchd status, persisted bridge status, and the stdout/stderr log paths under `~/.androdex`.
+  Prints launchd status, persisted bridge status, runtime-target diagnostics, and the stdout/stderr log paths under `~/.androdex`.
 - `androdex run`
   Runs the bridge in the foreground.
 - `androdex run-service`
@@ -74,6 +74,8 @@ Useful variables:
 - `ANDRODEX_RELAY`: set the relay URL explicitly and override any packaged default
 - `ANDRODEX_DEFAULT_RELAY_URL`: override the built-in default relay URL when no explicit override is present
 - `ANDRODEX_CODEX_ENDPOINT`: connect to an existing Codex WebSocket instead of spawning a local runtime
+- `ANDRODEX_RUNTIME_TARGET`: select `codex-native` (default) or `t3-server`
+- `ANDRODEX_T3_ENDPOINT`: attach to an already running host-local T3 websocket when `ANDRODEX_RUNTIME_TARGET=t3-server`
 - `ANDRODEX_REFRESH_ENABLED`: enable or disable desktop refresh explicitly
 - `ANDRODEX_REFRESH_DEBOUNCE_MS`: adjust refresh debounce timing
 - `ANDRODEX_REFRESH_ROUTE_TO_THREAD`: opt into reopening the concrete `codex://threads/<id>` route during auto refresh
@@ -101,6 +103,31 @@ ANDRODEX_RELAY=wss://relay.example.com/relay androdex up
 ```
 
 If you change relay URLs after pairing, run `androdex reset-pairing` and pair again with `androdex up` so Android gets a fresh payload for the new relay session.
+
+## T3 Companion Mode
+
+Androdex treats T3 as an optional host-local runtime, not as a bundled requirement for every install.
+
+The intended v1 flow is:
+
+1. run T3 locally on your Mac
+2. point Androdex at that host-local websocket
+3. pair the Android app to the normal Androdex bridge
+
+Example:
+
+```sh
+ANDRODEX_RUNTIME_TARGET=t3-server \
+ANDRODEX_T3_ENDPOINT=ws://127.0.0.1:3773/ws \
+androdex up
+```
+
+Important notes:
+
+- v1 only supports attach-first T3 companion mode; the bridge does not bundle or auto-install T3 by default
+- the T3 endpoint should stay loopback-only (`127.0.0.1`, `localhost`, or `::1`)
+- `androdex status` will tell you whether the bridge sees a valid T3 endpoint configuration and why attach is blocked if it is not
+- if you switch back to the default host path, unset `ANDRODEX_RUNTIME_TARGET` or set it back to `codex-native`
 
 ## Source builds
 

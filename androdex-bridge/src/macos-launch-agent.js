@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
+const { inspectT3Availability } = require("./runtime/t3-availability");
 const { printQR } = require("./pairing/qr");
 const {
   hasTrustedPhones,
@@ -175,17 +176,26 @@ function getMacOSBridgeServiceStatus({
   const duplicateBridgeProcesses = listDuplicateBridgeProcesses({ execFileSyncImpl, launchdPid: launchd.pid });
   const deviceState = runCatchingLoadBridgeDeviceState(loadBridgeDeviceStateImpl);
   const daemonConfig = readDaemonConfig({ env, fsImpl });
+  const bridgeStatus = readBridgeStatus({ env, fsImpl });
+  const runtimeConfig = buildRuntimeConfigSnapshot({ daemonConfig, env });
+  const t3Availability = inspectT3Availability({
+    runtimeTarget: runtimeConfig.runtimeTarget,
+    runtimeEndpoint: runtimeConfig.runtimeEndpoint,
+    runtimeAttachFailure: bridgeStatus?.runtimeAttachFailure,
+  });
   return {
     label: SERVICE_LABEL,
     platform: "darwin",
     installed: fsImpl.existsSync(resolveLaunchAgentPlistPath({ env })),
     launchdLoaded: launchd.loaded,
     launchdPid: launchd.pid,
-    bridgeStatus: readBridgeStatus({ env, fsImpl }),
+    bridgeStatus,
     pairingSession,
     pairingFreshness,
     hasTrustedPhone: hasTrustedPhones(deviceState),
     refreshEnabled: Boolean(daemonConfig?.refreshEnabled),
+    runtimeConfig,
+    t3Availability,
     duplicateBridgeProcesses,
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
@@ -207,6 +217,26 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[androdex] Connection: ${connectionStatus}`);
   console.log(`[androdex] Runtime target: ${runtimeTarget}`);
   console.log(`[androdex] Backend provider: ${backendProvider}`);
+  if (status.runtimeConfig?.runtimeEndpoint) {
+    console.log(`[androdex] Runtime endpoint: ${status.runtimeConfig.runtimeEndpoint}`);
+  }
+  if (status.t3Availability?.selected) {
+    console.log(`[androdex] T3 attach: ${status.t3Availability.summary}`);
+    if (status.t3Availability.endpoint) {
+      console.log(
+        `[androdex] T3 endpoint host: ${status.t3Availability.endpointHost || "unknown"}:${status.t3Availability.endpointPort || "unknown"}`
+      );
+      console.log(`[androdex] T3 endpoint path: ${status.t3Availability.endpointPath || "/"}`);
+    }
+    if (status.t3Availability.detail) {
+      console.log(`[androdex] T3 note: ${status.t3Availability.detail}`);
+    }
+    if (status.t3Availability.runtimeAttachFailure) {
+      console.log(`[androdex] T3 attach failure: ${status.t3Availability.runtimeAttachFailure}`);
+    }
+  } else {
+    console.log(`[androdex] T3 attach: ${status.t3Availability?.summary || "T3 is optional and not selected."}`);
+  }
   console.log(`[androdex] Trusted phone: ${status.hasTrustedPhone ? "yes" : "no"}`);
   console.log(`[androdex] Desktop refresh: ${status.refreshEnabled ? "enabled" : "disabled"}`);
   console.log(`[androdex] Pairing payload: ${pairingCreatedAt} (${status.pairingFreshness})`);
@@ -218,6 +248,28 @@ function printMacOSBridgeServiceStatus(options = {}) {
   }
   console.log(`[androdex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[androdex] Stderr log: ${status.stderrLogPath}`);
+}
+
+function buildRuntimeConfigSnapshot({
+  daemonConfig,
+  env = process.env,
+} = {}) {
+  const fallbackConfig = readBridgeConfig({ env });
+  const daemonRuntimeTarget = normalizeNonEmptyString(daemonConfig?.runtimeTarget);
+  const daemonRuntimeEndpoint = normalizeNonEmptyString(daemonConfig?.runtimeEndpoint);
+  const fallbackRuntimeTarget = normalizeNonEmptyString(fallbackConfig?.runtimeTarget) || "codex-native";
+  const fallbackRuntimeEndpoint = normalizeNonEmptyString(fallbackConfig?.runtimeEndpoint);
+  const useDaemonConfig = Boolean(daemonRuntimeTarget || daemonRuntimeEndpoint);
+  const runtimeTarget = useDaemonConfig
+    ? (daemonRuntimeTarget || "codex-native")
+    : fallbackRuntimeTarget;
+  const runtimeEndpoint = useDaemonConfig
+    ? daemonRuntimeEndpoint
+    : fallbackRuntimeEndpoint;
+  return {
+    runtimeTarget,
+    runtimeEndpoint,
+  };
 }
 
 function printMacOSBridgePairingQr({ pairingSession = null, env = process.env, fsImpl = fs } = {}) {

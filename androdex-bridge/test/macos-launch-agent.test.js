@@ -116,10 +116,19 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
       sessionId: "session-2",
       expiresAt: Date.now() + 60_000,
     });
-    writeBridgeStatus({ state: "running", connectionStatus: "connected", pid: 55 });
+    writeBridgeStatus({
+      state: "running",
+      connectionStatus: "connected",
+      pid: 55,
+      runtimeTarget: "t3-server",
+    });
     fs.writeFileSync(
       path.join(rootDir, "daemon-config.json"),
-      JSON.stringify({ refreshEnabled: true }, null, 2)
+      JSON.stringify({
+        refreshEnabled: true,
+        runtimeTarget: "t3-server",
+        runtimeEndpoint: "ws://127.0.0.1:3773/ws",
+      }, null, 2)
     );
 
     const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
@@ -149,6 +158,10 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     assert.equal(status.pairingSession?.pairingPayload?.sessionId, "session-2");
     assert.equal(status.pairingFreshness, "fresh");
     assert.equal(status.refreshEnabled, true);
+    assert.equal(status.runtimeConfig.runtimeTarget, "t3-server");
+    assert.equal(status.runtimeConfig.runtimeEndpoint, "ws://127.0.0.1:3773/ws");
+    assert.equal(status.t3Availability.reasonCode, "attach-ready");
+    assert.equal(status.t3Availability.endpointHost, "127.0.0.1");
   });
 });
 
@@ -194,6 +207,91 @@ test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicat
     assert.equal(status.refreshEnabled, false);
     assert.equal(status.duplicateBridgeProcesses.length, 1);
     assert.equal(status.duplicateBridgeProcesses[0].pid, 77);
+  });
+});
+
+test("getMacOSBridgeServiceStatus explains missing T3 endpoint configuration", () => {
+  withTempDaemonEnv(({ rootDir }) => {
+    writeBridgeStatus({
+      state: "error",
+      connectionStatus: "error",
+      pid: 99,
+      runtimeTarget: "t3-server",
+      runtimeAttachFailure: "missing T3 websocket endpoint",
+    });
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({
+        refreshEnabled: false,
+        runtimeTarget: "t3-server",
+      }, null, 2)
+    );
+
+    const status = getMacOSBridgeServiceStatus({
+      platform: "darwin",
+      env: { HOME: rootDir, ANDRODEX_DEVICE_STATE_DIR: rootDir },
+      loadBridgeDeviceStateImpl() {
+        return { trustedPhones: {} };
+      },
+      execFileSyncImpl(command) {
+        if (command === "launchctl") {
+          return "pid = 99";
+        }
+        if (command === "pgrep") {
+          return "";
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    });
+
+    assert.equal(status.runtimeConfig.runtimeTarget, "t3-server");
+    assert.equal(status.runtimeConfig.runtimeEndpoint, "");
+    assert.equal(status.t3Availability.reasonCode, "missing-endpoint");
+    assert.equal(status.t3Availability.runtimeAttachFailure, "missing T3 websocket endpoint");
+  });
+});
+
+test("getMacOSBridgeServiceStatus prefers a coherent persisted runtime config over shell env overrides", () => {
+  withTempDaemonEnv(({ rootDir }) => {
+    writeBridgeStatus({
+      state: "running",
+      connectionStatus: "connected",
+      pid: 77,
+      runtimeTarget: "codex-native",
+    });
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({
+        refreshEnabled: false,
+        runtimeTarget: "codex-native",
+      }, null, 2)
+    );
+
+    const status = getMacOSBridgeServiceStatus({
+      platform: "darwin",
+      env: {
+        HOME: rootDir,
+        ANDRODEX_DEVICE_STATE_DIR: rootDir,
+        ANDRODEX_RUNTIME_TARGET: "t3-server",
+        ANDRODEX_T3_ENDPOINT: "ws://127.0.0.1:3773/ws",
+      },
+      loadBridgeDeviceStateImpl() {
+        return { trustedPhones: {} };
+      },
+      execFileSyncImpl(command) {
+        if (command === "launchctl") {
+          return "pid = 77";
+        }
+        if (command === "pgrep") {
+          return "";
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    });
+
+    assert.equal(status.runtimeConfig.runtimeTarget, "codex-native");
+    assert.equal(status.runtimeConfig.runtimeEndpoint, "");
+    assert.equal(status.t3Availability.selected, false);
   });
 });
 
