@@ -3211,6 +3211,261 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun runtimeConfigLoaded_runtimeTargetRoundTripRestoresOriginalScopeWithoutBleed() = runTest {
+        val codexRuntimeMetadata = HostRuntimeMetadata(
+            runtimeTarget = "codex-native",
+            runtimeTargetDisplayName = "Codex Native",
+            backendProvider = "codex-native",
+            backendProviderDisplayName = "Codex Native",
+        )
+        val t3RuntimeMetadata = HostRuntimeMetadata(
+            runtimeTarget = "t3-server",
+            runtimeTargetDisplayName = "T3 Server",
+            backendProvider = "t3-server",
+            backendProviderDisplayName = "T3 Server",
+        )
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-1::codex-native"
+            persistedThreadTimelinesByScope = mapOf(
+                "host-1::codex-native" to mapOf(
+                    "thread-codex" to listOf(
+                        ConversationMessage(
+                            id = "codex-message",
+                            threadId = "thread-codex",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "Codex scope message",
+                            createdAtEpochMs = 1_000L,
+                            turnId = "turn-codex",
+                            itemId = "item-codex",
+                        )
+                    )
+                ),
+                "host-1::t3-server" to mapOf(
+                    "thread-t3" to listOf(
+                        ConversationMessage(
+                            id = "t3-message",
+                            threadId = "thread-t3",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "T3 scope message",
+                            createdAtEpochMs = 2_000L,
+                            turnId = "turn-t3",
+                            itemId = "item-t3",
+                        )
+                    )
+                ),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-codex", "Codex thread", null, "/workspace/codex", 1_000L, 1_500L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "selected-codex",
+                        threadId = "thread-codex",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Selected codex thread",
+                        createdAtEpochMs = 1_500L,
+                        turnId = "turn-codex",
+                        itemId = "item-selected-codex",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-codex",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = listOf(
+                    ModelOption(
+                        id = "gpt-5.4",
+                        model = "gpt-5.4",
+                        displayName = "GPT-5.4",
+                        description = "Primary",
+                        isDefault = true,
+                        supportedReasoningEfforts = emptyList(),
+                        defaultReasoningEffort = null,
+                    )
+                ),
+                selectedModelId = "gpt-5.4",
+                selectedReasoningEffort = "high",
+                selectedAccessMode = AccessMode.FULL_ACCESS,
+                selectedServiceTier = ServiceTier.FAST,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = mapOf(
+                    "thread-codex" to ThreadRuntimeOverride(
+                        reasoningEffort = "high",
+                        serviceTierRawValue = "fast",
+                        overridesReasoning = true,
+                        overridesServiceTier = true,
+                    )
+                ),
+                runtimeMetadata = codexRuntimeMetadata,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-codex", "Codex thread", null, "/workspace/codex", 1_000L, 1_500L))
+            )
+        )
+        service.openThread("thread-codex")
+        advanceUntilIdle()
+
+        repository.currentThreadTimelineScopeKeyValue = "host-1::t3-server"
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = t3RuntimeMetadata,
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("T3 scope message"), service.state.value.timelineByThread["thread-t3"].orEmpty().map { it.text })
+        assertNull(service.state.value.selectedThreadId)
+
+        repository.currentThreadTimelineScopeKeyValue = "host-1::codex-native"
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = listOf(
+                    ModelOption(
+                        id = "gpt-5.4",
+                        model = "gpt-5.4",
+                        displayName = "GPT-5.4",
+                        description = "Primary",
+                        isDefault = true,
+                        supportedReasoningEfforts = emptyList(),
+                        defaultReasoningEffort = null,
+                    )
+                ),
+                selectedModelId = "gpt-5.4",
+                selectedReasoningEffort = "high",
+                selectedAccessMode = AccessMode.FULL_ACCESS,
+                selectedServiceTier = ServiceTier.FAST,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = setOf(CollaborationModeKind.PLAN),
+                threadRuntimeOverridesByThread = mapOf(
+                    "thread-codex" to ThreadRuntimeOverride(
+                        reasoningEffort = "high",
+                        serviceTierRawValue = "fast",
+                        overridesReasoning = true,
+                        overridesServiceTier = true,
+                    )
+                ),
+                runtimeMetadata = codexRuntimeMetadata,
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("codex-native", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertNull(service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Codex scope message"),
+            service.state.value.timelineByThread["thread-codex"].orEmpty().map { it.text },
+        )
+        assertTrue(service.state.value.timelineByThread["thread-t3"].isNullOrEmpty())
+        assertEquals("gpt-5.4", service.state.value.selectedModelId)
+        assertEquals("high", service.state.value.selectedReasoningEffort)
+        assertEquals(AccessMode.FULL_ACCESS, service.state.value.selectedAccessMode)
+        assertEquals(ServiceTier.FAST, service.state.value.selectedServiceTier)
+        assertEquals(
+            ThreadRuntimeOverride(
+                reasoningEffort = "high",
+                serviceTierRawValue = "fast",
+                overridesReasoning = true,
+                overridesServiceTier = true,
+            ),
+            service.state.value.threadRuntimeOverridesByThread["thread-codex"],
+        )
+    }
+
+    @Test
+    fun connectionUpdate_runtimeTargetChangeClearsPendingNotificationOpenFromPreviousTarget() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadError = IllegalStateException("thread not found")
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "codex-native",
+                    runtimeTargetDisplayName = "Codex Native",
+                    backendProvider = "codex-native",
+                    backendProviderDisplayName = "Codex Native",
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-old", "turn-old")
+        advanceUntilIdle()
+
+        assertEquals("thread-old", service.state.value.pendingNotificationOpenThreadId)
+        assertEquals("turn-old", service.state.value.pendingNotificationOpenTurnId)
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected to T3 target",
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                    backendProvider = "t3-server",
+                    backendProviderDisplayName = "T3 Server",
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertNull(service.state.value.pendingNotificationOpenThreadId)
+        assertNull(service.state.value.pendingNotificationOpenTurnId)
+        assertNull(service.state.value.selectedThreadId)
+        assertNull(service.state.value.missingNotificationThreadPrompt)
+    }
+
+    @Test
     fun openThread_reloadsHydratedRunningThreadToCatchUp() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(

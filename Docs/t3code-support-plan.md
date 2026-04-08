@@ -971,6 +971,7 @@ Completed so far:
 - bridge and Android runtime-target metadata plumbing
 - runtime-target-safe persistence for timeline caches and thread runtime overrides
 - runtime-target switch invalidation for selected thread, pending turn state, and cached thread data
+- Android service coverage now explicitly proves the same-host `codex-native -> t3-server -> codex-native` runtime-target round trip restores only the active scope's persisted timelines and runtime defaults, and that stale pending notification-open targets are cleared during target handoff instead of reopening under the wrong runtime
 - explicit T3 attach suitability checks with loopback-only endpoint enforcement
 - readiness-gated T3 workspace activation so incompatible T3 instances never appear active
 - initial read-only T3 snapshot bootstrap via `server.getConfig` plus `orchestration.getSnapshot`
