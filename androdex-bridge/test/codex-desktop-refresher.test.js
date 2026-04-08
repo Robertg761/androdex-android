@@ -50,7 +50,20 @@ test("readBridgeConfig resolves the T3 endpoint into the generic runtime endpoin
   assert.equal(config.runtimeTarget, "t3-server");
   assert.equal(config.runtimeProvider, "t3code");
   assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:9090");
+  assert.equal(config.runtimeEndpointSource, "explicit");
   assert.equal(config.codexEndpoint, "");
+});
+
+test("readBridgeConfig defaults T3 companion mode to the standard loopback endpoint", () => {
+  const config = readBridgeConfig({
+    env: {
+      ANDRODEX_RUNTIME_TARGET: "t3-server",
+    },
+  });
+
+  assert.equal(config.runtimeTarget, "t3-server");
+  assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:3773/ws");
+  assert.equal(config.runtimeEndpointSource, "default-loopback");
 });
 
 test("macOS refresh AppleScript supports preserve-context relaunches without Accessibility automation", () => {

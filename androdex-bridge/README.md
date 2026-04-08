@@ -114,10 +114,20 @@ Androdex treats T3 as an optional host-local runtime, not as a bundled requireme
 The intended v1 flow is:
 
 1. run T3 locally on your Mac
-2. point Androdex at that host-local websocket
+2. let Androdex attach to the standard local T3 websocket, or override it if you use a custom endpoint
 3. pair the Android app to the normal Androdex bridge
 
 Example:
+
+```sh
+ANDRODEX_RUNTIME_TARGET=t3-server androdex up
+```
+
+That uses the standard local T3 desktop endpoint:
+
+`ws://127.0.0.1:3773/ws`
+
+If your T3 runtime listens somewhere else, override it explicitly:
 
 ```sh
 ANDRODEX_RUNTIME_TARGET=t3-server \
@@ -128,9 +138,10 @@ androdex up
 Important notes:
 
 - v1 only supports attach-first T3 companion mode; the bridge does not bundle or auto-install T3 by default
+- the easiest supported setup is: install the T3 desktop app, open it locally, then run `ANDRODEX_RUNTIME_TARGET=t3-server androdex up`
 - the T3 endpoint should stay loopback-only (`127.0.0.1`, `localhost`, or `::1`)
 - `androdex status` will tell you whether the bridge sees a valid T3 endpoint configuration and why attach is blocked if it is not
-- `androdex doctor` will also try a quick reachability check against the configured T3 loopback endpoint and tell you whether the host bridge still needs to be restarted onto `t3-server`
+- `androdex doctor` will also try a quick reachability check against the local T3 loopback endpoint, detect an installed T3 desktop app or CLI when possible, and tell you whether the host bridge still needs to be restarted onto `t3-server`
 - if you switch back to the default host path, unset `ANDRODEX_RUNTIME_TARGET` or set it back to `codex-native`
 
 ## Source builds

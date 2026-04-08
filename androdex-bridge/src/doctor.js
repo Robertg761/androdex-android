@@ -5,23 +5,24 @@
 // Depends on: net, child_process, ./codex-desktop-refresher, ./macos-launch-agent, ./runtime/t3-availability
 
 const net = require("net");
-const { execFileSync } = require("child_process");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { getMacOSBridgeServiceStatus } = require("./macos-launch-agent");
 const { inspectT3Availability } = require("./runtime/t3-availability");
+const { detectInstalledT3Runtime } = require("./runtime/t3-discovery");
 
 async function getBridgeDoctorReport({
   env = process.env,
   getMacOSBridgeServiceStatusImpl = getMacOSBridgeServiceStatus,
   inspectT3AvailabilityImpl = inspectT3Availability,
   probeTcpEndpointImpl = probeTcpEndpoint,
-  detectCommandImpl = detectCommand,
+  detectInstalledT3RuntimeImpl = detectInstalledT3Runtime,
   timeoutMs = 1_000,
 } = {}) {
   const bridgeConfig = readBridgeConfig({ env });
   const serviceStatus = getMacOSBridgeServiceStatusImpl({ env });
   const runtimeTarget = bridgeConfig.runtimeTarget;
   const runtimeEndpoint = bridgeConfig.runtimeEndpoint;
+  const runtimeEndpointSource = bridgeConfig.runtimeEndpointSource || "explicit";
   const t3Availability = inspectT3AvailabilityImpl({
     runtimeTarget,
     runtimeEndpoint,
@@ -29,23 +30,25 @@ async function getBridgeDoctorReport({
   });
 
   let endpointProbe = null;
-  let bunAvailable = null;
+  let installedRuntime = null;
   const recommendations = [];
 
   if (runtimeTarget === "t3-server") {
+    installedRuntime = detectInstalledT3RuntimeImpl();
     if (t3Availability.reasonCode === "attach-ready") {
       endpointProbe = await probeTcpEndpointImpl({
         host: t3Availability.endpointHost,
         port: t3Availability.endpointPort,
         timeoutMs,
       });
-      bunAvailable = detectCommandImpl("bun");
       if (endpointProbe.reachable) {
         recommendations.push("T3 looks reachable. Restart or run `androdex up` with the same T3 environment to switch the bridge onto that runtime.");
       } else {
         recommendations.push("No T3 listener answered on the configured loopback endpoint. Start T3 locally, then rerun `androdex doctor`.");
-        if (!bunAvailable.available) {
-          recommendations.push("If you are trying to run T3 from source, install Bun first or use a packaged T3 runtime.");
+        if (installedRuntime.desktopAppInstalled) {
+          recommendations.push(`Open ${installedRuntime.desktopAppPath} and wait for T3 to finish starting, then rerun \`androdex doctor\`.`);
+        } else if (!installedRuntime.cliInstalled) {
+          recommendations.push("Install the T3 desktop app or T3 CLI first so Androdex has a host-local runtime to attach to.");
         }
       }
     } else if (t3Availability.reasonCode === "missing-endpoint") {
@@ -62,12 +65,13 @@ async function getBridgeDoctorReport({
   return {
     runtimeTarget,
     runtimeEndpoint,
+    runtimeEndpointSource,
     serviceRuntimeTarget: serviceStatus?.runtimeConfig?.runtimeTarget || serviceStatus?.bridgeStatus?.runtimeTarget || "unknown",
     serviceRuntimeEndpoint: serviceStatus?.runtimeConfig?.runtimeEndpoint || "",
     t3Availability,
     endpointProbe,
     tools: {
-      bun: bunAvailable,
+      t3Runtime: installedRuntime,
     },
     recommendations,
   };
@@ -86,7 +90,10 @@ async function runBridgeDoctor({
   consoleImpl.log(`[androdex] Doctor runtime target: ${report.runtimeTarget}`);
   consoleImpl.log(`[androdex] Service runtime target: ${report.serviceRuntimeTarget}`);
   if (report.runtimeEndpoint) {
-    consoleImpl.log(`[androdex] Configured runtime endpoint: ${report.runtimeEndpoint}`);
+    const label = report.runtimeEndpointSource === "default-loopback"
+      ? "Discovered runtime endpoint"
+      : "Configured runtime endpoint";
+    consoleImpl.log(`[androdex] ${label}: ${report.runtimeEndpoint}`);
   }
 
   if (report.runtimeTarget === "t3-server") {
@@ -99,8 +106,17 @@ async function runBridgeDoctor({
         `[androdex] T3 probe: ${report.endpointProbe.reachable ? "reachable" : `unreachable (${report.endpointProbe.reasonCode})`}`
       );
     }
-    if (report.tools.bun) {
-      consoleImpl.log(`[androdex] Bun: ${report.tools.bun.available ? "found" : "not found"}`);
+    if (report.tools.t3Runtime) {
+      const runtimeBits = [];
+      if (report.tools.t3Runtime.desktopAppInstalled) {
+        runtimeBits.push(`desktop app at ${report.tools.t3Runtime.desktopAppPath}`);
+      }
+      if (report.tools.t3Runtime.cliInstalled) {
+        runtimeBits.push(`CLI at ${report.tools.t3Runtime.cliPath}`);
+      }
+      consoleImpl.log(
+        `[androdex] T3 install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
+      );
     }
   } else {
     consoleImpl.log(`[androdex] T3 config: ${report.t3Availability.summary}`);
@@ -153,32 +169,11 @@ function probeTcpEndpoint({
   });
 }
 
-function detectCommand(command, {
-  execFileSyncImpl = execFileSync,
-} = {}) {
-  try {
-    const output = execFileSyncImpl("which", [command], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return {
-      available: true,
-      path: normalizeNonEmptyString(output),
-    };
-  } catch {
-    return {
-      available: false,
-      path: "",
-    };
-  }
-}
-
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 module.exports = {
-  detectCommand,
   getBridgeDoctorReport,
   probeTcpEndpoint,
   runBridgeDoctor,

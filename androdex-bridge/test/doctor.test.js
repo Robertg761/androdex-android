@@ -19,11 +19,25 @@ test("getBridgeDoctorReport diagnoses missing T3 endpoint configuration", async 
         },
       };
     },
+    detectInstalledT3RuntimeImpl() {
+      return {
+        desktopAppInstalled: false,
+        desktopAppPath: "",
+        cliInstalled: false,
+        cliPath: "",
+      };
+    },
+    probeTcpEndpointImpl: async () => ({
+      reachable: false,
+      reasonCode: "ECONNREFUSED",
+    }),
   });
 
   assert.equal(report.runtimeTarget, "t3-server");
-  assert.equal(report.t3Availability.reasonCode, "missing-endpoint");
-  assert.match(report.recommendations[0], /ANDRODEX_T3_ENDPOINT/);
+  assert.equal(report.runtimeEndpointSource, "default-loopback");
+  assert.equal(report.t3Availability.reasonCode, "attach-ready");
+  assert.equal(report.endpointProbe.reachable, false);
+  assert.match(report.recommendations[0], /No T3 listener answered/);
 });
 
 test("getBridgeDoctorReport probes attach-ready T3 endpoints and suggests restarting onto T3", async () => {
@@ -47,16 +61,18 @@ test("getBridgeDoctorReport probes attach-ready T3 endpoints and suggests restar
       reachable: true,
       reasonCode: "reachable",
     }),
-    detectCommandImpl() {
+    detectInstalledT3RuntimeImpl() {
       return {
-        available: false,
-        path: "",
+        desktopAppInstalled: true,
+        desktopAppPath: "/Applications/T3 Code (Alpha).app",
+        cliInstalled: false,
+        cliPath: "",
       };
     },
   });
 
   assert.equal(report.endpointProbe.reachable, true);
-  assert.equal(report.tools.bun.available, false);
+  assert.equal(report.tools.t3Runtime.desktopAppInstalled, true);
   assert.match(report.recommendations[0], /Restart or run `androdex up`/);
 });
 
@@ -88,16 +104,19 @@ test("runBridgeDoctor prints actionable diagnostics for T3 companion mode", asyn
       reachable: false,
       reasonCode: "ECONNREFUSED",
     }),
-    detectCommandImpl() {
+    detectInstalledT3RuntimeImpl() {
       return {
-        available: false,
-        path: "",
+        desktopAppInstalled: true,
+        desktopAppPath: "/Applications/T3 Code (Alpha).app",
+        cliInstalled: false,
+        cliPath: "",
       };
     },
   });
 
   assert.ok(messages.some((message) => message.includes("Doctor runtime target: t3-server")));
   assert.ok(messages.some((message) => message.includes("T3 probe: unreachable (ECONNREFUSED)")));
-  assert.ok(messages.some((message) => message.includes("Bun: not found")));
-  assert.ok(messages.some((message) => message.includes("Start T3 locally")));
+  assert.ok(messages.some((message) => message.includes("Configured runtime endpoint: ws://127.0.0.1:3773/ws")));
+  assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
+  assert.ok(messages.some((message) => message.includes("Open /Applications/T3 Code (Alpha).app")));
 });

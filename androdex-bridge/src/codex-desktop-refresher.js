@@ -11,6 +11,7 @@ const {
   readRuntimeTargetKind,
   resolveRuntimeTargetConfig,
 } = require("./runtime/target-config");
+const { resolveT3RuntimeEndpoint } = require("./runtime/t3-discovery");
 const DEFAULT_DESKTOP_RUNTIME_TARGET = resolveRuntimeTargetConfig({ kind: "codex-native" });
 const DEFAULT_BUNDLE_ID = DEFAULT_DESKTOP_RUNTIME_TARGET.defaultBundleId;
 const DEFAULT_APP_PATH = DEFAULT_DESKTOP_RUNTIME_TARGET.defaultAppPath;
@@ -606,7 +607,13 @@ class CodexDesktopRefresher {
 function readBridgeConfig({ env = process.env } = {}) {
   const runtimeTarget = readRuntimeTargetKind({ env });
   const runtimeTargetConfig = resolveRuntimeTargetConfig({ kind: runtimeTarget });
-  const runtimeEndpoint = readFirstDefinedEnv(runtimeTargetConfig.endpointEnvVars, "", env);
+  const runtimeEndpointResolution = runtimeTarget === "t3-server"
+    ? resolveT3RuntimeEndpoint({ env })
+    : {
+        endpoint: readFirstDefinedEnv(runtimeTargetConfig.endpointEnvVars, "", env),
+        source: "explicit",
+      };
+  const runtimeEndpoint = runtimeEndpointResolution.endpoint;
   const codexEndpoint = runtimeTarget === "codex-native" ? runtimeEndpoint : "";
   const refreshCommand = readFirstDefinedEnv(["ANDRODEX_REFRESH_COMMAND"], "", env);
   const explicitRefreshEnabled = readOptionalBooleanEnv(["ANDRODEX_REFRESH_ENABLED"], env);
@@ -637,6 +644,7 @@ function readBridgeConfig({ env = process.env } = {}) {
       DEFAULT_DEBOUNCE_MS
     ),
     runtimeEndpoint,
+    runtimeEndpointSource: runtimeEndpointResolution.source,
     codexEndpoint,
     runtimeTarget,
     runtimeProvider: runtimeTargetConfig.legacyProviderKind,
