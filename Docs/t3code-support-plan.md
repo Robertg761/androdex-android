@@ -141,6 +141,7 @@ Packaging and install stance for v1:
 - treat T3 as an attachable host-local runtime first, not as code that must be bundled into the default `androdex` npm package
 - keep the default `androdex` install path lightweight for Codex-native users
 - optimize the T3 path for "I already run T3 Code on this computer and want Android access to it"
+- the intended end state is support for the regular installed T3 Code app/CLI, not a one-off custom T3 build created just for Androdex
 - if install ergonomics need improvement, prefer an optional sidecar/runtime install helper or bridge-managed launch path over making every Androdex install ship T3 by default
 - do not make Androdex's T3 support depend on cloning a second repo manually in the common case; if we need a managed launch story, it should be packaged as an explicit optional runtime artifact
 - do not treat bundling T3 into the bridge package as a requirement for shipping T3 companion support
@@ -170,6 +171,7 @@ Managed-launch note:
 - if we add a managed T3 launch path, it should behave like optional setup assistance layered on top of existing-instance attach
 - a good future shape would be "attach if available, otherwise launch an already-installed optional T3 runtime"
 - a bad future shape would be forcing every Androdex user to install or download T3 components just to keep Codex-native working
+- if T3 needs a new compatibility hook for seamless installed-desktop attach, that hook should be small, explicit, and upstreamable so users still rely on normal T3 releases instead of a private patched build
 
 ### 4. V1 workspace authority
 
