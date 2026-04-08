@@ -615,6 +615,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
     val turnStartBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TURN_START)
     val turnInterruptBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TURN_INTERRUPT)
     val toolInputBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TOOL_INPUT_RESPONSES)
+    val backgroundTerminalCleanupBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.BACKGROUND_TERMINAL_CLEANUP)
     val rollbackBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.CHECKPOINT_ROLLBACK)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
     val planModeSupported = CollaborationModeKind.PLAN in collaborationModes
@@ -622,14 +623,7 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
     val isPlanModeEnabled = planModeSupported && isPlanModeRequested
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
     val reviewSelection = composerReviewSelectionByThread[threadId]
-    val reviewBlockReason = if (
-        reviewSelection != null && hostRuntimeMetadata?.runtimeTarget == "t3-server"
-    ) {
-        "Starting code review from this T3 thread isn't available in Androdex yet."
-    } else {
-        null
-    }
-    val composerCapabilityBlockReason = reviewBlockReason ?: if (isThreadRunning) {
+    val composerCapabilityBlockReason = if (isThreadRunning) {
         turnInterruptBlockReason ?: turnStartBlockReason
     } else {
         turnStartBlockReason
@@ -831,10 +825,12 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
         backgroundTerminals = ThreadActionUiState(
             isEnabled = supportsBackgroundTerminalCleanup
                 && connectionStatus == ConnectionStatus.CONNECTED
+                && backgroundTerminalCleanupBlockReason == null
                 && !maintenanceActionBusy
                 && !isThreadRunning,
             availabilityMessage = when {
                 !supportsBackgroundTerminalCleanup -> "Update the host bridge to enable background terminal cleanup."
+                backgroundTerminalCleanupBlockReason != null -> backgroundTerminalCleanupBlockReason
                 connectionStatus != ConnectionStatus.CONNECTED -> "Reconnect to the host to clean background terminals."
                 isThreadRunning -> "Wait for the current run to finish before cleaning background terminals."
                 maintenanceActionBusy -> "Wait for the current action to finish before cleaning background terminals."

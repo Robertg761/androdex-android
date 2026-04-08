@@ -329,15 +329,12 @@ class AndrodexFeatureStateTest {
 
         val homeState = state.toHomeScreenUiState()
 
-        assertFalse(homeState.createThreadSupported)
+        assertTrue(homeState.createThreadSupported)
+        assertEquals(null, homeState.createThreadBlockedReason)
+        assertTrue(homeState.threadList.createThreadSupported)
+        assertEquals(null, homeState.threadList.createThreadBlockedReason)
         assertEquals(
-            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
-            homeState.createThreadBlockedReason,
-        )
-        assertFalse(homeState.threadList.createThreadSupported)
-        assertEquals(homeState.createThreadBlockedReason, homeState.threadList.createThreadBlockedReason)
-        assertEquals(
-            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
+            "Use the active project to start a chat.",
             homeState.threadList.emptyState?.message,
         )
     }
@@ -804,6 +801,40 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun threadRoute_disablesBackgroundTerminalCleanupWhenThreadCapabilityBlocksIt() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            supportsBackgroundTerminalCleanup = true,
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "/workspace/app",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    threadCapabilities = ThreadCapabilities(
+                        backgroundTerminalCleanup = ThreadCapabilityFlag(
+                            supported = false,
+                            reason = "Clean background terminals from the desktop session.",
+                        ),
+                    ),
+                )
+            ),
+        )
+
+        val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.backgroundTerminals.isEnabled)
+        assertEquals(
+            "Clean background terminals from the desktop session.",
+            route.state.backgroundTerminals.availabilityMessage,
+        )
+    }
+
+    @Test
     fun threadRoute_surfacesPendingStructuredToolInputCards() {
         val state = AndrodexUiState(
             connectionStatus = ConnectionStatus.CONNECTED,
@@ -922,11 +953,8 @@ class AndrodexFeatureStateTest {
 
         val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
 
-        assertFalse(route.state.composer.submitEnabled)
-        assertEquals(
-            "Starting code review from this T3 thread isn't available in Androdex yet.",
-            route.state.composer.availabilityMessage,
-        )
+        assertTrue(route.state.composer.submitEnabled)
+        assertEquals(null, route.state.composer.availabilityMessage)
     }
 
     @Test

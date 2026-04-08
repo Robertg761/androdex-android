@@ -1088,6 +1088,90 @@ function createT3ServerRuntimeAdapter({
       return true;
     }
 
+    if (method === "thread/start") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const params = parsed?.params && typeof parsed.params === "object" ? parsed.params : {};
+          const preferredWorkspacePath = normalizeNonEmptyString(params?.cwd) || null;
+          const project = resolveT3ProjectForThreadStart({
+            snapshot,
+            preferredWorkspacePath,
+          });
+          if (!project) {
+            throw new Error(
+              preferredWorkspacePath
+                ? "This T3 runtime can only start chats in project workspaces it already knows about. Open or resume a thread in this project first."
+                : "T3 thread creation requires an active project workspace."
+            );
+          }
+
+          const createdAt = new Date().toISOString();
+          const threadId = randomUUID();
+          const modelSelection = buildT3ModelSelectionForThreadCreate({
+            snapshot,
+            project,
+            params,
+          });
+          const createWaiter = createAppliedDomainEventWaiter({
+            match(event) {
+              const eventType = normalizeNonEmptyString(event?.type);
+              const eventThreadId = normalizeNonEmptyString(event?.payload?.threadId)
+                || normalizeNonEmptyString(event?.aggregateId);
+              return eventType === "thread.created" && eventThreadId === threadId;
+            },
+            errorMessage: "Timed out waiting for the T3 thread to be created.",
+          });
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.create",
+            commandId: randomUUID(),
+            threadId,
+            projectId: project.id,
+            title: buildT3ThreadCreateTitle({
+              preferredWorkspacePath,
+              project,
+            }),
+            modelSelection,
+            runtimeMode: buildT3RuntimeModeFromThreadStartParams(params),
+            interactionMode: "default",
+            branch: null,
+            worktreePath: preferredWorkspacePath || normalizeNonEmptyString(project?.workspaceRoot) || null,
+            createdAt,
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then(async (dispatchResult) => {
+            let resolvedSnapshot = await refreshSnapshotCache();
+            if (!findT3Thread(resolvedSnapshot, threadId)) {
+              await createWaiter.promise;
+              resolvedSnapshot = await ensureSnapshotCache();
+            }
+            const threadResult = buildT3ThreadReadResult({
+              snapshot: resolvedSnapshot,
+              threadId,
+            });
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "thread_create_dispatched",
+              method,
+              threadId,
+              projectId: normalizeNonEmptyString(project?.id) || null,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              thread: threadResult.thread,
+            });
+          }).finally(() => {
+            createWaiter.cancel();
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to create a T3 thread."
+          );
+        });
+      return true;
+    }
+
     if (method === "thread/resume") {
       void ensureSnapshotCache()
         .then((snapshot) => {
@@ -1323,6 +1407,75 @@ function createT3ServerRuntimeAdapter({
       return true;
     }
 
+    if (method === "review/start") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          if (!threadId) {
+            throw new Error("T3 review start requires a threadId.");
+          }
+
+          const thread = findT3Thread(snapshot, threadId);
+          if (!thread) {
+            throw new Error(`T3 thread not found: ${threadId}`);
+          }
+
+          const threadCapabilities = describeT3ThreadCapabilities({
+            snapshot,
+            thread,
+          });
+          if (!threadCapabilities?.turnStart?.supported) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "review_start_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                threadCapabilities?.companionSupportState
+              ) || null,
+            });
+            emitRpcError(
+              requestId,
+              normalizeNonEmptyString(threadCapabilities?.turnStart?.reason)
+                || "This T3 thread does not support review start from Androdex yet."
+            );
+            return;
+          }
+
+          const command = buildT3ReviewStartCommand({
+            threadId,
+            thread,
+            params: parsed?.params,
+          });
+          return prepareT3ThreadForTurnStart({
+            threadId,
+            thread,
+            params: parsed?.params,
+            transport,
+          }).then(() => transport.request("orchestration.dispatchCommand", command, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          })).then((dispatchResult) => {
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "review_start_dispatched",
+              method,
+              threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              started: true,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to start the T3 review."
+          );
+        });
+      return true;
+    }
+
     if (method === "thread/rollback") {
       void ensureSnapshotCache()
         .then((snapshot) => {
@@ -1416,6 +1569,93 @@ function createT3ServerRuntimeAdapter({
           emitRpcError(
             requestId,
             normalizeNonEmptyString(error?.message) || "Failed to roll back the T3 thread."
+          );
+        });
+      return true;
+    }
+
+    if (method === "thread/backgroundTerminals/clean") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          if (!threadId) {
+            throw new Error("T3 background terminal cleanup requires a threadId.");
+          }
+
+          const thread = findT3Thread(snapshot, threadId);
+          if (!thread) {
+            throw new Error(`T3 thread not found: ${threadId}`);
+          }
+
+          const threadCapabilities = describeT3ThreadCapabilities({
+            snapshot,
+            thread,
+          });
+          if (!threadCapabilities?.companionSupported) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "session_stop_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                threadCapabilities?.companionSupportState
+              ) || null,
+            });
+            emitRpcError(
+              requestId,
+              normalizeNonEmptyString(threadCapabilities?.companionSupportReason)
+                || "This T3 thread does not support background terminal cleanup from Androdex yet."
+            );
+            return;
+          }
+
+          const stopWaiter = createAppliedDomainEventWaiter({
+            match(event) {
+              const eventType = normalizeNonEmptyString(event?.type);
+              const eventThreadId = normalizeNonEmptyString(event?.payload?.threadId)
+                || normalizeNonEmptyString(event?.aggregateId);
+              const sessionStatus = normalizeNonEmptyString(event?.payload?.session?.status).toLowerCase();
+              return eventType === "thread.session-set"
+                && eventThreadId === threadId
+                && sessionStatus === "stopped";
+            },
+            errorMessage: "Timed out waiting for the T3 session stop to finish.",
+          });
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.session.stop",
+            commandId: randomUUID(),
+            threadId,
+            createdAt: new Date().toISOString(),
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then(async (dispatchResult) => {
+            let resolvedSnapshot = await refreshSnapshotCache();
+            if (!doesSnapshotReflectT3SessionStopped({
+              snapshot: resolvedSnapshot,
+              threadId,
+            })) {
+              await stopWaiter.promise;
+              resolvedSnapshot = await ensureSnapshotCache();
+            }
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "session_stop_dispatched",
+              method,
+              threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              stopped: true,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          }).finally(() => {
+            stopWaiter.cancel();
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to clean T3 background terminals."
           );
         });
       return true;
@@ -1741,6 +1981,17 @@ function doesSnapshotReflectT3Rollback({
   return maxCheckpointTurnCount <= Math.max(0, normalizeSequenceNumber(targetTurnCount));
 }
 
+function doesSnapshotReflectT3SessionStopped({
+  snapshot,
+  threadId,
+}) {
+  const thread = findT3Thread(snapshot, threadId);
+  if (!thread) {
+    return false;
+  }
+  return normalizeNonEmptyString(thread?.session?.status).toLowerCase() === "stopped";
+}
+
 function isT3ThreadEligibleForLiveUpdates(snapshot, thread) {
   return describeT3ThreadCapabilities({
     snapshot,
@@ -1834,17 +2085,6 @@ function buildThreadActivityNotifications({
 
   if (kind === "approval.requested" || kind === "approval.resolved") {
     const requestId = normalizeNonEmptyString(payload.requestId);
-    if (kind === "approval.requested") {
-      onApprovalRequested({
-        activity,
-        payload,
-        turnId,
-      });
-    } else if (requestId) {
-      onApprovalCleared({
-        requestId,
-      });
-    }
     const itemId = resolveApprovalActivityItemId({
       activity,
       threadActivityState,
@@ -1860,7 +2100,7 @@ function buildThreadActivityNotifications({
         payload.requestType,
       ]),
     });
-    return dedupeActivityNotifications({
+    const notifications = dedupeActivityNotifications({
       activity,
       notifications: [{
         method: kind === "approval.resolved" ? "item/completed" : "item/updated",
@@ -1873,6 +2113,21 @@ function buildThreadActivityNotifications({
       }],
       threadActivityState,
     });
+    if (notifications.length === 0) {
+      return notifications;
+    }
+    if (kind === "approval.requested") {
+      onApprovalRequested({
+        activity,
+        payload,
+        turnId,
+      });
+    } else if (requestId) {
+      onApprovalCleared({
+        requestId,
+      });
+    }
+    return notifications;
   }
 
   if (kind === "tool.started" || kind === "tool.updated" || kind === "tool.completed") {
@@ -1907,17 +2162,6 @@ function buildThreadActivityNotifications({
 
   if (kind === "user-input.requested" || kind === "user-input.resolved") {
     const requestId = normalizeNonEmptyString(payload.requestId);
-    if (kind === "user-input.requested") {
-      onUserInputRequested({
-        activity,
-        payload,
-        turnId,
-      });
-    } else if (requestId) {
-      onUserInputCleared({
-        requestId,
-      });
-    }
     const itemId = resolveUserInputActivityItemId({
       activity,
       threadActivityState,
@@ -1930,7 +2174,7 @@ function buildThreadActivityNotifications({
       fallbackStatus: kind === "user-input.resolved" ? "completed" : "in_progress",
       detail: normalizeNonEmptyString(payload.detail),
     });
-    return dedupeActivityNotifications({
+    const notifications = dedupeActivityNotifications({
       activity,
       notifications: [{
         method: kind === "user-input.resolved" ? "item/completed" : "item/updated",
@@ -1943,6 +2187,21 @@ function buildThreadActivityNotifications({
       }],
       threadActivityState,
     });
+    if (notifications.length === 0) {
+      return notifications;
+    }
+    if (kind === "user-input.requested") {
+      onUserInputRequested({
+        activity,
+        payload,
+        turnId,
+      });
+    } else if (requestId) {
+      onUserInputCleared({
+        requestId,
+      });
+    }
+    return notifications;
   }
 
   return [];
@@ -2336,6 +2595,151 @@ function buildT3TurnStartCommand({
     interactionMode,
     createdAt: new Date().toISOString(),
   };
+}
+
+function buildT3ReviewStartCommand({
+  threadId,
+  thread,
+  params,
+}) {
+  const reviewPrompt = buildT3ReviewStartPrompt(params);
+  return buildT3TurnStartCommand({
+    threadId,
+    thread,
+    params: {
+      input: [
+        {
+          type: "text",
+          text: reviewPrompt,
+        },
+      ],
+      collaborationMode: params?.collaborationMode,
+      model: params?.model,
+      effort: params?.effort,
+      serviceTier: params?.serviceTier,
+    },
+  });
+}
+
+function buildT3ReviewStartPrompt(params) {
+  const target = params?.target && typeof params.target === "object" ? params.target : {};
+  const targetType = normalizeNonEmptyString(target?.type).toLowerCase();
+  if (targetType === "basebranch" || targetType === "base_branch") {
+    const branch = normalizeNonEmptyString(target?.branch);
+    if (!branch) {
+      throw new Error("T3 review start requires a base branch when reviewing against a branch.");
+    }
+    return `Review the current branch against base branch ${branch}. Focus on bugs, regressions, risky behavior, and missing tests. Return findings first.`;
+  }
+  if (targetType === "uncommittedchanges" || targetType === "uncommitted_changes") {
+    return "Review the current uncommitted changes. Focus on bugs, regressions, risky behavior, and missing tests. Return findings first.";
+  }
+  throw new Error("T3 review start requires a supported review target.");
+}
+
+function resolveT3ProjectForThreadStart({
+  snapshot,
+  preferredWorkspacePath,
+}) {
+  const projects = Array.isArray(snapshot?.projects) ? snapshot.projects : [];
+  const normalizedWorkspacePath = normalizeNonEmptyString(preferredWorkspacePath);
+  if (normalizedWorkspacePath) {
+    const exactProject = projects.find((project) =>
+      normalizeNonEmptyString(project?.workspaceRoot) === normalizedWorkspacePath
+    );
+    if (exactProject) {
+      return exactProject;
+    }
+  }
+
+  const visibleThreads = Array.isArray(snapshot?.threads) ? snapshot.threads : [];
+  if (normalizedWorkspacePath) {
+    const matchingThread = visibleThreads.find((thread) =>
+      normalizeNonEmptyString(thread?.worktreePath) === normalizedWorkspacePath
+        || normalizeNonEmptyString(projects.find((project) =>
+          normalizeNonEmptyString(project?.id) === normalizeNonEmptyString(thread?.projectId)
+        )?.workspaceRoot) === normalizedWorkspacePath
+    );
+    if (matchingThread) {
+      return projects.find((project) =>
+        normalizeNonEmptyString(project?.id) === normalizeNonEmptyString(matchingThread?.projectId)
+      ) || null;
+    }
+    return null;
+  }
+
+  if (projects.length === 1) {
+    return projects[0];
+  }
+  return null;
+}
+
+function buildT3ThreadCreateTitle({
+  preferredWorkspacePath,
+  project,
+}) {
+  const normalizedWorkspacePath = normalizeNonEmptyString(preferredWorkspacePath);
+  if (normalizedWorkspacePath) {
+    const trimmed = normalizedWorkspacePath.replace(/[\\/]+$/, "");
+    const segment = trimmed.split(/[\\/]/).pop();
+    if (segment) {
+      return segment;
+    }
+  }
+  const projectTitle = normalizeNonEmptyString(project?.title);
+  if (projectTitle) {
+    return projectTitle;
+  }
+  return "Conversation";
+}
+
+function buildT3RuntimeModeFromThreadStartParams(params) {
+  const sandboxPolicyType = normalizeNonEmptyString(params?.sandboxPolicy?.type).toLowerCase();
+  if (sandboxPolicyType === "dangerfullaccess") {
+    return "full-access";
+  }
+
+  const legacySandbox = normalizeNonEmptyString(params?.sandbox).toLowerCase();
+  if (legacySandbox === "danger-full-access") {
+    return "full-access";
+  }
+
+  return "approval-required";
+}
+
+function buildT3ModelSelectionForThreadCreate({
+  snapshot,
+  project,
+  params,
+}) {
+  const explicitSelection = buildT3ModelSelectionFromTurnStartParams({
+    params,
+    thread: null,
+  });
+  if (explicitSelection) {
+    return explicitSelection;
+  }
+
+  const projectId = normalizeNonEmptyString(project?.id);
+  const threads = Array.isArray(snapshot?.threads) ? snapshot.threads : [];
+  const projectThread = threads.find((thread) =>
+    normalizeNonEmptyString(thread?.projectId) === projectId
+      && normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase() === "codex"
+      && normalizeNonEmptyString(thread?.modelSelection?.model)
+  );
+  if (projectThread?.modelSelection) {
+    return projectThread.modelSelection;
+  }
+
+  const fallbackThread = threads.find((thread) =>
+    normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase() === "codex"
+      && normalizeNonEmptyString(thread?.modelSelection?.model)
+  );
+  if (fallbackThread?.modelSelection) {
+    return fallbackThread.modelSelection;
+  }
+
+  throw new Error("This T3 runtime could not determine a Codex model for the new thread.");
 }
 
 function prepareT3ThreadForTurnStart({

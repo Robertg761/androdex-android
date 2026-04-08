@@ -732,9 +732,6 @@ class AndrodexService(
     ) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
         requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.TURN_START)
-        if (stateFlow.value.hostRuntimeMetadata?.runtimeTarget == "t3-server") {
-            throw IllegalStateException("Starting code review from this T3 thread isn't available in Androdex yet.")
-        }
         clearThreadOutcome(normalizedThreadId)
         repository.startReview(
             threadId = normalizedThreadId,
@@ -943,6 +940,7 @@ class AndrodexService(
 
     suspend fun cleanBackgroundTerminals(threadId: String) {
         val normalizedThreadId = threadId.trim().takeIf { it.isNotEmpty() } ?: return
+        requireThreadCapabilitySupport(normalizedThreadId, ThreadCapabilityAction.BACKGROUND_TERMINAL_CLEANUP)
         repository.cleanBackgroundTerminals(normalizedThreadId)
         ensureThreadHydrated(
             threadId = normalizedThreadId,

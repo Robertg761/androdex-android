@@ -249,6 +249,7 @@ private fun decodeThreadCapabilitiesSpec(values: Map<String, Any?>): ThreadCapab
         approvalResponses = values.mapOrNull("approvalResponses", "approval_responses")?.let(::decodeThreadCapabilityFlagSpec),
         userInputResponses = values.mapOrNull("userInputResponses", "user_input_responses")?.let(::decodeThreadCapabilityFlagSpec),
         toolInputResponses = values.mapOrNull("toolInputResponses", "tool_input_responses")?.let(::decodeThreadCapabilityFlagSpec),
+        backgroundTerminalCleanup = values.mapOrNull("backgroundTerminalCleanup", "background_terminal_cleanup")?.let(::decodeThreadCapabilityFlagSpec),
         checkpointRollback = values.mapOrNull("checkpointRollback", "checkpoint_rollback")?.let(::decodeThreadCapabilityFlagSpec),
     )
 }

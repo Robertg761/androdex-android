@@ -594,7 +594,7 @@ class AndrodexServiceTest {
     }
 
     @Test
-    fun startReview_rejectsT3ThreadsEvenWhenTurnStartIsSupported() = runTest {
+    fun startReview_allowsT3ThreadsWhenTurnStartIsSupported() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
         advanceUntilIdle()
@@ -637,15 +637,9 @@ class AndrodexServiceTest {
             )
         )
 
-        val failure = runCatching {
-            service.startReview("thread-1", ComposerReviewTarget.UNCOMMITTED_CHANGES)
-        }.exceptionOrNull()
+        service.startReview("thread-1", ComposerReviewTarget.UNCOMMITTED_CHANGES)
 
-        assertEquals(
-            "Starting code review from this T3 thread isn't available in Androdex yet.",
-            failure?.message,
-        )
-        assertTrue(repository.startedTurns.isEmpty())
+        assertEquals(listOf("thread-1:UNCOMMITTED_CHANGES:"), repository.startedTurns)
     }
 
     @Test
@@ -3767,7 +3761,7 @@ class AndrodexServiceTest {
     }
 
     @Test
-    fun createThread_blocksReadOnlyT3RuntimeBeforeStartingThread() = runTest {
+    fun createThread_allowsT3RuntimeWhenProjectCreationIsAvailable() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)
         advanceUntilIdle()
@@ -3794,16 +3788,12 @@ class AndrodexServiceTest {
         advanceUntilIdle()
         assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
 
-        val error = runCatching {
-            service.createThread("/tmp/project-a")
-        }.exceptionOrNull()
+        service.createThread("/tmp/project-a")
+        advanceUntilIdle()
 
-        assertEquals(
-            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
-            error?.message,
-        )
-        assertEquals(emptyList<String>(), repository.startedThreadCwds)
-        assertEquals(emptyList<String>(), repository.activatedWorkspaces)
+        assertEquals(listOf("/tmp/project-a"), repository.startedThreadCwds)
+        assertEquals(listOf("/tmp/project-a"), repository.activatedWorkspaces)
+        assertEquals("thread-created", service.state.value.selectedThreadId)
     }
 
     @Test
@@ -5903,6 +5893,42 @@ class AndrodexServiceTest {
 
         assertEquals(listOf("thread-1"), repository.cleanedBackgroundTerminalThreadIds)
         assertEquals(listOf("thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun cleanBackgroundTerminals_rejectsBlockedThreadCapability() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = null,
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            backgroundTerminalCleanup = ThreadCapabilityFlag(
+                                supported = false,
+                                reason = "Clean background terminals from the desktop session.",
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        val failure = runCatching {
+            service.cleanBackgroundTerminals("thread-1")
+        }.exceptionOrNull()
+
+        assertEquals("Clean background terminals from the desktop session.", failure?.message)
+        assertTrue(repository.cleanedBackgroundTerminalThreadIds.isEmpty())
     }
 
     @Test

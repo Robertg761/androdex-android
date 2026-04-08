@@ -423,13 +423,13 @@ test("T3 adapter emits structured gating logs for rejected read-only actions", a
 
   assert.throws(() => {
     adapter.send(JSON.stringify({
-      id: "req-thread-start",
-      method: "thread/start",
+      id: "req-thread-fork",
+      method: "thread/fork",
       params: {
-        cwd: "/tmp",
+        threadId: "thread-123",
       },
     }));
-  }, /does not support "thread\/start" yet/i);
+  }, /does not support "thread\/fork" yet/i);
 
   assert.deepEqual(
     logEntries.find((entry) =>
@@ -449,7 +449,8 @@ test("T3 adapter emits structured gating logs for rejected read-only actions", a
       replaySequence: 7,
       duplicateSuppressionCount: 0,
       reasonCode: "runtime_method_rejected",
-      method: "thread/start",
+      method: "thread/fork",
+      threadId: "thread-123",
     },
   );
 });
@@ -1802,6 +1803,220 @@ test("T3 adapter projects approval and user-input activity lifecycles into stabl
   assert.equal(userInputCleared?.params?.threadId, "thread-123");
   assert.equal(userInputCompleted?.params?.item.status, "completed");
   assert.equal(userInputCompleted?.params?.item.title, "User input submitted");
+});
+
+test("T3 adapter suppresses duplicate approval and user-input cleared notifications for repeated resolved activities", async () => {
+  let subscriptionRequestId = null;
+  const approvalRequestedEvent = {
+    sequence: 8,
+    eventId: "event-8",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:08.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-approval-1-open",
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-1",
+          requestKind: "command",
+          requestType: "command_approval",
+          detail: "Run git diff --stat",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:08.000Z",
+      },
+    },
+  };
+  const approvalResolvedEvent = {
+    sequence: 9,
+    eventId: "event-9",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:09.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-approval-1-resolved",
+        tone: "approval",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        payload: {
+          requestId: "approval-1",
+          requestKind: "command",
+          requestType: "command_approval",
+          decision: "accept",
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:09.000Z",
+      },
+    },
+  };
+  const duplicateApprovalResolvedEvent = {
+    ...approvalResolvedEvent,
+    sequence: 10,
+    eventId: "event-10",
+  };
+  const userInputRequestedEvent = {
+    sequence: 11,
+    eventId: "event-11",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:11.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-input-1-open",
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "user-input-1",
+          questions: [
+            {
+              id: "deploy_target",
+              question: "Where should we deploy?",
+            },
+          ],
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:11.000Z",
+      },
+    },
+  };
+  const userInputResolvedEvent = {
+    sequence: 12,
+    eventId: "event-12",
+    aggregateKind: "thread",
+    aggregateId: "thread-123",
+    occurredAt: "2026-04-07T12:00:12.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.activity-appended",
+    payload: {
+      threadId: "thread-123",
+      activity: {
+        id: "activity-input-1-resolved",
+        tone: "info",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        payload: {
+          requestId: "user-input-1",
+          answers: {
+            deploy_target: ["preview"],
+          },
+        },
+        turnId: "turn-2",
+        createdAt: "2026-04-07T12:00:12.000Z",
+      },
+    },
+  };
+  const duplicateUserInputResolvedEvent = {
+    ...userInputResolvedEvent,
+    sequence: 13,
+    eventId: "event-13",
+  };
+
+  const WebSocketImpl = createScriptedWebSocket(({ message, socket }) => {
+    if (message.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, {
+          protocolVersion: "2026-04-01",
+          authMode: "bootstrap-token",
+          baseDir: "/tmp/t3-state",
+          rpcMethods: [
+            "server.getConfig",
+            "orchestration.getSnapshot",
+            "orchestration.replayEvents",
+          ],
+          subscriptions: [
+            "subscribeOrchestrationDomainEvents",
+          ],
+        });
+      });
+      return;
+    }
+
+    if (message.tag === "subscribeOrchestrationDomainEvents") {
+      subscriptionRequestId = message.id;
+      return;
+    }
+
+    if (message.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        succeedRpc(socket, message.id, createBaseSnapshot());
+      });
+    }
+  });
+
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: createTestEnv(),
+    WebSocketImpl,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await adapter.whenReady();
+  adapter.send(JSON.stringify({
+    id: "req-thread-resume",
+    method: "thread/resume",
+    params: {
+      threadId: "thread-123",
+    },
+  }));
+  await nextTick();
+
+  const liveSocket = WebSocketImpl.latestInstance;
+  assert.ok(liveSocket);
+  assert.ok(subscriptionRequestId);
+  liveSocket.serverMessage({
+    _tag: "Chunk",
+    requestId: subscriptionRequestId,
+    values: [
+      approvalRequestedEvent,
+      approvalResolvedEvent,
+      duplicateApprovalResolvedEvent,
+      userInputRequestedEvent,
+      userInputResolvedEvent,
+      duplicateUserInputResolvedEvent,
+    ],
+  });
+  await nextTick();
+
+  const approvalClearedNotifications = responses.filter((entry) =>
+    entry.method === "approval/cleared" && entry.params?.requestId === "approval-1"
+  );
+  const userInputClearedNotifications = responses.filter((entry) =>
+    entry.method === "user-input/cleared" && entry.params?.requestId === "user-input-1"
+  );
+
+  assert.equal(approvalClearedNotifications.length, 1);
+  assert.equal(userInputClearedNotifications.length, 1);
 });
 
 test("T3 adapter keeps repeated same-command tool activities distinct within one resumed turn", async () => {

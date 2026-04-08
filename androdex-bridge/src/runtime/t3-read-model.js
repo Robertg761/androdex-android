@@ -939,6 +939,12 @@ function describeT3ThreadCapabilities({
         ? null
         : interruptReason,
     },
+    backgroundTerminalCleanup: {
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported"
+        ? null
+        : interruptReason,
+    },
     checkpointRollback: {
       supported: companionSupportState === "supported" && checkpointTurnCount > 0,
       reason: checkpointRollbackReason,

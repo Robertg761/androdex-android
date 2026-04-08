@@ -6,18 +6,12 @@ enum class ThreadCapabilityAction {
     APPROVAL_RESPONSES,
     USER_INPUT_RESPONSES,
     TOOL_INPUT_RESPONSES,
+    BACKGROUND_TERMINAL_CLEANUP,
     CHECKPOINT_ROLLBACK,
 }
 
 fun HostRuntimeMetadata?.createThreadBlockReason(): String? {
-    val runtimeTarget = this?.runtimeTarget
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?: return null
-    return when (runtimeTarget) {
-        "t3-server" -> "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet."
-        else -> null
-    }
+    return null
 }
 
 fun ThreadSummary.capabilityFlag(action: ThreadCapabilityAction): ThreadCapabilityFlag? {
@@ -28,6 +22,7 @@ fun ThreadSummary.capabilityFlag(action: ThreadCapabilityAction): ThreadCapabili
         ThreadCapabilityAction.APPROVAL_RESPONSES -> capabilities.approvalResponses
         ThreadCapabilityAction.USER_INPUT_RESPONSES -> capabilities.userInputResponses
         ThreadCapabilityAction.TOOL_INPUT_RESPONSES -> capabilities.toolInputResponses
+        ThreadCapabilityAction.BACKGROUND_TERMINAL_CLEANUP -> capabilities.backgroundTerminalCleanup
         ThreadCapabilityAction.CHECKPOINT_ROLLBACK -> capabilities.checkpointRollback
     }
 }
@@ -65,6 +60,7 @@ private fun defaultCapabilityBlockReason(action: ThreadCapabilityAction): String
         ThreadCapabilityAction.APPROVAL_RESPONSES -> "This thread can't send approval responses from Androdex right now."
         ThreadCapabilityAction.USER_INPUT_RESPONSES -> "This thread can't answer user input prompts from Androdex right now."
         ThreadCapabilityAction.TOOL_INPUT_RESPONSES -> "This thread can't submit tool input responses from Androdex right now."
+        ThreadCapabilityAction.BACKGROUND_TERMINAL_CLEANUP -> "This thread can't clean background terminals from Androdex right now."
         ThreadCapabilityAction.CHECKPOINT_ROLLBACK -> "This thread can't roll back checkpoints from Androdex right now."
     }
 }

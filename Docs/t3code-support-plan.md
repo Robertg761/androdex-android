@@ -755,18 +755,20 @@ Status update:
   - replay/idempotency coverage now also explicitly proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
   - `thread/list`, `thread/read`, and `thread/resume` now expose explicit bridge capability metadata for supported, unsupported-provider, unresolved-workspace, and project-root-fallback T3 threads instead of relying on preview text alone
   - when a thread's recorded `worktreePath` no longer resolves locally but its project's `workspaceRoot` still does, the bridge now keeps that thread companion-eligible on the read side using the project root as an explicit fallback instead of collapsing it into the unresolved-workspace bucket
-  - Android now explicitly gates project-level thread creation for `t3-server`, so home/sidebar affordances and `createThread()` no longer rely on a bridge-side `thread/start` rejection to enforce the read-only milestone
+  - Android now explicitly gates project-level thread creation for unresolved or unavailable T3 project groups, so home/sidebar affordances no longer offer dead-end “new chat” actions for project contexts the bridge cannot safely create in
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
-  - `turn/start` is now supported for existing companion-eligible Codex-backed T3 threads: Android’s existing `turn/start` payload is translated into `thread.turn.start`, including text, image attachments, model/effort fast-mode hints, and plan-mode interaction, while thread creation remains blocked
+  - `thread/start` is now supported for `t3-server` when the requested local workspace maps to a known T3 project: the bridge translates Android `thread/start` into `thread.create`, derives a T3 runtime mode from Android access-mode sandbox hints, returns the synthesized thread summary immediately, and Android no longer applies the old blanket runtime-level “new T3 chats unavailable” block
+  - `turn/start` is now supported for existing companion-eligible Codex-backed T3 threads: Android’s existing `turn/start` payload is translated into `thread.turn.start`, including text, image attachments, model/effort fast-mode hints, and plan-mode interaction
   - `turn/interrupt` is now supported for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
   - approval responses are now supported for companion-eligible Codex-backed T3 threads through a bridge-managed compatibility layer: resumed threads surface outstanding/open T3 approvals as synthetic Android approval requests, Android responses are translated into `thread.approval.respond`, and `approval.resolved` now clears the phone overlay by request id
   - user-input responses are now supported for companion-eligible Codex-backed T3 threads through the same bridge-managed compatibility layer: resumed threads surface outstanding/open T3 user-input requests as synthetic Android tool-input prompts, Android responses are translated into `thread.user-input.respond`, `user-input.resolved` now clears the phone overlay by request id, and companion-supported threads advertise both `userInputResponses` and Android-facing `toolInputResponses` as available
   - checkpoint rollback is now supported for companion-eligible Codex-backed T3 threads that already have at least one completed checkpoint: Android’s existing `thread/rollback` flow is translated into `thread.checkpoint.revert`, the bridge waits for the reverted thread state to materialize, and the T3 read model now applies `thread.reverted` by trimming messages, activities, plans, checkpoints, and latest-turn state to the retained checkpoint count
+  - background terminal cleanup is now supported for companion-eligible Codex-backed T3 threads through `thread.session.stop`: the bridge exposes it as `thread/backgroundTerminals/clean`, waits for the synchronized T3 session state to report `stopped`, and Android now gates the action per thread instead of relying on a late bridge rejection
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
   - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
-  - the remaining T3 mutating actions beyond existing-thread turn start, interrupt, rollback, approval response, and tool/user-input response
+  - the remaining T3 mutating actions beyond thread creation, existing-thread turn start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response
 
 Deliverables:
 
@@ -923,7 +925,7 @@ If T3 support causes instability:
 - Do not reuse timeline caches across runtime targets for the same paired host.
 - Do not persist access mode or service-tier settings in global shared keys across runtime targets.
 - Do not assume T3 rollback semantics match current Codex-native rollback semantics.
-- Do not assume T3 has a safe equivalent for fork, compaction, or background terminal cleanup.
+- Do not assume T3 has a safe equivalent for fork or compaction, and do not expose any T3 background-terminal cleanup path unless it is explicitly backed by synchronized `thread.session.stop` semantics.
 - Do not assume T3 project/workspace authority naturally matches the current Androdex workspace browser model.
 - Do not attach to an existing T3 instance until protocol/version/auth/state-root suitability checks pass.
 - Do not assume one T3 server implies one backend provider across all threads.
@@ -988,15 +990,18 @@ Completed so far:
 - Android thread opening now reconciles stale list-side workspace mappings against the authoritative `thread/read` summary, so selecting a T3 thread can still switch the device-visible local project after hydration if the snapshot summary was out of date
 - background Android thread-list refresh now also repairs the selected thread's workspace mapping when the authoritative summary drifts to a different local project, reusing the same safe open-thread reconciliation path instead of leaving the active workspace stale until the next manual reopen
 - notification-open recovery now also repairs stale list-side workspace mappings by reloading under the authoritative `thread/read` project after a corrected workspace switch
-- Android now also gates project-level "new chat" actions off runtime-target metadata, disabling home/sidebar creation affordances for `t3-server` and throwing a clear service-side error before any `thread/start` request is attempted
+- Android now also gates project-level "new chat" actions for unresolved or unavailable T3 project groups so dead-end create actions stay hidden even though supported project workspaces can now use `thread/start`
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
+- replay/idempotency coverage now also proves bridge-managed `approval/cleared` and `user-input/cleared` notifications stay single-emission when the same resolved T3 activity is delivered more than once
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity
 - companion-eligible T3 Codex threads now advertise `turn/interrupt` support in bridge capability metadata, and the bridge dispatches `turn/interrupt` through `orchestration.dispatchCommand` while rejecting obviously stale no-active-run interrupts before they hit the host runtime
 - companion-eligible T3 Codex threads now also advertise approval-response support, resumed threads surface outstanding/open approvals as synthetic Android approval requests, and Android approval decisions are translated back into `thread.approval.respond` with host-resolved clear notifications
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
+- companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
+- Android `thread/start` is now bridged into T3 `thread.create` for known project workspaces, with runtime-mode derivation from Android access-mode hints and immediate synthesized thread summaries on success
 
 Still in progress:
 
@@ -1006,7 +1011,7 @@ Still in progress:
 
 Not started yet:
 
-- the remaining T3 mutating command mapping beyond existing-thread turn start, interrupt, rollback, approval response, and tool/user-input response
+- the remaining T3 mutating command mapping beyond thread creation, existing-thread turn start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Runtime Capability Matrix
@@ -1027,19 +1032,22 @@ Not started yet:
 
 - workspace activation: supported for suitable host-local T3 instances only
 - `thread/list` / `thread/read`: supported through snapshot plus replay synthesis
+- `thread/start`: supported when the requested local workspace maps to a known T3 project
 - `thread/resume`: supported for companion-eligible Codex-backed threads only
 - live turn, assistant, title, plan, task, tool, approval, and user-input activity updates: supported for resumed companion-eligible threads only
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
 - missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
 - send / plan flows: supported for existing companion-eligible Codex-backed threads only
-- review/start flows: not supported yet
-- new thread creation / subagent flows: not supported yet
+- review/start flows: supported for existing companion-eligible Codex-backed threads by translating Android review requests into T3 `thread.turn.start` review prompts
+- new thread creation: supported for known project workspaces only
+- subagent flows: not supported yet
 - interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
 - approval responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic approval requests and `thread.approval.respond`
 - user-input responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic tool-input requests and `thread.user-input.respond`
 - tool-input responses: supported for the same companion-eligible Codex-backed threads, because Android submits those prompts through its existing tool-input response flow
 - rollback: supported for companion-eligible Codex-backed threads when the synchronized T3 thread already has at least one completed checkpoint
-- compaction / background terminal cleanup: not supported yet
+- background terminal cleanup: supported for companion-eligible Codex-backed threads through synchronized `thread.session.stop`
+- compaction: not supported yet
 
 Scope note:
 
@@ -1049,4 +1057,4 @@ Scope note:
 
 1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
 2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
-3. Tackle the next remaining T3 mutating gap after turn start, interrupt, rollback, approval response, and tool/user-input response support.
+3. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.

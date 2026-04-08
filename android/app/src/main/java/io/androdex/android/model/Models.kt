@@ -387,6 +387,7 @@ data class ThreadCapabilities(
     val approvalResponses: ThreadCapabilityFlag? = null,
     val userInputResponses: ThreadCapabilityFlag? = null,
     val toolInputResponses: ThreadCapabilityFlag? = null,
+    val backgroundTerminalCleanup: ThreadCapabilityFlag? = null,
     val checkpointRollback: ThreadCapabilityFlag? = null,
 )
 
