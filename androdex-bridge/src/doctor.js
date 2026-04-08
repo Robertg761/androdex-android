@@ -35,7 +35,7 @@ async function getBridgeDoctorReport({
   const recommendations = [];
 
   if (runtimeTarget === "t3-server") {
-    installedRuntime = detectInstalledT3RuntimeImpl();
+    installedRuntime = detectInstalledT3RuntimeImpl({ env });
     if (t3Availability.reasonCode === "attach-ready") {
       endpointProbe = await probeTcpEndpointImpl({
         host: t3Availability.endpointHost,

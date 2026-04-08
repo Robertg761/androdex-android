@@ -18,7 +18,7 @@ const KNOWN_T3_DESKTOP_APP_PATHS = Object.freeze([
 function resolveT3RuntimeEndpoint({
   env = process.env,
   fsImpl = fs,
-  homeDir = os.homedir(),
+  homeDir = resolveHomeDir({ env }),
   isProcessAliveImpl = isProcessAlive,
 } = {}) {
   const explicitEndpoint = normalizeNonEmptyString(env?.ANDRODEX_T3_ENDPOINT);
@@ -51,12 +51,19 @@ function resolveT3RuntimeEndpoint({
 }
 
 function detectInstalledT3Runtime({
+  env = process.env,
   fsImpl = fs,
   execFileSyncImpl = execFileSync,
+  homeDir = resolveHomeDir({ env }),
+  isProcessAliveImpl = isProcessAlive,
 } = {}) {
   const desktopAppPath = KNOWN_T3_DESKTOP_APP_PATHS.find((candidate) => fsImpl.existsSync(candidate)) || "";
   const cliPath = detectCommandPath("t3", { execFileSyncImpl });
-  const desktopSession = readDesktopT3Session({ fsImpl });
+  const desktopSession = readDesktopT3Session({
+    fsImpl,
+    homeDir,
+    isProcessAliveImpl,
+  });
   return {
     desktopAppInstalled: Boolean(desktopAppPath),
     desktopAppPath,
@@ -68,7 +75,8 @@ function detectInstalledT3Runtime({
 
 function readDesktopT3Session({
   fsImpl = fs,
-  homeDir = os.homedir(),
+  env = process.env,
+  homeDir = resolveHomeDir({ env }),
   isProcessAliveImpl = isProcessAlive,
 } = {}) {
   const runtimeSessionPath = path.join(homeDir, ".t3", "userdata", "runtime-session.json");
@@ -97,6 +105,10 @@ function readDesktopT3Session({
     descriptorStatus: runtimeSession?.problem?.code || (trustedRuntimeSession ? "trusted" : "missing"),
     descriptorDetail: runtimeSession?.problem?.detail || "",
   };
+}
+
+function resolveHomeDir({ env = process.env } = {}) {
+  return normalizeNonEmptyString(env?.HOME) || os.homedir();
 }
 
 function detectCommandPath(command, {
@@ -278,5 +290,6 @@ module.exports = {
   isProcessAlive,
   normalizeLoopbackWebSocketUrl,
   readDesktopT3Session,
+  resolveHomeDir,
   resolveT3RuntimeEndpoint,
 };

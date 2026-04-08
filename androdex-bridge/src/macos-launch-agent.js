@@ -186,7 +186,7 @@ function getMacOSBridgeServiceStatus({
     runtimeAttachFailure: bridgeStatus?.runtimeAttachFailure,
   });
   const t3Runtime = runtimeConfig.runtimeTarget === "t3-server"
-    ? detectInstalledT3RuntimeImpl({ fsImpl, execFileSyncImpl })
+    ? detectInstalledT3RuntimeImpl({ env, fsImpl, execFileSyncImpl })
     : null;
   return {
     label: SERVICE_LABEL,

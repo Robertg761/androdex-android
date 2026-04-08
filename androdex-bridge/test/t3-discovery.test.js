@@ -199,3 +199,32 @@ test("detectInstalledT3Runtime returns desktop session data alongside app discov
   assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
   assert.equal(runtime.desktopSession.authEnabled, true);
 });
+
+test("detectInstalledT3Runtime respects env.HOME when discovering desktop session files", () => {
+  const runtime = detectInstalledT3Runtime({
+    env: {
+      HOME: "/tmp/custom-home",
+    },
+    fsImpl: {
+      existsSync() {
+        return false;
+      },
+      readFileSync(filePath) {
+        if (filePath === "/tmp/custom-home/.t3/userdata/logs/desktop-main.log") {
+          return "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:61234";
+        }
+        if (filePath === "/tmp/custom-home/.t3/userdata/logs/server.log") {
+          return 'timestamp=... message="{\\"authEnabled\\":true}"';
+        }
+        throw new Error(`unexpected file ${filePath}`);
+      },
+    },
+    execFileSyncImpl() {
+      throw new Error("missing command");
+    },
+  });
+
+  assert.equal(runtime.desktopSession.runtimeSessionPath, "/tmp/custom-home/.t3/userdata/runtime-session.json");
+  assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:61234");
+  assert.equal(runtime.desktopSession.authEnabled, true);
+});
