@@ -594,6 +594,61 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun startReview_rejectsT3ThreadsEvenWhenTurnStartIsSupported() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(runtimeTarget = "t3-server"),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary(
+                        id = "thread-1",
+                        title = "Conversation",
+                        preview = null,
+                        cwd = "/workspace/app",
+                        createdAtEpochMs = null,
+                        updatedAtEpochMs = null,
+                        threadCapabilities = ThreadCapabilities(
+                            turnStart = ThreadCapabilityFlag(
+                                supported = true,
+                                reason = null,
+                            ),
+                        ),
+                    )
+                )
+            )
+        )
+
+        val failure = runCatching {
+            service.startReview("thread-1", ComposerReviewTarget.UNCOMMITTED_CHANGES)
+        }.exceptionOrNull()
+
+        assertEquals(
+            "Starting code review from this T3 thread isn't available in Androdex yet.",
+            failure?.message,
+        )
+        assertTrue(repository.startedTurns.isEmpty())
+    }
+
+    @Test
     fun assistantEvents_mergeByItemAndTrackThreadTurnState() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)

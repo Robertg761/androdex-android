@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   applyT3EventsToSnapshot,
   buildT3ThreadListResult,
+  buildT3ThreadRollbackResult,
   buildT3ThreadReadResult,
 } = require("../src/runtime/t3-read-model");
 
@@ -67,7 +68,17 @@ const snapshot = {
       ],
       proposedPlans: [],
       activities: [],
-      checkpoints: [],
+      checkpoints: [
+        {
+          turnId: "turn-2",
+          checkpointTurnCount: 1,
+          checkpointRef: "refs/t3/checkpoints/thread-codex/turn/1",
+          status: "ready",
+          files: [],
+          assistantMessageId: "msg-2",
+          completedAt: "2026-04-07T11:11:00.000Z",
+        },
+      ],
       session: null,
     },
     {
@@ -109,15 +120,17 @@ test("buildT3ThreadListResult maps snapshot threads into the Android summary con
   assert.equal(result.data[0].model, "gpt-5.4");
   assert.equal(result.data[0].threadCapabilities.companionSupportState, "supported");
   assert.equal(result.data[0].threadCapabilities.liveUpdates.supported, true);
-  assert.equal(result.data[0].threadCapabilities.turnStart.supported, false);
+  assert.equal(result.data[0].threadCapabilities.turnStart.supported, true);
   assert.equal(result.data[0].threadCapabilities.turnInterrupt.supported, true);
   assert.equal(result.data[0].threadCapabilities.approvalResponses.supported, true);
   assert.equal(result.data[0].threadCapabilities.userInputResponses.supported, true);
   assert.equal(result.data[0].threadCapabilities.toolInputResponses.supported, true);
+  assert.equal(result.data[0].threadCapabilities.checkpointRollback.supported, true);
   assert.equal(result.data[0].backendProvider, "codex");
   assert.match(result.data[1].preview, /unsupported t3 provider/i);
   assert.equal(result.data[1].threadCapabilities.companionSupportState, "unsupported_provider");
   assert.equal(result.data[1].threadCapabilities.liveUpdates.supported, false);
+  assert.equal(result.data[1].threadCapabilities.turnStart.supported, false);
   assert.equal(result.data[1].threadCapabilities.turnInterrupt.supported, false);
   assert.equal(result.data[1].threadCapabilities.approvalResponses.supported, false);
   assert.equal(result.data[1].threadCapabilities.userInputResponses.supported, false);
@@ -151,6 +164,107 @@ test("buildT3ThreadReadResult synthesizes turns/items that Android can decode", 
   assert.equal(result.thread.turns[0].status, "completed");
   assert.equal(result.thread.turns[0].items[0].type, "user_message");
   assert.equal(result.thread.turns[0].items[1].type, "assistant_message");
+});
+
+test("buildT3ThreadRollbackResult trims the thread to the retained checkpoint count", () => {
+  const rollbackSnapshot = {
+    ...snapshot,
+    threads: [
+      {
+        ...snapshot.threads[0],
+        latestTurn: {
+          turnId: "turn-3",
+          state: "completed",
+          requestedAt: "2026-04-07T11:12:00.000Z",
+          startedAt: "2026-04-07T11:12:05.000Z",
+          completedAt: "2026-04-07T11:13:00.000Z",
+          assistantMessageId: "msg-4",
+        },
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Turn one",
+            turnId: "turn-2",
+            streaming: false,
+            createdAt: "2026-04-07T11:10:00.000Z",
+            updatedAt: "2026-04-07T11:10:00.000Z",
+          },
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "Done one",
+            turnId: "turn-2",
+            streaming: false,
+            createdAt: "2026-04-07T11:10:05.000Z",
+            updatedAt: "2026-04-07T11:11:00.000Z",
+          },
+          {
+            id: "msg-3",
+            role: "user",
+            text: "Turn two",
+            turnId: "turn-3",
+            streaming: false,
+            createdAt: "2026-04-07T11:12:00.000Z",
+            updatedAt: "2026-04-07T11:12:00.000Z",
+          },
+          {
+            id: "msg-4",
+            role: "assistant",
+            text: "Done two",
+            turnId: "turn-3",
+            streaming: false,
+            createdAt: "2026-04-07T11:12:05.000Z",
+            updatedAt: "2026-04-07T11:13:00.000Z",
+          },
+        ],
+        proposedPlans: [
+          { id: "plan-1", turnId: "turn-2" },
+          { id: "plan-2", turnId: "turn-3" },
+        ],
+        activities: [
+          { id: "activity-1", turnId: "turn-2", createdAt: "2026-04-07T11:10:06.000Z" },
+          { id: "activity-2", turnId: "turn-3", createdAt: "2026-04-07T11:12:06.000Z" },
+        ],
+        checkpoints: [
+          {
+            turnId: "turn-2",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/thread-codex/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "msg-2",
+            completedAt: "2026-04-07T11:11:00.000Z",
+          },
+          {
+            turnId: "turn-3",
+            checkpointTurnCount: 2,
+            checkpointRef: "refs/t3/checkpoints/thread-codex/turn/2",
+            status: "ready",
+            files: [],
+            assistantMessageId: "msg-4",
+            completedAt: "2026-04-07T11:13:00.000Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = buildT3ThreadRollbackResult({
+    snapshot: rollbackSnapshot,
+    threadId: "thread-codex",
+    numTurns: 1,
+    occurredAt: "2026-04-07T11:15:00.000Z",
+  });
+
+  assert.equal(result.currentTurnCount, 2);
+  assert.equal(result.targetTurnCount, 1);
+  assert.equal(result.result.thread.turns.length, 1);
+  assert.equal(result.result.thread.turns[0].id, "turn-2");
+  assert.deepEqual(
+    result.result.thread.turns[0].items.map((item) => item.id),
+    ["msg-1", "msg-2"]
+  );
 });
 
 test("buildT3ThreadReadResult exposes explicit capability metadata for orphaned supported threads", () => {
@@ -281,4 +395,109 @@ test("applyT3EventsToSnapshot infers the latest turn from messages when session-
 
   assert.equal(result.snapshot.threads[0].latestTurn.turnId, "turn-2");
   assert.equal(result.snapshot.threads[0].latestTurn.state, "completed");
+});
+
+test("applyT3EventsToSnapshot trims reverted thread state to the retained checkpoint count", () => {
+  const revertableSnapshot = {
+    ...snapshot,
+    threads: [
+      {
+        ...snapshot.threads[0],
+        latestTurn: {
+          turnId: "turn-3",
+          state: "completed",
+          requestedAt: "2026-04-07T11:12:00.000Z",
+          startedAt: "2026-04-07T11:12:05.000Z",
+          completedAt: "2026-04-07T11:13:00.000Z",
+          assistantMessageId: "msg-4",
+        },
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Turn one",
+            turnId: "turn-2",
+            streaming: false,
+            createdAt: "2026-04-07T11:10:00.000Z",
+            updatedAt: "2026-04-07T11:10:00.000Z",
+          },
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "Done one",
+            turnId: "turn-2",
+            streaming: false,
+            createdAt: "2026-04-07T11:10:05.000Z",
+            updatedAt: "2026-04-07T11:11:00.000Z",
+          },
+          {
+            id: "msg-3",
+            role: "user",
+            text: "Turn two",
+            turnId: "turn-3",
+            streaming: false,
+            createdAt: "2026-04-07T11:12:00.000Z",
+            updatedAt: "2026-04-07T11:12:00.000Z",
+          },
+        ],
+        proposedPlans: [
+          { id: "plan-1", turnId: "turn-2" },
+          { id: "plan-2", turnId: "turn-3" },
+        ],
+        activities: [
+          { id: "activity-1", turnId: "turn-2", createdAt: "2026-04-07T11:10:06.000Z" },
+          { id: "activity-2", turnId: "turn-3", createdAt: "2026-04-07T11:12:06.000Z" },
+        ],
+        checkpoints: [
+          {
+            turnId: "turn-2",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/thread-codex/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "msg-2",
+            completedAt: "2026-04-07T11:11:00.000Z",
+          },
+          {
+            turnId: "turn-3",
+            checkpointTurnCount: 2,
+            checkpointRef: "refs/t3/checkpoints/thread-codex/turn/2",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-04-07T11:13:00.000Z",
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = applyT3EventsToSnapshot({
+    snapshot: revertableSnapshot,
+    events: [
+      {
+        sequence: 13,
+        eventId: "event-13",
+        aggregateKind: "thread",
+        aggregateId: "thread-codex",
+        occurredAt: "2026-04-07T11:15:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.reverted",
+        payload: {
+          threadId: "thread-codex",
+          turnCount: 1,
+        },
+      },
+    ],
+  });
+
+  const nextThread = result.snapshot.threads[0];
+  assert.equal(nextThread.checkpoints.length, 1);
+  assert.equal(nextThread.latestTurn.turnId, "turn-2");
+  assert.deepEqual(nextThread.messages.map((message) => message.id), ["msg-1", "msg-2"]);
+  assert.deepEqual(nextThread.proposedPlans.map((plan) => plan.id), ["plan-1"]);
+  assert.deepEqual(nextThread.activities.map((activity) => activity.id), ["activity-1"]);
 });

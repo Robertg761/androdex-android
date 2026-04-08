@@ -423,13 +423,13 @@ test("T3 adapter emits structured gating logs for rejected read-only actions", a
 
   assert.throws(() => {
     adapter.send(JSON.stringify({
-      id: "req-turn-start",
-      method: "turn/start",
+      id: "req-thread-start",
+      method: "thread/start",
       params: {
-        threadId: "thread-123",
+        cwd: "/tmp",
       },
     }));
-  }, /does not support "turn\/start" yet/i);
+  }, /does not support "thread\/start" yet/i);
 
   assert.deepEqual(
     logEntries.find((entry) =>
@@ -449,8 +449,7 @@ test("T3 adapter emits structured gating logs for rejected read-only actions", a
       replaySequence: 7,
       duplicateSuppressionCount: 0,
       reasonCode: "runtime_method_rejected",
-      method: "turn/start",
-      threadId: "thread-123",
+      method: "thread/start",
     },
   );
 });

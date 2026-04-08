@@ -449,6 +449,200 @@ class ApprovalThreadFakeWebSocket extends FakeWebSocket {
   }
 }
 
+class RollbackThreadFakeWebSocket extends FakeWebSocket {
+  constructor(url) {
+    super(url);
+    this.snapshotValue = {
+      snapshotSequence: 7,
+      updatedAt: "2026-04-07T12:00:00.000Z",
+      projects: [
+        {
+          id: "project-1",
+          title: "Project One",
+          workspaceRoot: "/tmp",
+          createdAt: "2026-04-07T11:00:00.000Z",
+          updatedAt: "2026-04-07T11:30:00.000Z",
+          deletedAt: null,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-rollback",
+          projectId: "project-1",
+          title: "Rollback thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: "main",
+          worktreePath: "/tmp",
+          latestTurn: {
+            turnId: "turn-2",
+            state: "completed",
+            requestedAt: "2026-04-07T11:12:00.000Z",
+            startedAt: "2026-04-07T11:12:05.000Z",
+            completedAt: "2026-04-07T11:13:00.000Z",
+            assistantMessageId: "msg-4",
+          },
+          createdAt: "2026-04-07T11:00:00.000Z",
+          updatedAt: "2026-04-07T11:13:00.000Z",
+          archivedAt: null,
+          deletedAt: null,
+          messages: [
+            {
+              id: "msg-1",
+              role: "user",
+              text: "Turn one",
+              turnId: "turn-1",
+              streaming: false,
+              createdAt: "2026-04-07T11:10:00.000Z",
+              updatedAt: "2026-04-07T11:10:00.000Z",
+            },
+            {
+              id: "msg-2",
+              role: "assistant",
+              text: "Done one",
+              turnId: "turn-1",
+              streaming: false,
+              createdAt: "2026-04-07T11:10:05.000Z",
+              updatedAt: "2026-04-07T11:11:00.000Z",
+            },
+            {
+              id: "msg-3",
+              role: "user",
+              text: "Turn two",
+              turnId: "turn-2",
+              streaming: false,
+              createdAt: "2026-04-07T11:12:00.000Z",
+              updatedAt: "2026-04-07T11:12:00.000Z",
+            },
+            {
+              id: "msg-4",
+              role: "assistant",
+              text: "Done two",
+              turnId: "turn-2",
+              streaming: false,
+              createdAt: "2026-04-07T11:12:05.000Z",
+              updatedAt: "2026-04-07T11:13:00.000Z",
+            },
+          ],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [
+            {
+              turnId: "turn-1",
+              checkpointTurnCount: 1,
+              checkpointRef: "refs/t3/checkpoints/thread-rollback/turn/1",
+              status: "ready",
+              files: [],
+              assistantMessageId: "msg-2",
+              completedAt: "2026-04-07T11:11:00.000Z",
+            },
+            {
+              turnId: "turn-2",
+              checkpointTurnCount: 2,
+              checkpointRef: "refs/t3/checkpoints/thread-rollback/turn/2",
+              status: "ready",
+              files: [],
+              assistantMessageId: "msg-4",
+              completedAt: "2026-04-07T11:13:00.000Z",
+            },
+          ],
+          session: null,
+        },
+      ],
+    };
+  }
+
+  send(message) {
+    this.sentMessages.push(message);
+    const parsed = JSON.parse(message);
+    if (parsed.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (parsed.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: this.snapshotValue,
+          },
+        })));
+      });
+      return;
+    }
+    if (
+      parsed.tag === "orchestration.dispatchCommand"
+      && parsed.payload?.type === "thread.checkpoint.revert"
+    ) {
+      const nextTurnCount = parsed.payload.turnCount;
+      this.snapshotValue = {
+        ...this.snapshotValue,
+        snapshotSequence: 8,
+        updatedAt: "2026-04-07T11:15:00.000Z",
+        threads: [
+          {
+            ...this.snapshotValue.threads[0],
+            updatedAt: "2026-04-07T11:15:00.000Z",
+            latestTurn: {
+              turnId: "turn-1",
+              state: "completed",
+              requestedAt: "2026-04-07T11:10:00.000Z",
+              startedAt: "2026-04-07T11:10:05.000Z",
+              completedAt: "2026-04-07T11:11:00.000Z",
+              assistantMessageId: "msg-2",
+            },
+            messages: this.snapshotValue.threads[0].messages.filter((message) => message.turnId === "turn-1"),
+            checkpoints: this.snapshotValue.threads[0].checkpoints.filter(
+              (checkpoint) => checkpoint.checkpointTurnCount <= nextTurnCount
+            ),
+          },
+        ],
+      };
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              sequence: 8,
+            },
+          },
+        })));
+      });
+      return;
+    }
+    super.send(message);
+  }
+}
+
 class UserInputThreadFakeWebSocket extends FakeWebSocket {
   send(message) {
     this.sentMessages.push(message);
@@ -668,6 +862,14 @@ test("T3 read-only policy allows snapshot/bootstrap-safe read methods", () => {
     true
   );
   assert.equal(
+    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "thread/rollback" }),
+    true
+  );
+  assert.equal(
+    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "turn/start" }),
+    true
+  );
+  assert.equal(
     isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "turn/interrupt" }),
     true
   );
@@ -679,15 +881,15 @@ test("T3 read-only policy allows snapshot/bootstrap-safe read methods", () => {
 
 test("T3 read-only policy rejects mutating methods with a clear message", () => {
   assert.equal(
-    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "turn/start" }),
+    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "thread/start" }),
     false
   );
   assert.match(
     buildRuntimeTargetMethodRejectionMessage({
       targetKind: "t3-server",
-      method: "turn/start",
+      method: "thread/start",
     }),
-    /does not support "turn\/start" yet/i
+    /does not support "thread\/start" yet/i
   );
 });
 
@@ -732,11 +934,11 @@ test("T3 runtime adapter blocks mutating methods before they cross the transport
   await adapter.whenReady();
   assert.throws(
     () => adapter.send(JSON.stringify({
-      id: "req-turn-start",
-      method: "turn/start",
-      params: { threadId: "thread-123" },
+      id: "req-thread-start",
+      method: "thread/start",
+      params: { cwd: "/tmp" },
     })),
-    /does not support "turn\/start" yet/i
+    /does not support "thread\/start" yet/i
   );
 });
 
@@ -809,7 +1011,7 @@ test("T3 runtime adapter dispatches bridge/approval/respond for pending syntheti
       threadId: "thread-123",
     },
   })), true);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.equal(adapter.send(JSON.stringify({
     id: "req-approval-respond",
@@ -890,6 +1092,147 @@ test("T3 runtime adapter dispatches bridge/user-input/respond for pending synthe
       answers: ["preview"],
     },
   });
+});
+
+test("T3 runtime adapter dispatches turn/start for companion-supported threads", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: ApprovalThreadFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-turn-start",
+    method: "turn/start",
+    params: {
+      threadId: "thread-123",
+      input: [
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+        {
+          type: "text",
+          text: "Plan the rollout",
+        },
+      ],
+      model: "gpt-5.4",
+      effort: "high",
+      serviceTier: "fast",
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.4",
+          reasoning_effort: "high",
+          developer_instructions: null,
+        },
+      },
+    },
+  })), true);
+  let response = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    response = responses.find((entry) => entry.id === "req-turn-start") || null;
+    if (response) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(response?.result?.ok, true);
+  assert.equal(response?.result?.started, true);
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatches = Array.from(new Map(
+    socket.sentMessages
+      .map((entry) => JSON.parse(entry))
+      .filter((entry) => entry.tag === "orchestration.dispatchCommand")
+      .map((entry) => [entry.id, entry])
+  ).values());
+
+  assert.deepEqual(dispatches.map((entry) => entry.payload.type), [
+    "thread.meta.update",
+    "thread.interaction-mode.set",
+    "thread.turn.start",
+  ]);
+
+  const turnStartDispatch = dispatches[2];
+  assert.equal(turnStartDispatch.payload.threadId, "thread-123");
+  assert.equal(turnStartDispatch.payload.message.role, "user");
+  assert.equal(turnStartDispatch.payload.message.text, "Plan the rollout");
+  assert.equal(turnStartDispatch.payload.message.attachments.length, 1);
+  assert.equal(turnStartDispatch.payload.message.attachments[0].mimeType, "image/png");
+  assert.equal(turnStartDispatch.payload.message.attachments[0].name, "image-1.png");
+  assert.equal(turnStartDispatch.payload.modelSelection.provider, "codex");
+  assert.equal(turnStartDispatch.payload.modelSelection.model, "gpt-5.4");
+  assert.equal(turnStartDispatch.payload.modelSelection.options.reasoningEffort, "high");
+  assert.equal(turnStartDispatch.payload.modelSelection.options.fastMode, true);
+  assert.equal(turnStartDispatch.payload.interactionMode, "plan");
+  assert.equal(turnStartDispatch.payload.titleSeed, "Plan the rollout");
+});
+
+test("T3 runtime adapter dispatches thread/rollback for companion-supported threads", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: RollbackThreadFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-rollback",
+    method: "thread/rollback",
+    params: {
+      threadId: "thread-rollback",
+      numTurns: 1,
+    },
+  })), true);
+  let response = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    response = responses.find((entry) => entry.id === "req-thread-rollback") || null;
+    if (response) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  assert.equal(response?.result?.ok, true);
+  assert.equal(response?.result?.thread?.id, "thread-rollback");
+  assert.equal(response?.result?.thread?.turns?.length, 1);
+  assert.deepEqual(
+    response?.result?.thread?.turns?.[0]?.items?.map((item) => item.id),
+    ["msg-1", "msg-2"]
+  );
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatches = Array.from(new Map(
+    socket.sentMessages
+      .map((entry) => JSON.parse(entry))
+      .filter((entry) => entry.tag === "orchestration.dispatchCommand")
+      .map((entry) => [entry.id, entry])
+  ).values());
+  assert.equal(dispatches.length, 1);
+  assert.equal(dispatches[0].payload.type, "thread.checkpoint.revert");
+  assert.equal(dispatches[0].payload.turnCount, 1);
 });
 
 test("T3 runtime adapter rejects turn/interrupt when the synchronized thread is no longer interruptible", async () => {

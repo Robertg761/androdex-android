@@ -8,6 +8,7 @@ const { createCodexTransport } = require("../codex/transport");
 const { createHash, randomUUID } = require("crypto");
 const {
   applyT3EventsToSnapshot,
+  buildT3ThreadRollbackResult,
   buildT3ThreadListResult,
   buildT3ThreadReadResult,
   createEmptyT3Snapshot,
@@ -163,6 +164,7 @@ function createT3ServerRuntimeAdapter({
   const syntheticApprovalBridgeIdByThreadRequest = new Map();
   const syntheticUserInputRequestsByBridgeId = new Map();
   const syntheticUserInputBridgeIdByThreadRequest = new Map();
+  const appliedDomainEventWaiters = new Set();
   let transport = null;
   const emitAdapterLog = createStructuredRuntimeLogger({
     logEvent,
@@ -462,6 +464,7 @@ function createT3ServerRuntimeAdapter({
       lastSequence = Math.max(lastSequence, normalizeSequenceNumber(result.lastSequence));
       if (normalizeSequenceNumber(result.appliedCount) > 0) {
         const eventSequence = normalizeSequenceNumber(event?.sequence);
+        resolveAppliedDomainEventWaiters(event);
         if (eventSequence > suppressNotificationsThroughSequence) {
           emitLiveNotificationsForAppliedT3Event({
             beforeSnapshot,
@@ -483,6 +486,72 @@ function createT3ServerRuntimeAdapter({
       lastSequence: appliedSequence,
       snapshot: snapshotCache,
     };
+  }
+
+  function createAppliedDomainEventWaiter({
+    match,
+    timeoutMs = T3_ATTACH_TIMEOUT_MS,
+    errorMessage = "Timed out waiting for the T3 event to apply.",
+  }) {
+    if (typeof match !== "function") {
+      throw new Error("Applied domain event waiters require a match function.");
+    }
+
+    let settled = false;
+    let waiter = null;
+    let timer = null;
+    const promise = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        appliedDomainEventWaiters.delete(waiter);
+        reject(new Error(errorMessage));
+      }, timeoutMs);
+      waiter = {
+        match,
+        resolve(event) {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          appliedDomainEventWaiters.delete(waiter);
+          resolve(event);
+        },
+      };
+      appliedDomainEventWaiters.add(waiter);
+    });
+
+    return {
+      promise,
+      cancel() {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        appliedDomainEventWaiters.delete(waiter);
+      },
+    };
+  }
+
+  function resolveAppliedDomainEventWaiters(event) {
+    if (appliedDomainEventWaiters.size === 0) {
+      return;
+    }
+    for (const waiter of [...appliedDomainEventWaiters]) {
+      let matched = false;
+      try {
+        matched = waiter.match(event) === true;
+      } catch {
+        matched = false;
+      }
+      if (matched) {
+        waiter.resolve(event);
+      }
+    }
   }
 
   function emitLiveNotificationsForAppliedT3Event({
@@ -1185,6 +1254,173 @@ function createT3ServerRuntimeAdapter({
       return true;
     }
 
+    if (method === "turn/start") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          if (!threadId) {
+            throw new Error("T3 turn start requires a threadId.");
+          }
+
+          const thread = findT3Thread(snapshot, threadId);
+          if (!thread) {
+            throw new Error(`T3 thread not found: ${threadId}`);
+          }
+
+          const threadCapabilities = describeT3ThreadCapabilities({
+            snapshot,
+            thread,
+          });
+          if (!threadCapabilities?.turnStart?.supported) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "turn_start_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                threadCapabilities?.companionSupportState
+              ) || null,
+            });
+            emitRpcError(
+              requestId,
+              normalizeNonEmptyString(threadCapabilities?.turnStart?.reason)
+                || "This T3 thread does not support turn start from Androdex yet."
+            );
+            return;
+          }
+
+          const command = buildT3TurnStartCommand({
+            threadId,
+            thread,
+            params: parsed?.params,
+          });
+          return prepareT3ThreadForTurnStart({
+            threadId,
+            thread,
+            params: parsed?.params,
+            transport,
+          }).then(() => transport.request("orchestration.dispatchCommand", command, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          })).then((dispatchResult) => {
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "turn_start_dispatched",
+              method,
+              threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              started: true,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to start the T3 turn."
+          );
+        });
+      return true;
+    }
+
+    if (method === "thread/rollback") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          if (!threadId) {
+            throw new Error("T3 rollback requires a threadId.");
+          }
+
+          const thread = findT3Thread(snapshot, threadId);
+          if (!thread) {
+            throw new Error(`T3 thread not found: ${threadId}`);
+          }
+
+          const threadCapabilities = describeT3ThreadCapabilities({
+            snapshot,
+            thread,
+          });
+          if (!threadCapabilities?.checkpointRollback?.supported) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "checkpoint_rollback_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                threadCapabilities?.companionSupportState
+              ) || null,
+            });
+            emitRpcError(
+              requestId,
+              normalizeNonEmptyString(threadCapabilities?.checkpointRollback?.reason)
+                || "This T3 thread does not support rollback from Androdex yet."
+            );
+            return;
+          }
+
+          const optimisticRollback = buildT3ThreadRollbackResult({
+            snapshot,
+            threadId,
+            numTurns: parsed?.params?.numTurns,
+            occurredAt: new Date().toISOString(),
+          });
+          const revertWaiter = createAppliedDomainEventWaiter({
+            match(event) {
+              const eventType = normalizeNonEmptyString(event?.type);
+              const eventThreadId = normalizeNonEmptyString(event?.payload?.threadId)
+                || normalizeNonEmptyString(event?.aggregateId);
+              return eventType === "thread.reverted"
+                && eventThreadId === threadId
+                && normalizeSequenceNumber(event?.payload?.turnCount) === optimisticRollback.targetTurnCount;
+            },
+            errorMessage: "Timed out waiting for the T3 rollback to finish.",
+          });
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.checkpoint.revert",
+            commandId: randomUUID(),
+            threadId,
+            turnCount: optimisticRollback.targetTurnCount,
+            createdAt: new Date().toISOString(),
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then(async (dispatchResult) => {
+            let resolvedSnapshot = await refreshSnapshotCache();
+            if (!doesSnapshotReflectT3Rollback({
+              snapshot: resolvedSnapshot,
+              threadId,
+              targetTurnCount: optimisticRollback.targetTurnCount,
+            })) {
+              await revertWaiter.promise;
+              resolvedSnapshot = await ensureSnapshotCache();
+            }
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "checkpoint_rollback_dispatched",
+              method,
+              threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+              turnCount: optimisticRollback.targetTurnCount,
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              thread: buildT3ThreadReadResult({
+                snapshot: resolvedSnapshot,
+                threadId,
+              }).thread,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          }).finally(() => {
+            revertWaiter.cancel();
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to roll back the T3 thread."
+          );
+        });
+      return true;
+    }
+
     if (method === "turn/interrupt") {
       void ensureSnapshotCache()
         .then((snapshot) => {
@@ -1487,6 +1723,22 @@ function findT3Thread(snapshot, threadId) {
   const threads = Array.isArray(snapshot?.threads) ? snapshot.threads : [];
   return threads.find((thread) =>
     normalizeNonEmptyString(thread?.id) === normalizedThreadId && !thread?.deletedAt) || null;
+}
+
+function doesSnapshotReflectT3Rollback({
+  snapshot,
+  threadId,
+  targetTurnCount,
+}) {
+  const thread = findT3Thread(snapshot, threadId);
+  if (!thread) {
+    return false;
+  }
+  const maxCheckpointTurnCount = (Array.isArray(thread?.checkpoints) ? thread.checkpoints : []).reduce(
+    (maxValue, checkpoint) => Math.max(maxValue, normalizeSequenceNumber(checkpoint?.checkpointTurnCount)),
+    0
+  );
+  return maxCheckpointTurnCount <= Math.max(0, normalizeSequenceNumber(targetTurnCount));
 }
 
 function isT3ThreadEligibleForLiveUpdates(snapshot, thread) {
@@ -2043,6 +2295,249 @@ function normalizeApprovalRequestKind(value) {
   }
   if (normalizedValue === "file-change" || normalizedValue === "file_change" || normalizedValue === "file_change_approval") {
     return "file-change";
+  }
+  return "";
+}
+
+function buildT3TurnStartCommand({
+  threadId,
+  thread,
+  params,
+}) {
+  const turnInput = extractT3TurnInput(params);
+  const messageText = turnInput.text;
+  const attachments = turnInput.attachments;
+  if (!messageText && attachments.length === 0) {
+    throw new Error("T3 turn start requires text or at least one image attachment.");
+  }
+
+  const interactionMode = normalizeT3InteractionMode(params?.collaborationMode?.mode);
+  const modelSelection = buildT3ModelSelectionFromTurnStartParams({
+    params,
+    thread,
+  });
+  const titleSeed = buildT3TitleSeed({
+    messageText,
+    attachments,
+  });
+
+  return {
+    type: "thread.turn.start",
+    commandId: randomUUID(),
+    threadId,
+    message: {
+      messageId: randomUUID(),
+      role: "user",
+      text: messageText,
+      attachments,
+    },
+    ...(modelSelection ? { modelSelection } : {}),
+    ...(titleSeed ? { titleSeed } : {}),
+    interactionMode,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function prepareT3ThreadForTurnStart({
+  threadId,
+  thread,
+  params,
+  transport,
+}) {
+  const desiredInteractionMode = normalizeT3InteractionMode(params?.collaborationMode?.mode);
+  const currentInteractionMode = normalizeT3InteractionMode(thread?.interactionMode);
+  const desiredModelSelection = buildT3ModelSelectionFromTurnStartParams({
+    params,
+    thread,
+  });
+  const currentModelSelection = normalizeT3ComparableModelSelection(thread?.modelSelection);
+
+  let chain = Promise.resolve();
+  if (
+    desiredModelSelection
+    && JSON.stringify(normalizeT3ComparableModelSelection(desiredModelSelection))
+      !== JSON.stringify(currentModelSelection)
+  ) {
+    chain = chain.then(() => transport.request("orchestration.dispatchCommand", {
+      type: "thread.meta.update",
+      commandId: randomUUID(),
+      threadId,
+      modelSelection: desiredModelSelection,
+    }, {
+      timeoutMs: T3_ATTACH_TIMEOUT_MS,
+    }));
+  }
+
+  if (desiredInteractionMode !== currentInteractionMode) {
+    chain = chain.then(() => transport.request("orchestration.dispatchCommand", {
+      type: "thread.interaction-mode.set",
+      commandId: randomUUID(),
+      threadId,
+      interactionMode: desiredInteractionMode,
+      createdAt: new Date().toISOString(),
+    }, {
+      timeoutMs: T3_ATTACH_TIMEOUT_MS,
+    }));
+  }
+
+  return chain;
+}
+
+function extractT3TurnInput(params) {
+  const inputItems = Array.isArray(params?.input) ? params.input : [];
+  const textParts = [];
+  const attachments = [];
+
+  for (const item of inputItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const type = normalizeNonEmptyString(item.type).toLowerCase();
+    if (type === "text") {
+      const text = normalizeNonEmptyString(item.text);
+      if (text) {
+        textParts.push(text);
+      }
+      continue;
+    }
+    if (type === "image") {
+      attachments.push(buildT3UploadImageAttachment(item, attachments.length));
+    }
+  }
+
+  return {
+    text: textParts.join("\n\n"),
+    attachments,
+  };
+}
+
+function buildT3UploadImageAttachment(item, index) {
+  const dataUrl = firstNonEmptyString([
+    item?.dataUrl,
+    item?.url,
+    item?.imageUrl,
+    item?.image_url,
+  ]);
+  if (!dataUrl) {
+    throw new Error("T3 turn start image attachments require a data URL.");
+  }
+
+  const parsed = parseImageDataUrl(dataUrl);
+  if (!parsed) {
+    throw new Error("T3 turn start image attachments must use a valid base64 image data URL.");
+  }
+
+  return {
+    type: "image",
+    name: buildT3AttachmentName(parsed.mimeType, index),
+    mimeType: parsed.mimeType,
+    sizeBytes: parsed.sizeBytes,
+    dataUrl,
+  };
+}
+
+function parseImageDataUrl(dataUrl) {
+  const match = /^data:(image\/[^;,]+)(?:;[^,]*)?;base64,([a-z0-9+/=\r\n ]+)$/i.exec(
+    normalizeNonEmptyString(dataUrl)
+  );
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = normalizeNonEmptyString(match[1]).toLowerCase();
+  const bytes = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
+  if (!mimeType || Number.isNaN(bytes.length) || bytes.length <= 0) {
+    return null;
+  }
+
+  return {
+    mimeType,
+    sizeBytes: bytes.length,
+  };
+}
+
+function buildT3AttachmentName(mimeType, index) {
+  const subtype = normalizeNonEmptyString(mimeType.split("/")[1] || "").toLowerCase();
+  const extension = subtype === "jpeg"
+    ? "jpg"
+    : subtype === "svg+xml"
+      ? "svg"
+      : subtype || "img";
+  return `image-${index + 1}.${extension}`;
+}
+
+function buildT3ModelSelectionFromTurnStartParams({
+  params,
+  thread,
+}) {
+  const requestedModel = normalizeNonEmptyString(params?.model);
+  const reasoningEffort = normalizeNonEmptyString(params?.effort);
+  const serviceTier = normalizeNonEmptyString(params?.serviceTier).toLowerCase();
+  if (!requestedModel && !reasoningEffort && !serviceTier) {
+    return null;
+  }
+
+  const threadModelSelection = thread?.modelSelection && typeof thread.modelSelection === "object"
+    ? thread.modelSelection
+    : null;
+  const model = requestedModel || normalizeNonEmptyString(threadModelSelection?.model);
+  if (!model) {
+    return null;
+  }
+
+  const options = compactObject({
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier === "fast" ? { fastMode: true } : {}),
+  });
+
+  return compactObject({
+    provider: "codex",
+    ...(model ? { model } : {}),
+    ...(Object.keys(options).length > 0 ? { options } : {}),
+  });
+}
+
+function normalizeT3ComparableModelSelection(modelSelection) {
+  if (!modelSelection || typeof modelSelection !== "object") {
+    return null;
+  }
+
+  const provider = normalizeNonEmptyString(modelSelection.provider);
+  const model = normalizeNonEmptyString(modelSelection.model);
+  const options = modelSelection.options && typeof modelSelection.options === "object"
+    ? compactObject({
+      ...(normalizeNonEmptyString(modelSelection.options.reasoningEffort)
+        ? { reasoningEffort: normalizeNonEmptyString(modelSelection.options.reasoningEffort) }
+        : {}),
+      ...(typeof modelSelection.options.fastMode === "boolean"
+        ? { fastMode: modelSelection.options.fastMode }
+        : {}),
+    })
+    : {};
+  if (!provider || !model) {
+    return null;
+  }
+
+  return compactObject({
+    provider,
+    model,
+    ...(Object.keys(options).length > 0 ? { options } : {}),
+  });
+}
+
+function normalizeT3InteractionMode(value) {
+  return normalizeNonEmptyString(value).toLowerCase() === "plan" ? "plan" : "default";
+}
+
+function buildT3TitleSeed({
+  messageText,
+  attachments,
+}) {
+  if (messageText) {
+    return messageText.slice(0, 120);
+  }
+  if (attachments.length > 0) {
+    return attachments[0]?.name || "Image turn";
   }
   return "";
 }

@@ -757,14 +757,16 @@ Status update:
   - when a thread's recorded `worktreePath` no longer resolves locally but its project's `workspaceRoot` still does, the bridge now keeps that thread companion-eligible on the read side using the project root as an explicit fallback instead of collapsing it into the unresolved-workspace bucket
   - Android now explicitly gates project-level thread creation for `t3-server`, so home/sidebar affordances and `createThread()` no longer rely on a bridge-side `thread/start` rejection to enforce the read-only milestone
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
-  - `turn/interrupt` is now the first supported mutating T3 action for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
+  - `turn/start` is now supported for existing companion-eligible Codex-backed T3 threads: Android’s existing `turn/start` payload is translated into `thread.turn.start`, including text, image attachments, model/effort fast-mode hints, and plan-mode interaction, while thread creation remains blocked
+  - `turn/interrupt` is now supported for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
   - approval responses are now supported for companion-eligible Codex-backed T3 threads through a bridge-managed compatibility layer: resumed threads surface outstanding/open T3 approvals as synthetic Android approval requests, Android responses are translated into `thread.approval.respond`, and `approval.resolved` now clears the phone overlay by request id
   - user-input responses are now supported for companion-eligible Codex-backed T3 threads through the same bridge-managed compatibility layer: resumed threads surface outstanding/open T3 user-input requests as synthetic Android tool-input prompts, Android responses are translated into `thread.user-input.respond`, `user-input.resolved` now clears the phone overlay by request id, and companion-supported threads advertise both `userInputResponses` and Android-facing `toolInputResponses` as available
+  - checkpoint rollback is now supported for companion-eligible Codex-backed T3 threads that already have at least one completed checkpoint: Android’s existing `thread/rollback` flow is translated into `thread.checkpoint.revert`, the bridge waits for the reverted thread state to materialize, and the T3 read model now applies `thread.reverted` by trimming messages, activities, plans, checkpoints, and latest-turn state to the retained checkpoint count
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
   - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
-  - the remaining T3 mutating actions beyond interrupt, approval response, and tool/user-input response
+  - the remaining T3 mutating actions beyond existing-thread turn start, interrupt, rollback, approval response, and tool/user-input response
 
 Deliverables:
 
@@ -1004,7 +1006,7 @@ Still in progress:
 
 Not started yet:
 
-- the remaining T3 mutating command mapping beyond interrupt, approval response, and tool/user-input response
+- the remaining T3 mutating command mapping beyond existing-thread turn start, interrupt, rollback, approval response, and tool/user-input response
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Runtime Capability Matrix
@@ -1029,12 +1031,15 @@ Not started yet:
 - live turn, assistant, title, plan, task, tool, approval, and user-input activity updates: supported for resumed companion-eligible threads only
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
 - missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
-- send / plan / subagent flows: not supported yet
+- send / plan flows: supported for existing companion-eligible Codex-backed threads only
+- review/start flows: not supported yet
+- new thread creation / subagent flows: not supported yet
 - interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
 - approval responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic approval requests and `thread.approval.respond`
 - user-input responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic tool-input requests and `thread.user-input.respond`
 - tool-input responses: supported for the same companion-eligible Codex-backed threads, because Android submits those prompts through its existing tool-input response flow
-- rollback / compaction / background terminal cleanup: not supported yet
+- rollback: supported for companion-eligible Codex-backed threads when the synchronized T3 thread already has at least one completed checkpoint
+- compaction / background terminal cleanup: not supported yet
 
 Scope note:
 
@@ -1044,4 +1049,4 @@ Scope note:
 
 1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
 2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
-3. Start the first mutating T3 action slice only after the live-contract and replay-hardening backlog is narrow enough that write-side failures will be diagnosable from the current metadata and log surface.
+3. Tackle the next remaining T3 mutating gap after turn start, interrupt, rollback, approval response, and tool/user-input response support.

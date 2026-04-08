@@ -3,6 +3,8 @@ package io.androdex.android.ui.state
 import io.androdex.android.GitActionKind
 import io.androdex.android.ThreadGitState
 import io.androdex.android.AndrodexUiState
+import io.androdex.android.ComposerReviewSelection
+import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.FreshPairingAttemptState
 import io.androdex.android.FreshPairingStage
 import io.androdex.android.model.AccessMode
@@ -885,6 +887,44 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.composer.runtimeButtonEnabled)
         assertEquals(
             "Open this thread on the host Mac to continue it.",
+            route.state.composer.availabilityMessage,
+        )
+    }
+
+    @Test
+    fun threadRoute_blocksReviewSubmissionForT3ThreadsEvenWhenTurnStartIsSupported() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            hostRuntimeMetadata = HostRuntimeMetadata(runtimeTarget = "t3-server"),
+            selectedThreadId = "thread-9",
+            selectedThreadTitle = "Conversation",
+            threads = listOf(
+                ThreadSummary(
+                    id = "thread-9",
+                    title = "Conversation",
+                    preview = null,
+                    cwd = "/workspace/app",
+                    createdAtEpochMs = null,
+                    updatedAtEpochMs = null,
+                    threadCapabilities = ThreadCapabilities(
+                        readOnly = true,
+                        turnStart = ThreadCapabilityFlag(
+                            supported = true,
+                            reason = null,
+                        ),
+                    ),
+                )
+            ),
+            composerReviewSelectionByThread = mapOf(
+                "thread-9" to ComposerReviewSelection(target = ComposerReviewTarget.UNCOMMITTED_CHANGES)
+            ),
+        )
+
+        val route = state.toAppUiState(isSettingsVisible = false).destination as AndrodexDestinationUiState.Thread
+
+        assertFalse(route.state.composer.submitEnabled)
+        assertEquals(
+            "Starting code review from this T3 thread isn't available in Androdex yet.",
             route.state.composer.availabilityMessage,
         )
     }

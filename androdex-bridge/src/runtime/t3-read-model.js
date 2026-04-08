@@ -40,6 +40,42 @@ function buildT3ThreadReadResult({
   };
 }
 
+function buildT3ThreadRollbackResult({
+  snapshot = null,
+  threadId = "",
+  numTurns = 1,
+  occurredAt = null,
+} = {}) {
+  const normalizedThreadId = normalizeNonEmptyString(threadId);
+  const rollbackTurns = normalizeRollbackTurnCount(numTurns);
+  const nextSnapshot = cloneT3Snapshot(snapshot);
+  const thread = findRecord(nextSnapshot.threads, "id", normalizedThreadId);
+  if (!thread) {
+    throw new Error(`T3 thread not found: ${normalizedThreadId || "<unknown>"}`);
+  }
+
+  const currentTurnCount = getThreadCheckpointTurnCount(thread);
+  if (currentTurnCount <= 0) {
+    throw new Error("This T3 thread has no checkpoints available to roll back yet.");
+  }
+
+  const targetTurnCount = Math.max(0, currentTurnCount - rollbackTurns);
+  applyThreadRevertedState(thread, {
+    turnCount: targetTurnCount,
+    updatedAt: normalizeNonEmptyString(occurredAt) || thread.updatedAt || null,
+  });
+
+  return {
+    currentTurnCount,
+    targetTurnCount,
+    result: buildT3ThreadReadResult({
+      snapshot: nextSnapshot,
+      threadId: normalizedThreadId,
+    }),
+    snapshot: nextSnapshot,
+  };
+}
+
 function createEmptyT3Snapshot() {
   return {
     snapshotSequence: 0,
@@ -335,7 +371,10 @@ function applyThreadEvent(snapshot, eventType, payload, event) {
     return;
   }
   if (eventType === "thread.reverted") {
-    thread.updatedAt = normalizeNonEmptyString(event?.occurredAt) || thread.updatedAt || null;
+    applyThreadRevertedState(thread, {
+      turnCount: normalizeSequenceNumber(payload.turnCount),
+      updatedAt: normalizeNonEmptyString(event?.occurredAt) || thread.updatedAt || null,
+    });
     return;
   }
 
@@ -654,6 +693,160 @@ function resolveThreadWorkspace(thread, project) {
   };
 }
 
+function checkpointStatusToLatestTurnState(status) {
+  if (status === "error") {
+    return "error";
+  }
+  if (status === "missing") {
+    return "interrupted";
+  }
+  return "completed";
+}
+
+function compareT3MessagesByCreatedAt(left, right) {
+  return timestampOrZero(left?.createdAt) - timestampOrZero(right?.createdAt)
+    || normalizeNonEmptyString(left?.id).localeCompare(normalizeNonEmptyString(right?.id));
+}
+
+function retainThreadMessagesAfterRevert(messages, retainedTurnIds, turnCount) {
+  const normalizedMessages = Array.isArray(messages) ? messages : [];
+  const retainedMessageIds = new Set();
+  for (const message of normalizedMessages) {
+    const messageId = normalizeNonEmptyString(message?.id);
+    const role = normalizeNonEmptyString(message?.role).toLowerCase();
+    const turnId = normalizeNonEmptyString(message?.turnId);
+    if (role === "system") {
+      retainedMessageIds.add(messageId);
+      continue;
+    }
+    if (turnId && retainedTurnIds.has(turnId)) {
+      retainedMessageIds.add(messageId);
+    }
+  }
+
+  const retainedUserCount = normalizedMessages.filter(
+    (message) =>
+      normalizeNonEmptyString(message?.role).toLowerCase() === "user"
+      && retainedMessageIds.has(normalizeNonEmptyString(message?.id))
+  ).length;
+  const missingUserCount = Math.max(0, normalizeSequenceNumber(turnCount) - retainedUserCount);
+  if (missingUserCount > 0) {
+    const fallbackUserMessages = normalizedMessages
+      .filter((message) => {
+        const messageId = normalizeNonEmptyString(message?.id);
+        const turnId = normalizeNonEmptyString(message?.turnId);
+        return normalizeNonEmptyString(message?.role).toLowerCase() === "user"
+          && !retainedMessageIds.has(messageId)
+          && (!turnId || retainedTurnIds.has(turnId));
+      })
+      .sort(compareT3MessagesByCreatedAt)
+      .slice(0, missingUserCount);
+    for (const message of fallbackUserMessages) {
+      retainedMessageIds.add(normalizeNonEmptyString(message?.id));
+    }
+  }
+
+  const retainedAssistantCount = normalizedMessages.filter(
+    (message) =>
+      normalizeNonEmptyString(message?.role).toLowerCase() === "assistant"
+      && retainedMessageIds.has(normalizeNonEmptyString(message?.id))
+  ).length;
+  const missingAssistantCount = Math.max(0, normalizeSequenceNumber(turnCount) - retainedAssistantCount);
+  if (missingAssistantCount > 0) {
+    const fallbackAssistantMessages = normalizedMessages
+      .filter((message) => {
+        const messageId = normalizeNonEmptyString(message?.id);
+        const turnId = normalizeNonEmptyString(message?.turnId);
+        return normalizeNonEmptyString(message?.role).toLowerCase() === "assistant"
+          && !retainedMessageIds.has(messageId)
+          && (!turnId || retainedTurnIds.has(turnId));
+      })
+      .sort(compareT3MessagesByCreatedAt)
+      .slice(0, missingAssistantCount);
+    for (const message of fallbackAssistantMessages) {
+      retainedMessageIds.add(normalizeNonEmptyString(message?.id));
+    }
+  }
+
+  return normalizedMessages.filter(
+    (message) => retainedMessageIds.has(normalizeNonEmptyString(message?.id))
+  );
+}
+
+function retainThreadActivitiesAfterRevert(activities, retainedTurnIds) {
+  return (Array.isArray(activities) ? activities : []).filter((activity) => {
+    const turnId = normalizeNonEmptyString(activity?.turnId);
+    return !turnId || retainedTurnIds.has(turnId);
+  });
+}
+
+function retainThreadProposedPlansAfterRevert(proposedPlans, retainedTurnIds) {
+  return (Array.isArray(proposedPlans) ? proposedPlans : []).filter((proposedPlan) => {
+    const turnId = normalizeNonEmptyString(proposedPlan?.turnId);
+    return !turnId || retainedTurnIds.has(turnId);
+  });
+}
+
+function getThreadCheckpointTurnCount(thread) {
+  return (Array.isArray(thread?.checkpoints) ? thread.checkpoints : []).reduce((maxTurnCount, checkpoint) => {
+    return Math.max(maxTurnCount, normalizeSequenceNumber(checkpoint?.checkpointTurnCount));
+  }, 0);
+}
+
+function normalizeRollbackTurnCount(value) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("T3 rollback requires dropping at least one turn.");
+  }
+  return parsed;
+}
+
+function applyThreadRevertedState(thread, {
+  turnCount = 0,
+  updatedAt = null,
+} = {}) {
+  const normalizedTurnCount = Math.max(0, normalizeSequenceNumber(turnCount));
+  const checkpoints = (Array.isArray(thread?.checkpoints) ? thread.checkpoints : [])
+    .filter((entry) => normalizeSequenceNumber(entry?.checkpointTurnCount) <= normalizedTurnCount)
+    .sort(
+      (left, right) =>
+        normalizeSequenceNumber(left?.checkpointTurnCount) - normalizeSequenceNumber(right?.checkpointTurnCount)
+    );
+  const retainedTurnIds = new Set(
+    checkpoints.map((entry) => normalizeNonEmptyString(entry?.turnId)).filter(Boolean)
+  );
+  const latestCheckpoint = checkpoints.at(-1) || null;
+
+  thread.checkpoints = checkpoints;
+  thread.messages = retainThreadMessagesAfterRevert(
+    Array.isArray(thread?.messages) ? thread.messages : [],
+    retainedTurnIds,
+    normalizedTurnCount
+  );
+  thread.proposedPlans = retainThreadProposedPlansAfterRevert(
+    Array.isArray(thread?.proposedPlans) ? thread.proposedPlans : [],
+    retainedTurnIds
+  );
+  thread.activities = retainThreadActivitiesAfterRevert(
+    Array.isArray(thread?.activities) ? thread.activities : [],
+    retainedTurnIds
+  );
+  thread.latestTurn = latestCheckpoint
+    ? {
+      turnId: normalizeNonEmptyString(latestCheckpoint.turnId),
+      state: checkpointStatusToLatestTurnState(
+        normalizeNonEmptyString(latestCheckpoint.status) || "ready"
+      ),
+      requestedAt: normalizeNonEmptyString(latestCheckpoint.completedAt) || null,
+      startedAt: normalizeNonEmptyString(latestCheckpoint.completedAt) || null,
+      completedAt: normalizeNonEmptyString(latestCheckpoint.completedAt) || null,
+      assistantMessageId: normalizeNonEmptyString(latestCheckpoint.assistantMessageId) || null,
+    }
+    : null;
+  thread.session = null;
+  thread.updatedAt = normalizeNonEmptyString(updatedAt) || thread.updatedAt || null;
+}
+
 function describeT3ThreadCapabilities({
   snapshot = null,
   thread,
@@ -683,6 +876,14 @@ function describeT3ThreadCapabilities({
   const liveUpdatesReason = companionSupportReason
     || "The read-only T3 adapter only attaches live updates for supported Codex-backed threads whose local workspace mapping still resolves.";
   const readOnlyMutationReason = "The read-only T3 adapter milestone has not enabled mutating thread actions yet.";
+  const checkpointTurnCount = getThreadCheckpointTurnCount(thread);
+  const checkpointRollbackReason = companionSupportState === "supported"
+    ? (
+      checkpointTurnCount > 0
+        ? null
+        : "This T3 thread has no checkpoints available to roll back yet."
+    )
+    : companionSupportReason || readOnlyMutationReason;
   const interruptReason = companionSupportState === "supported"
     ? null
     : companionSupportReason || readOnlyMutationReason;
@@ -711,8 +912,10 @@ function describeT3ThreadCapabilities({
       reason: companionSupportState === "supported" ? null : liveUpdatesReason,
     },
     turnStart: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported"
+        ? null
+        : interruptReason,
     },
     turnInterrupt: {
       supported: companionSupportState === "supported",
@@ -737,8 +940,8 @@ function describeT3ThreadCapabilities({
         : interruptReason,
     },
     checkpointRollback: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported" && checkpointTurnCount > 0,
+      reason: checkpointRollbackReason,
     },
   };
 }
@@ -1109,6 +1312,7 @@ function pathExists(candidatePath) {
 module.exports = {
   applyT3EventsToSnapshot,
   buildT3ThreadListResult,
+  buildT3ThreadRollbackResult,
   buildT3ThreadReadResult,
   createEmptyT3Snapshot,
   describeT3ThreadCapabilities,

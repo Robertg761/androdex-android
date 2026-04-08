@@ -617,17 +617,24 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
     val toolInputBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.TOOL_INPUT_RESPONSES)
     val rollbackBlockReason = selectedThread?.capabilityBlockReason(ThreadCapabilityAction.CHECKPOINT_ROLLBACK)
     val isThreadRunning = threadId in runningThreadIds || threadId in protectedRunningFallbackThreadIds
-    val composerCapabilityBlockReason = if (isThreadRunning) {
-        turnInterruptBlockReason ?: turnStartBlockReason
-    } else {
-        turnStartBlockReason
-    }
-    val isComposerCapabilityBlocked = composerCapabilityBlockReason != null
     val planModeSupported = CollaborationModeKind.PLAN in collaborationModes
     val isPlanModeRequested = isComposerPlanMode || threadId in composerPlanModeByThread
     val isPlanModeEnabled = planModeSupported && isPlanModeRequested
     val isSubagentsEnabled = isComposerSubagentsEnabled || threadId in composerSubagentsByThread
     val reviewSelection = composerReviewSelectionByThread[threadId]
+    val reviewBlockReason = if (
+        reviewSelection != null && hostRuntimeMetadata?.runtimeTarget == "t3-server"
+    ) {
+        "Starting code review from this T3 thread isn't available in Androdex yet."
+    } else {
+        null
+    }
+    val composerCapabilityBlockReason = reviewBlockReason ?: if (isThreadRunning) {
+        turnInterruptBlockReason ?: turnStartBlockReason
+    } else {
+        turnStartBlockReason
+    }
+    val isComposerCapabilityBlocked = composerCapabilityBlockReason != null
     val reviewBaseBranchValue = reviewSelection
         ?.takeIf { it.target == ComposerReviewTarget.BASE_BRANCH }
         ?.baseBranch
