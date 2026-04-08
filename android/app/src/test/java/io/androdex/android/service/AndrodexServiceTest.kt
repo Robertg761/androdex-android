@@ -5244,6 +5244,86 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun toolUserInputCleared_onlyClearsMatchingPendingRequest() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputRequested(
+                ToolUserInputRequest(
+                    idValue = "request-1",
+                    method = "item/tool/requestUserInput",
+                    threadId = "thread-1",
+                    turnId = "turn-1",
+                    itemId = "item-1",
+                    title = "Pick a branch",
+                    message = "Select which branch to inspect.",
+                    questions = listOf(
+                        ToolUserInputQuestion(
+                            id = "branch",
+                            header = "Branch",
+                            question = "Which branch should we inspect?",
+                            options = emptyList(),
+                        )
+                    ),
+                    rawPayload = "{}",
+                )
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputRequested(
+                ToolUserInputRequest(
+                    idValue = "request-2",
+                    method = "item/tool/requestUserInput",
+                    threadId = "thread-2",
+                    turnId = "turn-2",
+                    itemId = "item-2",
+                    title = "Pick another branch",
+                    message = "Select which branch should we inspect next.",
+                    questions = listOf(
+                        ToolUserInputQuestion(
+                            id = "branch",
+                            header = "Branch",
+                            question = "Which branch should we inspect next?",
+                            options = emptyList(),
+                        )
+                    ),
+                    rawPayload = "{}",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputCleared(
+                threadId = "thread-1",
+                requestId = "request-mismatch",
+            )
+        )
+        assertEquals(
+            listOf("request-1"),
+            service.state.value.pendingToolInputsByThread["thread-1"]?.keys?.toList(),
+        )
+        assertEquals(
+            listOf("request-2"),
+            service.state.value.pendingToolInputsByThread["thread-2"]?.keys?.toList(),
+        )
+
+        service.processClientUpdate(
+            ClientUpdate.ToolUserInputCleared(
+                threadId = "thread-1",
+                requestId = "request-1",
+            )
+        )
+        assertTrue(service.state.value.pendingToolInputsByThread["thread-1"].isNullOrEmpty())
+        assertEquals(
+            listOf("request-2"),
+            service.state.value.pendingToolInputsByThread["thread-2"]?.keys?.toList(),
+        )
+    }
+
+    @Test
     fun turnCompletion_clearsOnlyPendingToolInputForCompletedTurn() = runTest {
         val repository = FakeRepository()
         val service = AndrodexService(repository, backgroundScope)

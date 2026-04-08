@@ -725,12 +725,16 @@ function describeT3ThreadCapabilities({
         : interruptReason,
     },
     userInputResponses: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported"
+        ? null
+        : interruptReason,
     },
     toolInputResponses: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported",
+      reason: companionSupportState === "supported"
+        ? null
+        : interruptReason,
     },
     checkpointRollback: {
       supported: false,

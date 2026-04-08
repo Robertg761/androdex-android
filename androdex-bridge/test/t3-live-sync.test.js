@@ -1759,7 +1759,7 @@ test("T3 adapter projects approval and user-input activity lifecycles into stabl
   });
   await nextTick();
 
-  assert.equal(responses.length, 7);
+  assert.equal(responses.length, 9);
   const approvalRequest = responses.find((entry) =>
     entry.id === "t3-approval-request:thread-123:approval-1"
   );
@@ -1775,6 +1775,12 @@ test("T3 adapter projects approval and user-input activity lifecycles into stabl
   const userInputOpened = responses.find((entry) =>
     entry.method === "item/updated" && entry.params?.itemId === "t3-user-input:thread-123:user-input-1"
   );
+  const userInputRequest = responses.find((entry) =>
+    entry.id === "t3-user-input-request:thread-123:user-input-1"
+  );
+  const userInputCleared = responses.find((entry) =>
+    entry.method === "user-input/cleared" && entry.params?.requestId === "user-input-1"
+  );
   const userInputCompleted = responses.find((entry) =>
     entry.method === "item/completed" && entry.params?.itemId === "t3-user-input:thread-123:user-input-1"
   );
@@ -1788,8 +1794,13 @@ test("T3 adapter projects approval and user-input activity lifecycles into stabl
   assert.equal(approvalCleared?.params?.threadId, "thread-123");
   assert.equal(approvalCompleted?.params?.item.status, "completed");
   assert.equal(approvalCompleted?.params?.item.title, "Approval resolved");
+  assert.equal(userInputRequest?.method, "item/tool/requestUserInput");
+  assert.equal(userInputRequest?.params?.requestId, "user-input-1");
+  assert.equal(userInputRequest?.params?.threadId, "thread-123");
+  assert.equal(userInputRequest?.params?.questions?.[0]?.id, "deploy_target");
   assert.equal(userInputOpened?.params?.item.status, "in_progress");
   assert.equal(userInputOpened?.params?.item.title, "User input requested");
+  assert.equal(userInputCleared?.params?.threadId, "thread-123");
   assert.equal(userInputCompleted?.params?.item.status, "completed");
   assert.equal(userInputCompleted?.params?.item.title, "User input submitted");
 });
@@ -2977,6 +2988,12 @@ test("T3 adapter reconnect replay does not duplicate prior approval and user-inp
   const userInputUpdatedNotifications = responses.filter((entry) =>
     entry.method === "item/updated" && entry.params?.itemId === "t3-user-input:thread-123:user-input-1"
   );
+  const userInputRequestNotifications = responses.filter((entry) =>
+    entry.id === "t3-user-input-request:thread-123:user-input-1"
+  );
+  const userInputClearedNotifications = responses.filter((entry) =>
+    entry.method === "user-input/cleared" && entry.params?.requestId === "user-input-1"
+  );
   const approvalCompletedNotifications = responses.filter((entry) =>
     entry.method === "item/completed" && entry.params?.itemId === "t3-approval:thread-123:approval-1"
   );
@@ -2992,6 +3009,8 @@ test("T3 adapter reconnect replay does not duplicate prior approval and user-inp
   ]);
   assert.equal(approvalUpdatedNotifications.length, 1);
   assert.equal(userInputUpdatedNotifications.length, 1);
+  assert.equal(userInputRequestNotifications.length, 1);
+  assert.equal(userInputClearedNotifications.length, 1);
   assert.equal(approvalCompletedNotifications.length, 1);
   assert.equal(userInputCompletedNotifications.length, 1);
   assert.equal(approvalCompletedNotifications[0].params.item.title, "Approval resolved");

@@ -161,6 +161,8 @@ function createT3ServerRuntimeAdapter({
   const liveActivityStateByThread = new Map();
   const syntheticApprovalRequestsByBridgeId = new Map();
   const syntheticApprovalBridgeIdByThreadRequest = new Map();
+  const syntheticUserInputRequestsByBridgeId = new Map();
+  const syntheticUserInputBridgeIdByThreadRequest = new Map();
   let transport = null;
   const emitAdapterLog = createStructuredRuntimeLogger({
     logEvent,
@@ -557,6 +559,20 @@ function createT3ServerRuntimeAdapter({
             turnId,
           });
         },
+        onUserInputCleared({ requestId }) {
+          emitSyntheticUserInputCleared({
+            requestId,
+            threadId,
+          });
+        },
+        onUserInputRequested({ activity: nextActivity, payload, turnId }) {
+          emitSyntheticUserInputRequest({
+            activity: nextActivity,
+            payload,
+            threadId,
+            turnId,
+          });
+        },
         threadId,
         threadActivityState: getOrCreateThreadLiveActivityState(threadId),
       })) {
@@ -771,6 +787,98 @@ function createT3ServerRuntimeAdapter({
     });
   }
 
+  function buildSyntheticUserInputRequestId({
+    threadId,
+    requestId,
+  }) {
+    return `t3-user-input-request:${threadId}:${requestId}`;
+  }
+
+  function emitSyntheticUserInputRequest({
+    activity,
+    payload,
+    threadId,
+    turnId,
+  }) {
+    const requestId = normalizeNonEmptyString(payload?.requestId);
+    const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+    if (!requestId || questions.length === 0) {
+      return;
+    }
+
+    const key = `${threadId}:${requestId}`;
+    if (syntheticUserInputBridgeIdByThreadRequest.has(key)) {
+      return;
+    }
+
+    const bridgeRequestId = buildSyntheticUserInputRequestId({
+      threadId,
+      requestId,
+    });
+    syntheticUserInputBridgeIdByThreadRequest.set(key, bridgeRequestId);
+    syntheticUserInputRequestsByBridgeId.set(bridgeRequestId, {
+      requestId,
+      threadId,
+      turnId,
+    });
+
+    emitMessage(JSON.stringify({
+      id: bridgeRequestId,
+      method: "item/tool/requestUserInput",
+      params: {
+        title: firstNonEmptyString([
+          payload?.title,
+          activity?.summary,
+        ]) || null,
+        message: firstNonEmptyString([
+          payload?.message,
+          payload?.detail,
+          activity?.summary,
+        ]) || null,
+        questions,
+        requestId,
+        threadId,
+        turnId,
+      },
+    }));
+  }
+
+  function emitSyntheticUserInputCleared({
+    requestId,
+    threadId,
+  }) {
+    if (!requestId || !threadId) {
+      return;
+    }
+    const key = `${threadId}:${requestId}`;
+    const bridgeRequestId = syntheticUserInputBridgeIdByThreadRequest.get(key);
+    if (bridgeRequestId) {
+      syntheticUserInputBridgeIdByThreadRequest.delete(key);
+      syntheticUserInputRequestsByBridgeId.delete(bridgeRequestId);
+    }
+    emitNotification("user-input/cleared", {
+      requestId,
+      threadId,
+    });
+  }
+
+  function emitOutstandingSyntheticUserInputRequest({
+    threadId,
+    thread,
+  }) {
+    const pendingUserInputs = listPendingT3UserInputs(thread);
+    if (pendingUserInputs.length === 0) {
+      return;
+    }
+    const latestPendingUserInput = pendingUserInputs[pendingUserInputs.length - 1];
+    emitSyntheticUserInputRequest({
+      activity: latestPendingUserInput,
+      payload: latestPendingUserInput.payload,
+      threadId,
+      turnId: normalizeNonEmptyString(latestPendingUserInput.turnId) || null,
+    });
+  }
+
   function createAndBindTransport() {
     const nextTransport = createT3EndpointTransport({
       endpoint: normalizedEndpoint,
@@ -933,6 +1041,10 @@ function createT3ServerRuntimeAdapter({
             threadId,
             thread: findT3Thread(snapshot, threadId),
           });
+          emitOutstandingSyntheticUserInputRequest({
+            threadId,
+            thread: findT3Thread(snapshot, threadId),
+          });
           emitRpcResult(requestId, {
             ok: true,
             resumed: true,
@@ -1007,6 +1119,67 @@ function createT3ServerRuntimeAdapter({
           emitRpcError(
             requestId,
             normalizeNonEmptyString(error?.message) || "Failed to respond to the T3 approval request."
+          );
+        });
+      return true;
+    }
+
+    if (method === "bridge/user-input/respond") {
+      void ensureSnapshotCache()
+        .then(() => {
+          const bridgeRequestId = normalizeNonEmptyString(
+            parsed?.params?.bridgeRequestId || parsed?.params?.requestId
+          );
+          if (!bridgeRequestId) {
+            throw new Error("T3 user-input response requires a bridgeRequestId.");
+          }
+
+          const pendingUserInput = syntheticUserInputRequestsByBridgeId.get(bridgeRequestId);
+          if (!pendingUserInput) {
+            throw new Error("Tool input request is no longer pending.");
+          }
+
+          const thread = findT3Thread(snapshotCache, pendingUserInput.threadId);
+          if (!thread || !isT3UserInputRequestPending(thread, pendingUserInput.requestId)) {
+            syntheticUserInputRequestsByBridgeId.delete(bridgeRequestId);
+            syntheticUserInputBridgeIdByThreadRequest.delete(
+              `${pendingUserInput.threadId}:${pendingUserInput.requestId}`
+            );
+            throw new Error("Tool input request is no longer pending.");
+          }
+
+          const answers = sanitizeBridgeUserInputAnswers(parsed?.params?.answers);
+          if (!answers || Object.keys(answers).length === 0) {
+            throw new Error("T3 user-input responses require at least one answer.");
+          }
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.user-input.respond",
+            commandId: randomUUID(),
+            threadId: pendingUserInput.threadId,
+            requestId: pendingUserInput.requestId,
+            answers,
+            createdAt: new Date().toISOString(),
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then((dispatchResult) => {
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "user_input_response_dispatched",
+              method,
+              threadId: pendingUserInput.threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              answered: true,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to respond to the T3 user-input request."
           );
         });
       return true;
@@ -1340,6 +1513,8 @@ function buildThreadActivityNotifications({
   activity,
   onApprovalCleared = () => {},
   onApprovalRequested = () => {},
+  onUserInputCleared = () => {},
+  onUserInputRequested = () => {},
   threadId,
   threadActivityState,
 }) {
@@ -1479,6 +1654,18 @@ function buildThreadActivityNotifications({
   }
 
   if (kind === "user-input.requested" || kind === "user-input.resolved") {
+    const requestId = normalizeNonEmptyString(payload.requestId);
+    if (kind === "user-input.requested") {
+      onUserInputRequested({
+        activity,
+        payload,
+        turnId,
+      });
+    } else if (requestId) {
+      onUserInputCleared({
+        requestId,
+      });
+    }
     const itemId = resolveUserInputActivityItemId({
       activity,
       threadActivityState,
@@ -1548,6 +1735,47 @@ function listPendingT3Approvals(thread) {
   }
 
   return [...openApprovalsByRequestId.values()];
+}
+
+function isT3UserInputRequestPending(thread, requestId) {
+  const normalizedRequestId = normalizeNonEmptyString(requestId);
+  if (!normalizedRequestId) {
+    return false;
+  }
+
+  return listPendingT3UserInputs(thread).some((activity) => {
+    const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+    return normalizeNonEmptyString(payload.requestId) === normalizedRequestId;
+  });
+}
+
+function listPendingT3UserInputs(thread) {
+  const openUserInputsByRequestId = new Map();
+  const activities = [...(Array.isArray(thread?.activities) ? thread.activities : [])]
+    .filter((activity) => activity && typeof activity === "object")
+    .sort(compareActivitiesBySequenceAndTime);
+
+  for (const activity of activities) {
+    const kind = normalizeNonEmptyString(activity?.kind).toLowerCase();
+    const payload = activity?.payload && typeof activity.payload === "object" ? activity.payload : {};
+    const activityRequestId = normalizeNonEmptyString(payload.requestId);
+    if (!activityRequestId) {
+      continue;
+    }
+    if (kind === "user-input.requested") {
+      openUserInputsByRequestId.set(activityRequestId, activity);
+      continue;
+    }
+    if (
+      kind === "user-input.resolved"
+      || (kind === "provider.user-input.respond.failed"
+        && isStalePendingRequestFailureDetail(payload.detail))
+    ) {
+      openUserInputsByRequestId.delete(activityRequestId);
+    }
+  }
+
+  return [...openUserInputsByRequestId.values()];
 }
 
 function dedupeActivityNotifications({
@@ -1817,6 +2045,13 @@ function normalizeApprovalRequestKind(value) {
     return "file-change";
   }
   return "";
+}
+
+function sanitizeBridgeUserInputAnswers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value;
 }
 
 function normalizeSequenceNumber(value) {

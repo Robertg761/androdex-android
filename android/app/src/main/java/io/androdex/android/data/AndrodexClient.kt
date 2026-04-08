@@ -1267,7 +1267,16 @@ class AndrodexClient(
         request: ToolUserInputRequest,
         response: ToolUserInputResponse,
     ) {
-        sendResponse(request.idValue, response.toJson())
+        if (isBridgeManagedToolUserInputRequestId(request.idValue)) {
+            sendRequest(
+                "bridge/user-input/respond",
+                JSONObject()
+                    .put("bridgeRequestId", request.idValue.toString())
+                    .put("answers", response.toJson().optJSONObject("answers"))
+            )
+        } else {
+            sendResponse(request.idValue, response.toJson())
+        }
     }
 
     suspend fun rejectToolUserInput(
@@ -2322,6 +2331,16 @@ class AndrodexClient(
                 true
             }
 
+            "user-input/cleared" -> {
+                updatesFlow.emit(
+                    ClientUpdate.ToolUserInputCleared(
+                        threadId = params?.stringOrNull("threadId", "thread_id"),
+                        requestId = params?.stringOrNull("requestId", "request_id"),
+                    )
+                )
+                true
+            }
+
             else -> false
         }
     }
@@ -3128,6 +3147,10 @@ class AndrodexClient(
 
     private fun isBridgeManagedApprovalRequestId(idValue: Any): Boolean {
         return idValue.toString().startsWith("t3-approval-request:")
+    }
+
+    private fun isBridgeManagedToolUserInputRequestId(idValue: Any): Boolean {
+        return idValue.toString().startsWith("t3-user-input-request:")
     }
 
     private fun isToolUserInputRequestMethod(method: String): Boolean {

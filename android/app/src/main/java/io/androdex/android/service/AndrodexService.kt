@@ -2053,6 +2053,29 @@ class AndrodexService(
                 }
             }
 
+            is ClientUpdate.ToolUserInputCleared -> {
+                stateFlow.update { current ->
+                    val normalizedThreadId = update.threadId?.trim()?.takeIf { it.isNotEmpty() }
+                    val normalizedRequestId = update.requestId?.trim()?.takeIf { it.isNotEmpty() }
+                    if (normalizedRequestId == null) {
+                        current
+                    } else if (normalizedThreadId != null) {
+                        current.copy(
+                            pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequest(
+                                threadId = normalizedThreadId,
+                                requestId = normalizedRequestId,
+                            )
+                        )
+                    } else {
+                        current.copy(
+                            pendingToolInputsByThread = current.pendingToolInputsByThread.removePendingToolInputRequestAcrossThreads(
+                                requestId = normalizedRequestId,
+                            )
+                        )
+                    }
+                }
+            }
+
             is ClientUpdate.TurnCompleted -> {
                 if (update.willRetry) {
                     return
@@ -3481,6 +3504,16 @@ private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInpu
     } else {
         this + (threadId to requestsForThread)
     }
+}
+
+private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputRequestAcrossThreads(
+    requestId: String,
+): Map<String, Map<String, ToolUserInputRequest>> {
+    var updated = this
+    for (threadId in keys) {
+        updated = updated.removePendingToolInputRequest(threadId, requestId)
+    }
+    return updated
 }
 
 private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputTurn(

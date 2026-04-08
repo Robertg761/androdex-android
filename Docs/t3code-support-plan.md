@@ -759,11 +759,12 @@ Status update:
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
   - `turn/interrupt` is now the first supported mutating T3 action for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
   - approval responses are now supported for companion-eligible Codex-backed T3 threads through a bridge-managed compatibility layer: resumed threads surface outstanding/open T3 approvals as synthetic Android approval requests, Android responses are translated into `thread.approval.respond`, and `approval.resolved` now clears the phone overlay by request id
+  - user-input responses are now supported for companion-eligible Codex-backed T3 threads through the same bridge-managed compatibility layer: resumed threads surface outstanding/open T3 user-input requests as synthetic Android tool-input prompts, Android responses are translated into `thread.user-input.respond`, `user-input.resolved` now clears the phone overlay by request id, and companion-supported threads advertise both `userInputResponses` and Android-facing `toolInputResponses` as available
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
   - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
-  - the remaining T3 mutating actions beyond interrupt and approval response
+  - the remaining T3 mutating actions beyond interrupt, approval response, and tool/user-input response
 
 Deliverables:
 
@@ -1003,7 +1004,7 @@ Still in progress:
 
 Not started yet:
 
-- the remaining T3 mutating command mapping beyond interrupt and approval response
+- the remaining T3 mutating command mapping beyond interrupt, approval response, and tool/user-input response
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Runtime Capability Matrix
@@ -1031,7 +1032,8 @@ Not started yet:
 - send / plan / subagent flows: not supported yet
 - interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
 - approval responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic approval requests and `thread.approval.respond`
-- tool and user-input responses: not supported yet
+- user-input responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic tool-input requests and `thread.user-input.respond`
+- tool-input responses: supported for the same companion-eligible Codex-backed threads, because Android submits those prompts through its existing tool-input response flow
 - rollback / compaction / background terminal cleanup: not supported yet
 
 Scope note:
