@@ -146,6 +146,7 @@ Important notes:
 - Androdex only trusts that desktop runtime-session descriptor when it still points at a loopback websocket and, when a backend pid is present, that pid is still alive
 - the T3 endpoint should stay loopback-only (`127.0.0.1`, `localhost`, or `::1`)
 - `androdex status` will tell you whether the bridge sees a valid T3 endpoint configuration and why attach is blocked if it is not
+- when T3 companion mode is selected, `androdex status` also shows installed desktop/CLI discovery plus any current local desktop session and descriptor trust state
 - `androdex doctor` will also try a quick reachability check against the local T3 loopback endpoint, detect an installed T3 desktop app or CLI when possible, and tell you when a desktop-session auth handoff is the remaining gap
 - if you switch back to the default host path, unset `ANDRODEX_RUNTIME_TARGET` or set it back to `codex-native`
 

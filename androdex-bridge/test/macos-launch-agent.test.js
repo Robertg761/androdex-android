@@ -6,6 +6,7 @@ const path = require("path");
 const {
   buildLaunchAgentPlist,
   getMacOSBridgeServiceStatus,
+  printMacOSBridgeServiceStatus,
   resetMacOSBridgePairing,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,
@@ -141,6 +142,23 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
       loadBridgeDeviceStateImpl() {
         return { trustedPhones: { "phone-1": "public-key-1" } };
       },
+      detectInstalledT3RuntimeImpl() {
+        return {
+          desktopAppInstalled: true,
+          desktopAppPath: "/Applications/T3 Code (Alpha).app",
+          cliInstalled: true,
+          cliPath: "/opt/homebrew/bin/t3",
+          desktopSession: {
+            runtimeSessionPath: path.join(rootDir, ".t3", "userdata", "runtime-session.json"),
+            endpoint: "ws://127.0.0.1:57816",
+            authEnabled: true,
+            authToken: "secret-token",
+            source: "runtime-session-file",
+            descriptorStatus: "trusted",
+            descriptorDetail: "",
+          },
+        };
+      },
       execFileSyncImpl(command) {
         if (command === "launchctl") {
           return "pid = 55";
@@ -162,6 +180,9 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     assert.equal(status.runtimeConfig.runtimeEndpoint, "ws://127.0.0.1:3773/ws");
     assert.equal(status.t3Availability.reasonCode, "attach-ready");
     assert.equal(status.t3Availability.endpointHost, "127.0.0.1");
+    assert.equal(status.t3Runtime.desktopAppInstalled, true);
+    assert.equal(status.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
+    assert.equal(status.t3Runtime.desktopSession.descriptorStatus, "trusted");
   });
 });
 
@@ -233,6 +254,23 @@ test("getMacOSBridgeServiceStatus explains missing T3 endpoint configuration", (
       loadBridgeDeviceStateImpl() {
         return { trustedPhones: {} };
       },
+      detectInstalledT3RuntimeImpl() {
+        return {
+          desktopAppInstalled: false,
+          desktopAppPath: "",
+          cliInstalled: false,
+          cliPath: "",
+          desktopSession: {
+            runtimeSessionPath: path.join(rootDir, ".t3", "userdata", "runtime-session.json"),
+            endpoint: "",
+            authEnabled: null,
+            authToken: "",
+            source: "desktop-log",
+            descriptorStatus: "missing",
+            descriptorDetail: "",
+          },
+        };
+      },
       execFileSyncImpl(command) {
         if (command === "launchctl") {
           return "pid = 99";
@@ -248,6 +286,77 @@ test("getMacOSBridgeServiceStatus explains missing T3 endpoint configuration", (
     assert.equal(status.runtimeConfig.runtimeEndpoint, "");
     assert.equal(status.t3Availability.reasonCode, "missing-endpoint");
     assert.equal(status.t3Availability.runtimeAttachFailure, "missing T3 websocket endpoint");
+  });
+});
+
+test("printMacOSBridgeServiceStatus includes installed T3 desktop session details when T3 is selected", () => {
+  withTempDaemonEnv(({ rootDir }) => {
+    writeBridgeStatus({
+      state: "running",
+      connectionStatus: "connected",
+      pid: 55,
+      runtimeTarget: "t3-server",
+    });
+    fs.writeFileSync(
+      path.join(rootDir, "daemon-config.json"),
+      JSON.stringify({
+        refreshEnabled: true,
+        runtimeTarget: "t3-server",
+        runtimeEndpoint: "ws://127.0.0.1:3773/ws",
+      }, null, 2)
+    );
+
+    const plistPath = path.join(rootDir, "Library", "LaunchAgents", "io.androdex.bridge.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "plist");
+
+    const messages = [];
+    const originalConsoleLog = console.log;
+    console.log = (message) => {
+      messages.push(message);
+    };
+
+    try {
+      printMacOSBridgeServiceStatus({
+        platform: "darwin",
+        env: { HOME: rootDir, ANDRODEX_DEVICE_STATE_DIR: rootDir },
+        loadBridgeDeviceStateImpl() {
+          return { trustedPhones: {} };
+        },
+        detectInstalledT3RuntimeImpl() {
+          return {
+            desktopAppInstalled: true,
+            desktopAppPath: "/Applications/T3 Code (Alpha).app",
+            cliInstalled: false,
+            cliPath: "",
+            desktopSession: {
+              runtimeSessionPath: path.join(rootDir, ".t3", "userdata", "runtime-session.json"),
+              endpoint: "ws://127.0.0.1:57816",
+              authEnabled: true,
+              authToken: "secret-token",
+              source: "runtime-session-file",
+              descriptorStatus: "trusted",
+              descriptorDetail: "",
+            },
+          };
+        },
+        execFileSyncImpl(command) {
+          if (command === "launchctl") {
+            return "pid = 55";
+          }
+          if (command === "pgrep") {
+            return "";
+          }
+          throw new Error(`unexpected command: ${command}`);
+        },
+      });
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
+    assert.ok(messages.some((message) => message.includes("T3 desktop session: ws://127.0.0.1:57816 (auth enabled)")));
+    assert.ok(messages.some((message) => message.includes("T3 desktop descriptor: trusted descriptor")));
   });
 });
 

@@ -11,6 +11,7 @@ const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { inspectT3Availability } = require("./runtime/t3-availability");
+const { detectInstalledT3Runtime } = require("./runtime/t3-discovery");
 const { printQR } = require("./pairing/qr");
 const {
   hasTrustedPhones,
@@ -168,6 +169,7 @@ function getMacOSBridgeServiceStatus({
   execFileSyncImpl = execFileSync,
   fsImpl = fs,
   loadBridgeDeviceStateImpl = loadOrCreateBridgeDeviceState,
+  detectInstalledT3RuntimeImpl = detectInstalledT3Runtime,
 } = {}) {
   assertDarwinPlatform(platform);
   const launchd = readLaunchAgentState({ env, execFileSyncImpl });
@@ -183,6 +185,9 @@ function getMacOSBridgeServiceStatus({
     runtimeEndpoint: runtimeConfig.runtimeEndpoint,
     runtimeAttachFailure: bridgeStatus?.runtimeAttachFailure,
   });
+  const t3Runtime = runtimeConfig.runtimeTarget === "t3-server"
+    ? detectInstalledT3RuntimeImpl({ fsImpl, execFileSyncImpl })
+    : null;
   return {
     label: SERVICE_LABEL,
     platform: "darwin",
@@ -196,6 +201,7 @@ function getMacOSBridgeServiceStatus({
     refreshEnabled: Boolean(daemonConfig?.refreshEnabled),
     runtimeConfig,
     t3Availability,
+    t3Runtime,
     duplicateBridgeProcesses,
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
@@ -233,6 +239,32 @@ function printMacOSBridgeServiceStatus(options = {}) {
     }
     if (status.t3Availability.runtimeAttachFailure) {
       console.log(`[androdex] T3 attach failure: ${status.t3Availability.runtimeAttachFailure}`);
+    }
+    if (status.t3Runtime) {
+      const runtimeBits = [];
+      if (status.t3Runtime.desktopAppInstalled) {
+        runtimeBits.push(`desktop app at ${status.t3Runtime.desktopAppPath}`);
+      }
+      if (status.t3Runtime.cliInstalled) {
+        runtimeBits.push(`CLI at ${status.t3Runtime.cliPath}`);
+      }
+      console.log(
+        `[androdex] T3 install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
+      );
+      const desktopSessionEndpoint = normalizeNonEmptyString(status.t3Runtime.desktopSession?.endpoint);
+      if (desktopSessionEndpoint) {
+        const authSuffix = status.t3Runtime.desktopSession?.authEnabled === true
+          ? " (auth enabled)"
+          : (status.t3Runtime.desktopSession?.authEnabled === false ? " (auth disabled)" : "");
+        console.log(`[androdex] T3 desktop session: ${desktopSessionEndpoint}${authSuffix}`);
+      }
+      const descriptorStatus = normalizeNonEmptyString(status.t3Runtime.desktopSession?.descriptorStatus);
+      if (descriptorStatus && descriptorStatus !== "missing") {
+        const descriptorLine = descriptorStatus === "trusted"
+          ? `trusted descriptor at ${status.t3Runtime.desktopSession.runtimeSessionPath}`
+          : `${descriptorStatus.replace(/-/g, " ")} descriptor at ${status.t3Runtime.desktopSession.runtimeSessionPath}`;
+        console.log(`[androdex] T3 desktop descriptor: ${descriptorLine}`);
+      }
     }
   } else {
     console.log(`[androdex] T3 attach: ${status.t3Availability?.summary || "T3 is optional and not selected."}`);

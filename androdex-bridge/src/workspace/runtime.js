@@ -13,6 +13,8 @@ const MAX_RECENT_WORKSPACES = 25;
 
 function createWorkspaceRuntime({
   config,
+  createRuntimeAdapterImpl = createRuntimeAdapter,
+  readDaemonConfigImpl = readDaemonConfig,
   onBeforeTransportShutdown = null,
   onBeforeTransportStart = null,
   onTransportClose = null,
@@ -20,6 +22,7 @@ function createWorkspaceRuntime({
   onTransportLog = null,
   onTransportMetadata = null,
   onTransportMessage = null,
+  writeDaemonConfigImpl = writeDaemonConfig,
 } = {}) {
   let activeRuntime = null;
   let pendingRuntime = null;
@@ -131,7 +134,7 @@ function createWorkspaceRuntime({
       runtimeTarget: resolveConfiguredRuntimeTarget(),
     });
 
-    const nextRuntime = createRuntimeAdapter({
+    const nextRuntime = createRuntimeAdapterImpl({
       endpoint: resolveConfiguredRuntimeEndpoint(),
       endpointAuthToken: resolveConfiguredRuntimeEndpointAuthToken(),
       env: process.env,
@@ -240,8 +243,8 @@ function createWorkspaceRuntime({
 
     config.activeCwd = normalized;
     config.recentWorkspaces = [...recentWorkspaces];
-    writeDaemonConfig({
-      ...(readDaemonConfig() || {}),
+    writeDaemonConfigImpl({
+      ...(readDaemonConfigImpl() || {}),
       ...config,
       activeCwd: normalized,
       recentWorkspaces: [...recentWorkspaces],
@@ -282,8 +285,8 @@ function createWorkspaceRuntime({
       },
     };
     config.t3ReplayCursors = nextReplayCursors;
-    writeDaemonConfig({
-      ...(readDaemonConfig() || {}),
+    writeDaemonConfigImpl({
+      ...(readDaemonConfigImpl() || {}),
       ...config,
       t3ReplayCursors: nextReplayCursors,
     });
