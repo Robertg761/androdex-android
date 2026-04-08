@@ -1124,10 +1124,36 @@ class AndrodexService(
             )
         }
         refreshSubagentMessages()
+        reconcileSelectedThreadWorkspaceAfterThreadListRefresh(threadsById)
         if (stateFlow.value.pendingNotificationOpenThreadId != null) {
             scope.launch {
                 routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
             }
+        }
+    }
+
+    private fun reconcileSelectedThreadWorkspaceAfterThreadListRefresh(
+        threadsById: Map<String, ThreadSummary>,
+    ) {
+        val snapshot = stateFlow.value
+        val selectedThreadId = snapshot.selectedThreadId?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (isSelectedThreadLoadInFlight(snapshot)) {
+            return
+        }
+        val selectedThread = threadsById[selectedThreadId] ?: return
+        val authoritativeWorkspacePath = selectedThread.cwd?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (authoritativeWorkspacePath == snapshot.activeWorkspacePath) {
+            return
+        }
+        val expectedContextRevision = threadSessionContextRevision.get()
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            if (expectedContextRevision != threadSessionContextRevision.get()) {
+                return@launch
+            }
+            if (stateFlow.value.selectedThreadId != selectedThreadId || isSelectedThreadLoadInFlight()) {
+                return@launch
+            }
+            openThread(selectedThreadId, forceRefresh = true)
         }
     }
 

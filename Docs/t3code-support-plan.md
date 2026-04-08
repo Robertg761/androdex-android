@@ -786,6 +786,7 @@ Status update:
   - threads using a project-root workspace fallback now surface an explicit Android timeline notice so the phone does not silently present a remapped project root as if it were the original exact worktree
   - `openThread()` now re-checks the authoritative `thread/read` workspace after hydration, merges that corrected thread summary back into service state, and performs a second explicit workspace activation plus refresh when the loaded T3 thread resolves to a different local project than the stale list snapshot suggested
   - the sidebar now preserves per-thread workspace availability for grouping, so unresolved T3 project groups stay discoverable but stop advertising a dead "create thread in this project" action while project-root-fallback groups remain creatable
+  - background `thread/list` refreshes now also reconcile the currently selected thread's authoritative workspace by reusing the hardened `openThread(..., forceRefresh = true)` path when a T3 thread drifts to a different local project, so open threads self-correct after refresh instead of waiting for a manual reopen
 - landed stale-action reconciliation on Android for desktop-resolved approvals, tool-input requests, and interrupts:
   - stale Android actions now clear the matching stale pending/running state locally
   - selected threads force a fresh hydrate after stale approval/tool-input/interrupt failures so the phone catches back up to host state
@@ -979,6 +980,7 @@ Completed so far:
 - T3 summaries, reads, and resume responses now also preserve workspace remap details end to end, including whether the bridge is using the recorded worktree path or a project `workspaceRoot` fallback and whether each underlying local path still resolves
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 - Android thread opening now reconciles stale list-side workspace mappings against the authoritative `thread/read` summary, so selecting a T3 thread can still switch the device-visible local project after hydration if the snapshot summary was out of date
+- background Android thread-list refresh now also repairs the selected thread's workspace mapping when the authoritative summary drifts to a different local project, reusing the same safe open-thread reconciliation path instead of leaving the active workspace stale until the next manual reopen
 - Android now also gates project-level "new chat" actions off runtime-target metadata, disabling home/sidebar creation affordances for `t3-server` and throwing a clear service-side error before any `thread/start` request is attempted
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay

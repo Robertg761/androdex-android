@@ -3880,6 +3880,91 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun selectedThread_refreshReconcilesAuthoritativeWorkspaceAfterThreadListDrift() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "project-a", true),
+                    WorkspacePathSummary("/tmp/project-b", "project-b", false),
+                )
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Selected", null, "/tmp/project-a", 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-a",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Project A",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-a",
+                        itemId = "assistant-a",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Selected", null, "/tmp/project-b", 2_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-b",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Project B",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-b",
+                        itemId = "assistant-b",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-b",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.loadWorkspaceState()
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Selected", null, "/tmp/project-a", 1_000L, 1_000L))
+            )
+        )
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Selected", null, "/tmp/project-b", 2_000L, 2_000L))
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("/tmp/project-b"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-b", service.state.value.activeWorkspacePath)
+        assertEquals(
+            listOf("Project B"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+    }
+
+    @Test
     fun planUpdates_mergeStreamingAndStructuredStateIntoSingleRow() = runTest {
         val service = AndrodexService(FakeRepository(), backgroundScope)
         advanceUntilIdle()
