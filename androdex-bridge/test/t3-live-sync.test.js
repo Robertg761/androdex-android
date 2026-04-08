@@ -429,7 +429,7 @@ test("T3 adapter emits structured gating logs for rejected read-only actions", a
         threadId: "thread-123",
       },
     }));
-  }, /read-only/i);
+  }, /does not support "turn\/start" yet/i);
 
   assert.deepEqual(
     logEntries.find((entry) =>

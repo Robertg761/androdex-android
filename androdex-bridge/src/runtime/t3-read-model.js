@@ -683,6 +683,9 @@ function describeT3ThreadCapabilities({
   const liveUpdatesReason = companionSupportReason
     || "The read-only T3 adapter only attaches live updates for supported Codex-backed threads whose local workspace mapping still resolves.";
   const readOnlyMutationReason = "The read-only T3 adapter milestone has not enabled mutating thread actions yet.";
+  const interruptReason = companionSupportState === "supported"
+    ? null
+    : companionSupportReason || readOnlyMutationReason;
 
   return {
     readOnly: true,
@@ -712,8 +715,8 @@ function describeT3ThreadCapabilities({
       reason: readOnlyMutationReason,
     },
     turnInterrupt: {
-      supported: false,
-      reason: readOnlyMutationReason,
+      supported: companionSupportState === "supported",
+      reason: interruptReason,
     },
     approvalResponses: {
       supported: false,

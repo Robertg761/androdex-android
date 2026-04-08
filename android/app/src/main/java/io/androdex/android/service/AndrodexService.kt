@@ -1483,19 +1483,20 @@ class AndrodexService(
         val previousState = stateFlow.value
         val previousWorkspacePath = previousState.activeWorkspacePath
         var workspaceSwitched = false
+        var authoritativeWorkspaceSwitched = false
         return runCatching {
             workspaceSwitched = ensureWorkspaceActivated(
                 path = thread.cwd,
                 incomingThreadId = threadId,
             )
-            repository.loadThread(threadId)
+            val result = repository.loadThread(threadId)
+            authoritativeWorkspaceSwitched = openNotificationThread(threadId, result)
         }.fold(
-            onSuccess = { result ->
-                openNotificationThread(threadId, result)
+            onSuccess = {
                 NotificationRouteResult.Opened
             },
             onFailure = { error ->
-                if (workspaceSwitched) {
+                if (workspaceSwitched || authoritativeWorkspaceSwitched) {
                     runCatching {
                         restoreWorkspaceSwitchFailure(
                             previousState = previousState,
@@ -1517,26 +1518,33 @@ class AndrodexService(
     private suspend fun openNotificationThread(
         threadId: String,
         result: ThreadLoadResult,
-    ) {
-        ensureWorkspaceActivated(
+    ): Boolean {
+        val authoritativeWorkspaceSwitched = ensureWorkspaceActivated(
             path = result.thread?.cwd,
             incomingThreadId = threadId,
         )
+        val effectiveResult = if (authoritativeWorkspaceSwitched) {
+            threadCollectionRequestMutex.withLock {
+                repository.loadThread(threadId)
+            }
+        } else {
+            result
+        }
         val pendingFocusedTurnId = stateFlow.value.pendingNotificationOpenTurnId
         val turnIdToInvalidatePendingToolInputs =
-            pendingToolInputTurnToInvalidateAfterThreadRecovery(result.runSnapshot)
+            pendingToolInputTurnToInvalidateAfterThreadRecovery(effectiveResult.runSnapshot)
         stateFlow.update { current ->
-            val updatedThreads = mergeRecoveredNotificationThread(current.threads, result.thread)
+            val updatedThreads = mergeRecoveredNotificationThread(current.threads, effectiveResult.thread)
             current.copy(
                 threads = updatedThreads,
                 selectedThreadId = threadId,
-                selectedThreadTitle = result.thread?.title ?: current.selectedThreadTitle,
+                selectedThreadTitle = effectiveResult.thread?.title ?: current.selectedThreadTitle,
                 threadTimelineStateByThread = current.threadTimelineStateByThread.withThreadMessages(
                     threadId = threadId,
                     rawMessages = mergeThreadMessages(
                         threadId = threadId,
                         existing = current.threadMessages(threadId),
-                        incoming = result.messages,
+                        incoming = effectiveResult.messages,
                         keepStreamingRows = isThreadConsideredRunning(threadId, current),
                     ),
                 ),
@@ -1544,7 +1552,7 @@ class AndrodexService(
                 hydratedThreadVersions = current.hydratedThreadVersions + (
                     threadId to resolveHydratedThreadVersion(
                         threadId = threadId,
-                        thread = result.thread,
+                        thread = effectiveResult.thread,
                         snapshot = current,
                     )
                 ),
@@ -1564,7 +1572,8 @@ class AndrodexService(
                 failedThreadIds = current.failedThreadIds - threadId,
             )
         }
-        syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
+        syncThreadRunStateFromSnapshot(threadId, effectiveResult.runSnapshot)
+        return authoritativeWorkspaceSwitched
     }
 
     private fun finalizeMissingNotificationThread(threadId: String) {

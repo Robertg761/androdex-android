@@ -5,7 +5,7 @@
 // Depends on: ../codex/transport, ./method-policy, ./t3-protocol, ./t3-suitability, ./target-config
 
 const { createCodexTransport } = require("../codex/transport");
-const { createHash } = require("crypto");
+const { createHash, randomUUID } = require("crypto");
 const {
   applyT3EventsToSnapshot,
   buildT3ThreadListResult,
@@ -820,6 +820,82 @@ function createT3ServerRuntimeAdapter({
       return true;
     }
 
+    if (method === "turn/interrupt") {
+      void ensureSnapshotCache()
+        .then((snapshot) => {
+          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          if (!threadId) {
+            throw new Error("T3 turn interrupt requires a threadId.");
+          }
+
+          const thread = findT3Thread(snapshot, threadId);
+          if (!thread) {
+            throw new Error(`T3 thread not found: ${threadId}`);
+          }
+
+          const threadCapabilities = describeT3ThreadCapabilities({
+            snapshot,
+            thread,
+          });
+          if (!threadCapabilities?.turnInterrupt?.supported) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "interrupt_unsupported",
+              method,
+              threadId,
+              companionSupportState: normalizeNonEmptyString(
+                threadCapabilities?.companionSupportState
+              ) || null,
+            });
+            emitRpcError(
+              requestId,
+              normalizeNonEmptyString(threadCapabilities?.turnInterrupt?.reason)
+                || "This T3 thread does not support interrupt from Androdex yet."
+            );
+            return;
+          }
+
+          const requestedTurnId = normalizeNonEmptyString(parsed?.params?.turnId);
+          if (!isT3InterruptCurrentlyAvailable(thread, requestedTurnId)) {
+            emitAdapterLog("action_gated", {
+              reasonCode: "interrupt_not_running",
+              method,
+              threadId,
+            });
+            emitRpcError(requestId, "No active run is available to stop.");
+            return;
+          }
+
+          return transport.request("orchestration.dispatchCommand", {
+            type: "thread.turn.interrupt",
+            commandId: randomUUID(),
+            threadId,
+            ...(requestedTurnId ? { turnId: requestedTurnId } : {}),
+            createdAt: new Date().toISOString(),
+          }, {
+            timeoutMs: T3_ATTACH_TIMEOUT_MS,
+          }).then((dispatchResult) => {
+            emitAdapterLog("command_dispatched", {
+              reasonCode: "turn_interrupt_dispatched",
+              method,
+              threadId,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+            emitRpcResult(requestId, {
+              ok: true,
+              interrupted: true,
+              sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+            });
+          });
+        })
+        .catch((error) => {
+          emitRpcError(
+            requestId,
+            normalizeNonEmptyString(error?.message) || "Failed to interrupt the T3 run."
+          );
+        });
+      return true;
+    }
+
     return false;
   }
 
@@ -955,6 +1031,17 @@ function resolveT3ResumeSupport(snapshot, threadId) {
     ok: true,
     threadCapabilities,
   };
+}
+
+function isT3InterruptCurrentlyAvailable(thread, requestedTurnId) {
+  const normalizedRequestedTurnId = normalizeNonEmptyString(requestedTurnId);
+  const latestTurnId = normalizeNonEmptyString(thread?.latestTurn?.turnId);
+  const latestTurnState = normalizeNonEmptyString(thread?.latestTurn?.state).toLowerCase();
+  const sessionStatus = normalizeNonEmptyString(thread?.session?.status).toLowerCase();
+  if (normalizedRequestedTurnId && latestTurnId && normalizedRequestedTurnId !== latestTurnId) {
+    return false;
+  }
+  return latestTurnState === "running" || sessionStatus === "running";
 }
 
 function buildTurnLifecycleNotifications({

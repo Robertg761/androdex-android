@@ -10,6 +10,7 @@ const T3_SERVER_READ_ONLY_METHODS = new Set([
   "thread/list",
   "thread/read",
   "thread/resume",
+  "turn/interrupt",
   "model/list",
   "collaborationmode/list",
 ]);
@@ -45,7 +46,7 @@ function buildRuntimeTargetMethodRejectionMessage({ targetKind, method }) {
   }
 
   const normalizedMethod = normalizeRuntimeMethod(method) || "unknown";
-  return `The active T3 runtime is currently read-only. "${normalizedMethod}" will stay disabled until the mutating adapter phase lands.`;
+  return `The active T3 runtime does not support "${normalizedMethod}" yet. It will stay disabled until the corresponding T3 adapter slice lands.`;
 }
 
 module.exports = {

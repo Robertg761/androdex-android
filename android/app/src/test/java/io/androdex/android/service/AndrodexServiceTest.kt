@@ -4504,6 +4504,86 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun notificationOpen_reloadsThreadAfterAuthoritativeWorkspaceCorrection() = runTest {
+        val repository = FakeRepository().apply {
+            recentState = WorkspaceRecentState(
+                activeCwd = "/tmp/project-a",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/tmp/project-a", "project-a", true),
+                    WorkspacePathSummary("/tmp/project-b", "project-b", false),
+                )
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Thread 1", null, "/tmp/project-b", 1_000L, 1_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-a",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Loaded from stale workspace",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-a",
+                        itemId = "assistant-a",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-a",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+            queuedLoadThreadResults += ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Thread 1", null, "/tmp/project-b", 2_000L, 2_000L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-b",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Loaded from corrected workspace",
+                        createdAtEpochMs = 2_000L,
+                        turnId = "turn-b",
+                        itemId = "assistant-b",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-b",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Thread 1", null, "/tmp/project-a", 1_000L, 1_000L))
+            )
+        )
+        service.processClientUpdate(ClientUpdate.Connection(ConnectionStatus.CONNECTED))
+        advanceUntilIdle()
+
+        service.handleNotificationOpen("thread-1", null)
+        advanceUntilIdle()
+        service.routePendingNotificationOpenIfPossible(refreshIfNeeded = false)
+        advanceUntilIdle()
+
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+        assertEquals(listOf("/tmp/project-a", "/tmp/project-b"), repository.activatedWorkspaces)
+        assertEquals("/tmp/project-b", service.state.value.activeWorkspacePath)
+        assertEquals(
+            listOf("Loaded from corrected workspace"),
+            service.state.value.timelineByThread["thread-1"].orEmpty().map { it.text },
+        )
+    }
+
+    @Test
     fun notificationOpen_showsMissingThreadPromptAndFallsBackToLiveThread() = runTest {
         val repository = FakeRepository().apply {
             loadThreadError = IllegalStateException("thread not found")

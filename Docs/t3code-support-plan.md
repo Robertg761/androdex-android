@@ -739,11 +739,11 @@ Deliverables:
 Status update:
 
 - in progress
-- landed the read-only T3 attach milestone foundation:
+- landed the T3 companion foundation:
   - explicit `t3-server` runtime target support
   - loopback-only suitability checks for protocol/auth/state-root/method presence
   - readiness-gated workspace activation
-  - bridge-managed read-only gating for mutating T3 actions
+  - bridge-managed gating for unsupported T3 actions
   - initial `orchestration.getSnapshot` bootstrap
   - local synthesis of `thread/list`, `thread/read`, and `thread/resume` from the T3 snapshot
   - Effect RPC transport alignment for real T3 request/exit/chunk envelopes
@@ -757,11 +757,12 @@ Status update:
   - when a thread's recorded `worktreePath` no longer resolves locally but its project's `workspaceRoot` still does, the bridge now keeps that thread companion-eligible on the read side using the project root as an explicit fallback instead of collapsing it into the unresolved-workspace bucket
   - Android now explicitly gates project-level thread creation for `t3-server`, so home/sidebar affordances and `createThread()` no longer rely on a bridge-side `thread/start` rejection to enforce the read-only milestone
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
+  - `turn/interrupt` is now the first supported mutating T3 action for companion-eligible Codex-backed threads, dispatched through `orchestration.dispatchCommand` with bridge-side stale-run rejection when the synchronized T3 snapshot already shows no active run
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
   - full duplicate suppression and replay idempotency coverage across broader event shapes outside the current resumed-thread title/assistant/plan/task/tool/approval/user-input surface
   - deeper workspace/project remapping and orphaned-thread repair flows beyond the new capability metadata surface and project-root read fallback
-  - mutating T3 actions
+  - the rest of the mutating T3 actions beyond interrupt
 
 Deliverables:
 
@@ -784,8 +785,9 @@ Status update:
   - pending tool-input cards now surface capability gating reasons and disable submission when the bridge marks tool-input responses unsupported
   - Android service actions now hard-reject blocked `send`, `review`, `interrupt`, `approval`, tool-input response, and rollback requests using the same per-thread capability reasons shown in the UI
   - threads using a project-root workspace fallback now surface an explicit Android timeline notice so the phone does not silently present a remapped project root as if it were the original exact worktree
-  - `openThread()` now re-checks the authoritative `thread/read` workspace after hydration, merges that corrected thread summary back into service state, and performs a second explicit workspace activation plus refresh when the loaded T3 thread resolves to a different local project than the stale list snapshot suggested
-  - the sidebar now preserves per-thread workspace availability for grouping, so unresolved T3 project groups stay discoverable but stop advertising a dead "create thread in this project" action while project-root-fallback groups remain creatable
+- `openThread()` now re-checks the authoritative `thread/read` workspace after hydration, merges that corrected thread summary back into service state, and performs a second explicit workspace activation plus refresh when the loaded T3 thread resolves to a different local project than the stale list snapshot suggested
+- notification-driven thread opens now use the same two-stage authoritative workspace correction path, reloading the thread after a corrected workspace switch so push/deep-link opens do not stop on stale list-side project context
+- the sidebar now preserves per-thread workspace availability for grouping, so unresolved T3 project groups stay discoverable but stop advertising a dead "create thread in this project" action while project-root-fallback groups remain creatable
   - background `thread/list` refreshes now also reconcile the currently selected thread's authoritative workspace by reusing the hardened `openThread(..., forceRefresh = true)` path when a T3 thread drifts to a different local project, so open threads self-correct after refresh instead of waiting for a manual reopen
 - landed stale-action reconciliation on Android for desktop-resolved approvals, tool-input requests, and interrupts:
   - stale Android actions now clear the matching stale pending/running state locally
@@ -981,10 +983,12 @@ Completed so far:
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 - Android thread opening now reconciles stale list-side workspace mappings against the authoritative `thread/read` summary, so selecting a T3 thread can still switch the device-visible local project after hydration if the snapshot summary was out of date
 - background Android thread-list refresh now also repairs the selected thread's workspace mapping when the authoritative summary drifts to a different local project, reusing the same safe open-thread reconciliation path instead of leaving the active workspace stale until the next manual reopen
+- notification-open recovery now also repairs stale list-side workspace mappings by reloading under the authoritative `thread/read` project after a corrected workspace switch
 - Android now also gates project-level "new chat" actions off runtime-target metadata, disabling home/sidebar creation affordances for `t3-server` and throwing a clear service-side error before any `thread/start` request is attempted
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity
+- companion-eligible T3 Codex threads now advertise `turn/interrupt` support in bridge capability metadata, and the bridge dispatches `turn/interrupt` through `orchestration.dispatchCommand` while rejecting obviously stale no-active-run interrupts before they hit the host runtime
 - Android bridge status now surfaces runtime sync observability from bridge metadata, including attach/subscription state, protocol/auth mode, endpoint host, snapshot/replay progress, duplicate suppression counters, and attach failure details
 - the host bridge now emits structured T3 adapter diagnostics for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only gating, using safe reason codes plus hashed state-root identity instead of raw local paths
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
@@ -997,7 +1001,7 @@ Still in progress:
 
 Not started yet:
 
-- T3 mutating command mapping
+- the remaining T3 mutating command mapping beyond interrupt
 - end-to-end smoke hardening for T3 reconnect and cross-repo continuity
 
 ## Runtime Capability Matrix
@@ -1023,7 +1027,7 @@ Not started yet:
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
 - missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
 - send / plan / subagent flows: not supported yet
-- interrupt: not supported yet
+- interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
 - approval responses: not supported yet
 - tool and user-input responses: not supported yet
 - rollback / compaction / background terminal cleanup: not supported yet

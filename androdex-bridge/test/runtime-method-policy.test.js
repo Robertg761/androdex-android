@@ -12,12 +12,14 @@ const { createRuntimeAdapter } = require("../src/runtime/adapter");
 class FakeWebSocket {
   static OPEN = 1;
   static CONNECTING = 0;
+  static instances = [];
 
   constructor(url) {
     this.url = url;
     this.readyState = FakeWebSocket.CONNECTING;
     this.handlers = new Map();
     this.sentMessages = [];
+    FakeWebSocket.instances.push(this);
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN;
       this.handlers.get("open")?.();
@@ -131,6 +133,20 @@ class FakeWebSocket {
         })));
       });
     }
+    if (parsed.tag === "orchestration.dispatchCommand") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              sequence: 8,
+            },
+          },
+        })));
+      });
+    }
   }
 
   close() {
@@ -217,6 +233,111 @@ class UnsupportedThreadFakeWebSocket extends FakeWebSocket {
         })));
       });
     }
+  }
+}
+
+class InterruptibleThreadFakeWebSocket extends FakeWebSocket {
+  send(message) {
+    this.sentMessages.push(message);
+    const parsed = JSON.parse(message);
+    if (parsed.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (parsed.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              snapshotSequence: 7,
+              updatedAt: "2026-04-07T12:00:00.000Z",
+              projects: [
+                {
+                  id: "project-1",
+                  title: "Project One",
+                  workspaceRoot: "/tmp",
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:30:00.000Z",
+                  deletedAt: null,
+                },
+              ],
+              threads: [
+                {
+                  id: "thread-123",
+                  projectId: "project-1",
+                  title: "Interruptible thread",
+                  modelSelection: {
+                    provider: "codex",
+                    model: "gpt-5.4",
+                  },
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: "/tmp",
+                  latestTurn: {
+                    turnId: "turn-1",
+                    state: "running",
+                    requestedAt: "2026-04-07T11:10:00.000Z",
+                    startedAt: "2026-04-07T11:10:05.000Z",
+                    completedAt: null,
+                    assistantMessageId: null,
+                  },
+                  createdAt: "2026-04-07T11:00:00.000Z",
+                  updatedAt: "2026-04-07T11:11:00.000Z",
+                  archivedAt: null,
+                  deletedAt: null,
+                  messages: [
+                    {
+                      id: "msg-1",
+                      role: "user",
+                      text: "Hello",
+                      turnId: "turn-1",
+                      streaming: false,
+                      createdAt: "2026-04-07T11:10:00.000Z",
+                      updatedAt: "2026-04-07T11:10:00.000Z",
+                    },
+                  ],
+                  proposedPlans: [],
+                  activities: [],
+                  checkpoints: [],
+                  session: {
+                    status: "running",
+                    activeTurnId: "turn-1",
+                    updatedAt: "2026-04-07T11:10:10.000Z",
+                  },
+                },
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    super.send(message);
   }
 }
 
@@ -319,6 +440,10 @@ test("T3 read-only policy allows snapshot/bootstrap-safe read methods", () => {
     true
   );
   assert.equal(
+    isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "turn/interrupt" }),
+    true
+  );
+  assert.equal(
     isRuntimeTargetMethodAllowed({ targetKind: "t3-server", method: "model/list" }),
     true
   );
@@ -334,7 +459,7 @@ test("T3 read-only policy rejects mutating methods with a clear message", () => 
       targetKind: "t3-server",
       method: "turn/start",
     }),
-    /currently read-only/i
+    /does not support "turn\/start" yet/i
   );
 });
 
@@ -383,7 +508,87 @@ test("T3 runtime adapter blocks mutating methods before they cross the transport
       method: "turn/start",
       params: { threadId: "thread-123" },
     })),
-    /currently read-only/i
+    /does not support "turn\/start" yet/i
+  );
+});
+
+test("T3 runtime adapter dispatches turn/interrupt for companion-supported threads", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: InterruptibleThreadFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-turn-interrupt",
+    method: "turn/interrupt",
+    params: {
+      threadId: "thread-123",
+      turnId: "turn-1",
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-turn-interrupt");
+  assert.equal(responses[0].result.ok, true);
+  assert.equal(responses[0].result.interrupted, true);
+  assert.equal(responses[0].result.sequence, 8);
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatched = JSON.parse(socket.sentMessages.at(-1));
+  assert.equal(dispatched.tag, "orchestration.dispatchCommand");
+  assert.equal(dispatched.payload.type, "thread.turn.interrupt");
+  assert.equal(dispatched.payload.threadId, "thread-123");
+  assert.equal(dispatched.payload.turnId, "turn-1");
+  assert.match(dispatched.payload.commandId, /^[0-9a-f-]{36}$/i);
+});
+
+test("T3 runtime adapter rejects turn/interrupt when the synchronized thread is no longer interruptible", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: UnsupportedThreadFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-turn-interrupt",
+    method: "turn/interrupt",
+    params: {
+      threadId: "thread-unsupported",
+      turnId: "turn-1",
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-turn-interrupt");
+  assert.match(
+    responses[0].error?.message || "",
+    /codex-backed threads|does not support interrupt/i
   );
 });
 
