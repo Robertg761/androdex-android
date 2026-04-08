@@ -314,6 +314,33 @@ class AndrodexFeatureStateTest {
     }
 
     @Test
+    fun homeRoute_disablesCreateThreadForReadOnlyT3Runtime() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            hasLoadedThreadList = true,
+            activeWorkspacePath = "/tmp/project-a",
+            hostRuntimeMetadata = HostRuntimeMetadata(
+                runtimeTarget = "t3-server",
+                runtimeTargetDisplayName = "T3 Server",
+            ),
+        )
+
+        val homeState = state.toHomeScreenUiState()
+
+        assertFalse(homeState.createThreadSupported)
+        assertEquals(
+            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
+            homeState.createThreadBlockedReason,
+        )
+        assertFalse(homeState.threadList.createThreadSupported)
+        assertEquals(homeState.createThreadBlockedReason, homeState.threadList.createThreadBlockedReason)
+        assertEquals(
+            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
+            homeState.threadList.emptyState?.message,
+        )
+    }
+
+    @Test
     fun homeRoute_marksRepairAndUpdateBridgeStatesWithWarningTone() {
         val repairState = AndrodexUiState(
             connectionStatus = ConnectionStatus.RECONNECT_REQUIRED,

@@ -755,6 +755,7 @@ Status update:
   - replay/idempotency coverage now also explicitly proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
   - `thread/list`, `thread/read`, and `thread/resume` now expose explicit bridge capability metadata for supported, unsupported-provider, unresolved-workspace, and project-root-fallback T3 threads instead of relying on preview text alone
   - when a thread's recorded `worktreePath` no longer resolves locally but its project's `workspaceRoot` still does, the bridge now keeps that thread companion-eligible on the read side using the project root as an explicit fallback instead of collapsing it into the unresolved-workspace bucket
+  - Android now explicitly gates project-level thread creation for `t3-server`, so home/sidebar affordances and `createThread()` no longer rely on a bridge-side `thread/start` rejection to enforce the read-only milestone
   - structured adapter logging is now in place for attach validation, snapshot bootstrap, replay recovery, reconnect/resubscribe flow, and read-only action gating
 - not landed yet:
   - broader Android-visible live thread/timeline push semantics beyond the current resumed-thread plan/task/tool/approval/user-input/title/assistant subset
@@ -784,6 +785,7 @@ Status update:
   - Android service actions now hard-reject blocked `send`, `review`, `interrupt`, `approval`, tool-input response, and rollback requests using the same per-thread capability reasons shown in the UI
   - threads using a project-root workspace fallback now surface an explicit Android timeline notice so the phone does not silently present a remapped project root as if it were the original exact worktree
   - `openThread()` now re-checks the authoritative `thread/read` workspace after hydration, merges that corrected thread summary back into service state, and performs a second explicit workspace activation plus refresh when the loaded T3 thread resolves to a different local project than the stale list snapshot suggested
+  - the sidebar now preserves per-thread workspace availability for grouping, so unresolved T3 project groups stay discoverable but stop advertising a dead "create thread in this project" action while project-root-fallback groups remain creatable
 - landed stale-action reconciliation on Android for desktop-resolved approvals, tool-input requests, and interrupts:
   - stale Android actions now clear the matching stale pending/running state locally
   - selected threads force a fresh hydrate after stale approval/tool-input/interrupt failures so the phone catches back up to host state
@@ -977,6 +979,7 @@ Completed so far:
 - T3 summaries, reads, and resume responses now also preserve workspace remap details end to end, including whether the bridge is using the recorded worktree path or a project `workspaceRoot` fallback and whether each underlying local path still resolves
 - Android now consumes that per-thread capability metadata in the timeline UI and service layer, disabling blocked composer/tool-input/rollback flows and surfacing the bridge-provided reason before mutating requests are attempted
 - Android thread opening now reconciles stale list-side workspace mappings against the authoritative `thread/read` summary, so selecting a T3 thread can still switch the device-visible local project after hydration if the snapshot summary was out of date
+- Android now also gates project-level "new chat" actions off runtime-target metadata, disabling home/sidebar creation affordances for `t3-server` and throwing a clear service-side error before any `thread/start` request is attempted
 - replay/idempotency coverage now also proves resumed-thread `turn/started` and `turn/completed` notifications stay single-emission across duplicate live delivery and reconnect replay
 - replay/idempotency coverage now also proves resumed-thread assistant-message, title-update, approval-activity, and user-input-activity notifications stay single-emission across duplicate live delivery and reconnect replay
 - resumed supported T3 Codex threads now also receive bridge-managed approval and user-input activity cards through the same Android item protocol used for other live execution activity

@@ -34,6 +34,7 @@ import io.androdex.android.model.QueuedTurnDraft
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.SkillMetadata
 import io.androdex.android.model.capabilityBlockReason
+import io.androdex.android.model.createThreadBlockReason
 import io.androdex.android.model.ThreadCapabilityAction
 import io.androdex.android.model.ThreadSummary
 import io.androdex.android.model.ToolUserInputQuestion
@@ -127,6 +128,8 @@ internal data class HomeScreenUiState(
     val hostAccount: HostAccountUiState?,
     val bridgeStatus: BridgeStatusUiState,
     val activeWorkspacePath: String?,
+    val createThreadSupported: Boolean = true,
+    val createThreadBlockedReason: String? = null,
     val threadList: ThreadListPaneUiState,
     val projectPicker: ProjectPickerUiState?,
 )
@@ -182,6 +185,8 @@ internal data class ThreadListPaneUiState(
     val isLoading: Boolean,
     val showLoadingOverlay: Boolean,
     val emptyState: ThreadListEmptyStateUiState?,
+    val createThreadSupported: Boolean = true,
+    val createThreadBlockedReason: String? = null,
 )
 
 internal data class ThreadListItemUiState(
@@ -190,6 +195,7 @@ internal data class ThreadListItemUiState(
     val preview: String?,
     val projectName: String,
     val projectPath: String?,
+    val projectPathAvailable: Boolean,
     val updatedLabel: String?,
     val runState: ThreadRunBadgeUiState?,
     val isForked: Boolean,
@@ -486,6 +492,7 @@ private fun AndrodexUiState.toFirstPairingOnboardingUiState(): FirstPairingOnboa
 }
 
 internal fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long = System.currentTimeMillis()): HomeScreenUiState {
+    val threadList = toThreadListPaneUiState(nowEpochMs)
     return HomeScreenUiState(
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),
@@ -493,12 +500,16 @@ internal fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long = System.curre
         hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         bridgeStatus = toBridgeStatusUiState(),
         activeWorkspacePath = activeWorkspacePath,
-        threadList = toThreadListPaneUiState(nowEpochMs),
+        createThreadSupported = threadList.createThreadSupported,
+        createThreadBlockedReason = threadList.createThreadBlockedReason,
+        threadList = threadList,
         projectPicker = toProjectPickerUiState(),
     )
 }
 
 private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadListPaneUiState {
+    val createThreadBlockedReason = hostRuntimeMetadata.createThreadBlockReason()
+    val createThreadSupported = createThreadBlockedReason == null
     val items = threads.map { thread ->
         ThreadListItemUiState(
             id = thread.id,
@@ -506,6 +517,8 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             preview = thread.preview,
             projectName = thread.projectName,
             projectPath = thread.cwd?.trim()?.takeIf { it.isNotEmpty() },
+            projectPathAvailable = thread.threadCapabilities?.workspaceAvailable
+                ?: (thread.cwd?.trim()?.isNotEmpty() == true),
             updatedLabel = thread.updatedAtEpochMs?.let { relativeTimeLabel(it, nowEpochMs) },
             runState = threadRunBadge(thread.id),
             isForked = thread.forkedFromThreadId != null,
@@ -518,6 +531,8 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
             title = "No conversations yet",
             message = if (activeWorkspacePath == null) {
                 "Choose a project to start chatting"
+            } else if (!createThreadSupported) {
+                createThreadBlockedReason
             } else {
                 "Use the active project to start a chat."
             },
@@ -533,6 +548,8 @@ private fun AndrodexUiState.toThreadListPaneUiState(nowEpochMs: Long): ThreadLis
         isLoading = isLoading,
         showLoadingOverlay = showLoadingOverlay,
         emptyState = emptyState,
+        createThreadSupported = createThreadSupported,
+        createThreadBlockedReason = createThreadBlockedReason,
     )
 }
 

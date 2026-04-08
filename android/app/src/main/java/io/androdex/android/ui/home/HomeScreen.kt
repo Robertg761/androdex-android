@@ -229,6 +229,7 @@ private fun HomeHeroSection(
     onOpenProjects: () -> Unit,
 ) {
     val hasWorkspace = state.activeWorkspacePath != null
+    val canCreateThread = hasWorkspace && state.createThreadSupported
     val geometry = RemodexTheme.geometry
 
     Column(
@@ -264,7 +265,11 @@ private fun HomeHeroSection(
             )
             Text(
                 text = if (hasWorkspace) {
-                    "Jump back into recent work in ${displayName(state.activeWorkspacePath)} or start a fresh thread without leaving the home view."
+                    if (state.createThreadSupported) {
+                        "Jump back into recent work in ${displayName(state.activeWorkspacePath)} or start a fresh thread without leaving the home view."
+                    } else {
+                        "Jump back into recent work in ${displayName(state.activeWorkspacePath)} and keep browsing existing threads from Android while T3 write actions stay on the host."
+                    }
                 } else {
                     "Choose a project once, then keep chats, file-aware actions, and recovery flows anchored to your host workspace."
                 },
@@ -296,7 +301,7 @@ private fun HomeHeroSection(
         ) {
             RemodexButton(
                 onClick = onCreateThread,
-                enabled = hasWorkspace && !state.busy.isVisible,
+                enabled = canCreateThread && !state.busy.isVisible,
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(horizontal = geometry.spacing20, vertical = geometry.spacing14),
             ) {
@@ -306,7 +311,11 @@ private fun HomeHeroSection(
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    text = if (hasWorkspace) "New chat" else "Pick a project first",
+                    text = when {
+                        !hasWorkspace -> "Pick a project first"
+                        state.createThreadSupported -> "New chat"
+                        else -> "New chat unavailable"
+                    },
                     modifier = Modifier.padding(start = geometry.spacing8),
                 )
             }
@@ -316,6 +325,16 @@ private fun HomeHeroSection(
                 style = RemodexButtonStyle.Ghost,
             ) {
                 Text(text = if (hasWorkspace) "Switch project" else "Choose project")
+            }
+            if (hasWorkspace && !state.createThreadSupported) {
+                Text(
+                    text = state.createThreadBlockedReason
+                        ?: "Starting new chats from this runtime isn't available in Androdex yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RemodexTheme.colors.textSecondary,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }

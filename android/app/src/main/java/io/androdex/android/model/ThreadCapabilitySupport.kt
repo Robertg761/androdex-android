@@ -9,6 +9,17 @@ enum class ThreadCapabilityAction {
     CHECKPOINT_ROLLBACK,
 }
 
+fun HostRuntimeMetadata?.createThreadBlockReason(): String? {
+    val runtimeTarget = this?.runtimeTarget
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: return null
+    return when (runtimeTarget) {
+        "t3-server" -> "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet."
+        else -> null
+    }
+}
+
 fun ThreadSummary.capabilityFlag(action: ThreadCapabilityAction): ThreadCapabilityFlag? {
     val capabilities = threadCapabilities ?: return null
     return when (action) {

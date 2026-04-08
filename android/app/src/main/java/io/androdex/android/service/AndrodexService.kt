@@ -27,6 +27,7 @@ import io.androdex.android.model.SubagentAction
 import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.capabilityBlockReason
+import io.androdex.android.model.createThreadBlockReason
 import io.androdex.android.model.ThreadLoadResult
 import io.androdex.android.model.ThreadCapabilityAction
 import io.androdex.android.model.ThreadSummary
@@ -580,6 +581,9 @@ class AndrodexService(
     }
 
     suspend fun createThread(preferredWorkspacePath: String? = null) {
+        stateFlow.value.hostRuntimeMetadata.createThreadBlockReason()?.let { reason ->
+            throw IllegalStateException(reason)
+        }
         val preferredWorkspace = preferredWorkspacePath ?: stateFlow.value.activeWorkspacePath
         ensureWorkspaceActivated(preferredWorkspace)
         val thread = repository.startThread(preferredWorkspace)

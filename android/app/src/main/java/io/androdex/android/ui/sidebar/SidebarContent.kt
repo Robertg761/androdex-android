@@ -262,6 +262,7 @@ private fun SidebarProjectHeader(
     projectPath: String?,
     disambiguationLabel: String?,
     threadCount: Int,
+    canCreateThread: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit,
     onCreateThread: (String) -> Unit,
@@ -348,7 +349,7 @@ private fun SidebarProjectHeader(
             }
         }
 
-        if (projectPath != null) {
+        if (projectPath != null && canCreateThread) {
             RemodexIconButton(
                 onClick = { onCreateThread(projectPath) },
                 contentDescription = "Create chat in $displayName",
@@ -407,6 +408,13 @@ internal fun buildSidebarProjectGroups(
         .map { (groupKey, threads) ->
             val projectPath = groupKey.takeUnless { it == NO_PROJECT_GROUP_KEY }
             val displayName = projectPath?.let(::displayNameForProjectPath) ?: "No Project"
+            val canCreateThread = when {
+                !threadList.createThreadSupported -> false
+                projectPath == null -> false
+                projectPath == activeWorkspacePath -> true
+                threads.isEmpty() -> false
+                else -> threads.any { it.projectPathAvailable }
+            }
             SidebarProjectGroupUiState(
                 key = groupKey,
                 displayName = displayName,
@@ -421,7 +429,7 @@ internal fun buildSidebarProjectGroups(
                 },
                 threadCount = threads.size,
                 threads = threads,
-                canCreateThread = projectPath != null,
+                canCreateThread = canCreateThread,
             )
         }
         .sortedWith(
@@ -572,9 +580,10 @@ internal fun SidebarThreadCollection(
                         item(key = "project_${projectGroup.key}") {
                             SidebarProjectHeader(
                                 projectName = projectGroup.displayName,
-                                projectPath = projectGroup.projectPath.takeIf { projectGroup.canCreateThread },
+                                projectPath = projectGroup.projectPath,
                                 disambiguationLabel = projectGroup.disambiguationLabel,
                                 threadCount = projectGroup.threadCount,
+                                canCreateThread = projectGroup.canCreateThread,
                                 expanded = isExpanded,
                                 onToggle = { onToggleProject(projectGroup.key) },
                                 onCreateThread = onCreateThread,

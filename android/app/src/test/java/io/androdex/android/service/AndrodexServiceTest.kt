@@ -3687,6 +3687,46 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun createThread_blocksReadOnlyT3RuntimeBeforeStartingThread() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                ),
+            )
+        )
+        advanceUntilIdle()
+        assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+
+        val error = runCatching {
+            service.createThread("/tmp/project-a")
+        }.exceptionOrNull()
+
+        assertEquals(
+            "This connected runtime can browse supported T3 threads from Androdex, but starting new T3 chats here isn't available yet.",
+            error?.message,
+        )
+        assertEquals(emptyList<String>(), repository.startedThreadCwds)
+        assertEquals(emptyList<String>(), repository.activatedWorkspaces)
+    }
+
+    @Test
     fun sendMessage_createsAndUsesThreadWhenBackgroundRefreshFails() = runTest {
         val repository = FakeRepository().apply {
             refreshThreadsError = IllegalStateException("Timed out waiting for 30000 ms")
