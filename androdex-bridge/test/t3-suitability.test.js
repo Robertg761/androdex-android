@@ -98,3 +98,34 @@ test("validateT3AttachConfig rejects config that does not advertise required orc
     /missing required RPC methods|required subscriptions/i
   );
 });
+
+test("extractT3RuntimeMetadata infers the state root from the live server config shape", () => {
+  const metadata = extractT3RuntimeMetadata({
+    cwd: "/Users/robert/Documents/Projects/t3code/apps/server",
+    keybindingsConfigPath: "/tmp/t3-live/userdata/keybindings.json",
+    observability: {
+      logsDirectoryPath: "/tmp/t3-live/userdata/logs",
+    },
+  });
+
+  assert.equal(metadata.runtimeStateRoot, "/tmp/t3-live");
+  assert.equal(metadata.runtimeProtocolVersion, "");
+  assert.equal(metadata.runtimeAuthMode, "");
+  assert.deepEqual(metadata.declaredRpcMethods, []);
+  assert.deepEqual(metadata.declaredSubscriptions, []);
+});
+
+test("validateT3AttachConfig accepts the live server config shape when explicit method advertising is absent", () => {
+  const metadata = validateT3AttachConfig({
+    endpoint: "ws://127.0.0.1:7777",
+    config: {
+      cwd: "/Users/robert/Documents/Projects/t3code/apps/server",
+      keybindingsConfigPath: "/tmp/t3-live/userdata/keybindings.json",
+      observability: {
+        logsDirectoryPath: "/tmp/t3-live/userdata/logs",
+      },
+    },
+  });
+
+  assert.equal(metadata.runtimeStateRoot, "/tmp/t3-live");
+});

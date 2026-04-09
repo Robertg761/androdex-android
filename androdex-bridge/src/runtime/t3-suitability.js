@@ -90,18 +90,7 @@ function extractT3RuntimeMetadata(config) {
       ["server", "authMode"],
       ["server", "auth_mode"],
     ]),
-    runtimeStateRoot: normalizePathString(firstString(runtimeConfig, [
-      ["baseDir"],
-      ["base_dir"],
-      ["stateRoot"],
-      ["state_root"],
-      ["storage", "baseDir"],
-      ["storage", "base_dir"],
-      ["paths", "baseDir"],
-      ["paths", "base_dir"],
-      ["server", "baseDir"],
-      ["server", "base_dir"],
-    ])),
+    runtimeStateRoot: extractRuntimeStateRoot(runtimeConfig),
     declaredRpcMethods,
     declaredSubscriptions,
   };
@@ -119,11 +108,11 @@ function validateT3AttachConfig({
     throw new Error("The T3 server did not report a state-root/baseDir identity required for replay scoping.");
   }
 
-  if (!runtimeMetadata.runtimeAuthMode) {
+  if (!runtimeMetadata.runtimeAuthMode && requirements.expectedAuthMode) {
     throw new Error("The T3 server did not report an auth mode, so attach suitability could not be verified.");
   }
 
-  if (!runtimeMetadata.runtimeProtocolVersion) {
+  if (!runtimeMetadata.runtimeProtocolVersion && requirements.expectedProtocolVersion) {
     throw new Error("The T3 server did not report a protocol version, so attach suitability could not be verified.");
   }
 
@@ -148,16 +137,20 @@ function validateT3AttachConfig({
     );
   }
 
-  ensureRequiredMethodsPresent({
-    declaredValues: runtimeMetadata.declaredRpcMethods,
-    requiredValues: requirements.requiredRpcMethods,
-    noun: "RPC methods",
-  });
-  ensureRequiredMethodsPresent({
-    declaredValues: runtimeMetadata.declaredSubscriptions,
-    requiredValues: requirements.requiredSubscriptions,
-    noun: "subscriptions",
-  });
+  if (runtimeMetadata.declaredRpcMethods.length > 0) {
+    ensureRequiredMethodsPresent({
+      declaredValues: runtimeMetadata.declaredRpcMethods,
+      requiredValues: requirements.requiredRpcMethods,
+      noun: "RPC methods",
+    });
+  }
+  if (runtimeMetadata.declaredSubscriptions.length > 0) {
+    ensureRequiredMethodsPresent({
+      declaredValues: runtimeMetadata.declaredSubscriptions,
+      requiredValues: requirements.requiredSubscriptions,
+      noun: "subscriptions",
+    });
+  }
 
   return runtimeMetadata;
 }
@@ -228,6 +221,40 @@ function normalizeStringArray(value) {
     })
     .map((item) => normalizeNonEmptyString(item))
     .filter(Boolean);
+}
+
+function extractRuntimeStateRoot(runtimeConfig) {
+  const directStateRoot = normalizePathString(firstString(runtimeConfig, [
+    ["baseDir"],
+    ["base_dir"],
+    ["stateRoot"],
+    ["state_root"],
+    ["storage", "baseDir"],
+    ["storage", "base_dir"],
+    ["paths", "baseDir"],
+    ["paths", "base_dir"],
+    ["server", "baseDir"],
+    ["server", "base_dir"],
+  ]));
+  if (directStateRoot) {
+    return directStateRoot;
+  }
+
+  const keybindingsConfigPath = normalizePathString(firstString(runtimeConfig, [
+    ["keybindingsConfigPath"],
+  ]));
+  if (keybindingsConfigPath) {
+    return normalizePathString(path.dirname(path.dirname(keybindingsConfigPath)));
+  }
+
+  const logsDirectoryPath = normalizePathString(firstString(runtimeConfig, [
+    ["observability", "logsDirectoryPath"],
+  ]));
+  if (logsDirectoryPath) {
+    return normalizePathString(path.dirname(path.dirname(logsDirectoryPath)));
+  }
+
+  return "";
 }
 
 function normalizePathString(value) {

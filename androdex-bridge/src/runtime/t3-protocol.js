@@ -1,12 +1,14 @@
 // FILE: runtime/t3-protocol.js
-// Purpose: Speaks the real T3 WebSocket RPC envelope so the bridge can probe, snapshot, and subscribe without assuming JSON-RPC.
+// Purpose: Speaks T3's real Effect RPC websocket protocol through Effect's socket/runtime layers.
 // Layer: CLI helper
 // Exports: createT3EndpointTransport
-// Depends on: ws
+// Depends on: ws, effect, @effect/platform-node
 
 const WebSocket = require("ws");
 
 const DEFAULT_T3_REQUEST_TIMEOUT_MS = 5_000;
+
+let effectRuntimeSupportPromise = null;
 
 function createT3EndpointTransport({
   endpoint,
@@ -14,82 +16,92 @@ function createT3EndpointTransport({
   WebSocketImpl = WebSocket,
   onBeforeReadyRequest = null,
 } = {}) {
-  const socket = new WebSocketImpl(composeT3EndpointUrl(endpoint, authToken));
+  const liveEndpoint = composeT3EndpointUrl(endpoint, authToken);
   const listeners = createListenerBag();
   const openState = WebSocketImpl.OPEN ?? WebSocket.OPEN ?? 1;
   const connectingState = WebSocketImpl.CONNECTING ?? WebSocket.CONNECTING ?? 0;
   const pendingUnaryRequests = new Map();
   const pendingStreamRequests = new Map();
-  let nextInternalRequestId = 0;
+  let nextInternalRequestId = 0n;
   let readyState = "connecting";
+  let runtime = null;
+  let protocol = null;
+  let activeSocket = null;
+  let shuttingDown = false;
   let settleReady = null;
+  let settleProtocolReady = null;
+  let settleSocketOpen = null;
 
   const readyPromise = new Promise((resolve, reject) => {
     settleReady = { resolve, reject };
   });
+  const protocolReadyPromise = new Promise((resolve, reject) => {
+    settleProtocolReady = { resolve, reject };
+  });
+  const socketOpenPromise = new Promise((resolve) => {
+    settleSocketOpen = resolve;
+  });
 
-  socket.on("open", async () => {
+  const initializePromise = initialize();
+
+  async function initialize() {
     try {
+      const {
+        Effect,
+        Layer,
+        ManagedRuntime,
+        Schedule,
+        RpcClient,
+        RpcSerialization,
+        Socket,
+      } = await loadEffectRuntimeSupport();
+
+      const socketConstructorLayer = Layer.succeed(
+        Socket.WebSocketConstructor,
+        (socketUrl, protocols) => {
+          const socket = ensureCompatibleWebSocket(new WebSocketImpl(socketUrl, protocols));
+          activeSocket = socket;
+          bindSocketLifecycle(socket);
+          return socket;
+        }
+      );
+
+      const protocolLayer = Layer.effect(
+        RpcClient.Protocol,
+        RpcClient.makeProtocolSocket({
+          retryPolicy: Schedule.recurs(0),
+        })
+      ).pipe(
+        Layer.provide(Layer.effect(Socket.Socket, Socket.makeWebSocket(liveEndpoint))),
+        Layer.provide(RpcSerialization.layerJson),
+        Layer.provide(socketConstructorLayer)
+      );
+
+      runtime = ManagedRuntime.make(protocolLayer);
+      protocol = await runtime.runPromise(Effect.gen(function* () {
+        return yield* RpcClient.Protocol;
+      }));
+      settleProtocolReady?.resolve(protocol);
+      settleProtocolReady = null;
+
+      runtime.runFork(protocol.run((frame) => Effect.sync(() => {
+        handleProtocolFrame(frame);
+      })));
+
+      await socketOpenPromise;
       await onBeforeReadyRequest?.({
         request,
         subscribe,
       });
+
       readyState = "ready";
       settleReady?.resolve();
       settleReady = null;
     } catch (error) {
-      readyState = "failed";
-      settleReady?.reject(error);
-      settleReady = null;
-      try {
-        socket.close();
-      } catch {
-        // Best effort only.
-      }
-      listeners.emitError(error);
+      failInitialization(error);
+      await safeDisposeRuntime();
     }
-  });
-
-  socket.on("message", (chunk) => {
-    const message = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    const parsed = safeParseJSON(message);
-    if (handleInternalProtocolFrame(parsed)) {
-      return;
-    }
-
-    if (message.trim()) {
-      listeners.emitMessage(message);
-    }
-  });
-
-  socket.on("close", (code, reason) => {
-    const safeReason = reason ? reason.toString("utf8") : "no reason";
-    if (readyState !== "ready") {
-      readyState = "failed";
-      settleReady?.reject(new Error(`T3 endpoint closed during attach: ${safeReason}`));
-      settleReady = null;
-    }
-    rejectPendingRequests(
-      pendingUnaryRequests,
-      new Error(`T3 endpoint closed before the attach flow completed: ${safeReason}`)
-    );
-    rejectPendingStreams(
-      pendingStreamRequests,
-      new Error(`T3 endpoint closed before the T3 stream completed: ${safeReason}`)
-    );
-    listeners.emitClose(code, safeReason);
-  });
-
-  socket.on("error", (error) => {
-    if (readyState !== "ready") {
-      readyState = "failed";
-      settleReady?.reject(error);
-      settleReady = null;
-    }
-    rejectPendingRequests(pendingUnaryRequests, error);
-    rejectPendingStreams(pendingStreamRequests, error);
-    listeners.emitError(error);
-  });
+  }
 
   function request(method, payload = {}, { timeoutMs = DEFAULT_T3_REQUEST_TIMEOUT_MS } = {}) {
     const requestId = createRequestId(++nextInternalRequestId);
@@ -106,17 +118,22 @@ function createT3EndpointTransport({
         timeout,
       });
 
-      try {
-        sendProtocolRequest({
-          requestId,
-          method,
-          payload,
+      Promise.resolve()
+        .then(() => protocolReadyPromise)
+        .then(() =>
+          sendProtocolMessage({
+            _tag: "Request",
+            id: requestId,
+            tag: method,
+            payload,
+            headers: [],
+          })
+        )
+        .catch((error) => {
+          clearTimeout(timeout);
+          pendingUnaryRequests.delete(requestId);
+          reject(error);
         });
-      } catch (error) {
-        clearTimeout(timeout);
-        pendingUnaryRequests.delete(requestId);
-        reject(error);
-      }
     });
   }
 
@@ -127,19 +144,53 @@ function createT3EndpointTransport({
     onValues = null,
   } = {}) {
     const requestId = createRequestId(++nextInternalRequestId);
-    pendingStreamRequests.set(requestId, {
+    const streamState = {
       onEnd,
       onError,
       onValue,
       onValues,
-    });
-    sendProtocolRequest({
-      requestId,
-      method,
-      payload,
-    });
+      started: false,
+      cancelled: false,
+    };
+    pendingStreamRequests.set(requestId, streamState);
+
+    Promise.resolve()
+      .then(() => protocolReadyPromise)
+      .then(() =>
+        sendProtocolMessage({
+          _tag: "Request",
+          id: requestId,
+          tag: method,
+          payload,
+          headers: [],
+        })
+      )
+      .then(() => {
+        streamState.started = true;
+        if (streamState.cancelled) {
+          return sendInterrupt(requestId).catch(() => undefined);
+        }
+        return undefined;
+      })
+      .catch((error) => {
+        if (pendingStreamRequests.get(requestId) === streamState) {
+          pendingStreamRequests.delete(requestId);
+        }
+        if (!streamState.cancelled) {
+          try {
+            streamState.onError?.(error);
+          } catch {
+            // Listener failures should stay local to the caller.
+          }
+        }
+      });
+
     return () => {
+      streamState.cancelled = true;
       pendingStreamRequests.delete(requestId);
+      if (streamState.started) {
+        void sendInterrupt(requestId).catch(() => undefined);
+      }
     };
   }
 
@@ -147,40 +198,79 @@ function createT3EndpointTransport({
     if (readyState !== "ready") {
       return false;
     }
-    if (socket.readyState === openState) {
-      socket.send(message);
+    if (activeSocket && activeSocket.readyState === openState) {
+      activeSocket.send(message);
       return true;
     }
     return false;
   }
 
-  function sendProtocolRequest({ requestId, method, payload }) {
-    if (socket.readyState !== openState) {
+  async function sendProtocolMessage(message) {
+    const currentProtocol = await protocolReadyPromise;
+    if (!runtime || !currentProtocol) {
       throw new Error("The T3 endpoint is not open.");
     }
-
-    socket.send(JSON.stringify({
-      _tag: "Request",
-      id: requestId,
-      tag: method,
-      payload,
-    }));
+    return runtime.runPromise(currentProtocol.send(message));
   }
 
-  function handleInternalProtocolFrame(frame) {
+  function sendInterrupt(requestId) {
+    return sendProtocolMessage({
+      _tag: "Interrupt",
+      requestId,
+    });
+  }
+
+  function acknowledgeChunk(requestId) {
+    if (!protocol || !runtime) {
+      return;
+    }
+    void runtime.runPromise(protocol.send({
+      _tag: "Ack",
+      requestId,
+    })).catch(() => undefined);
+  }
+
+  function handleProtocolFrame(frame) {
     if (!frame || typeof frame !== "object") {
-      return false;
+      return;
     }
 
     const frameTag = normalizeNonEmptyString(frame._tag);
+    if (!frameTag) {
+      return;
+    }
+
+    if (frameTag === "Pong" || frameTag === "ClientEnd") {
+      return;
+    }
+
+    if (frameTag === "ClientProtocolError") {
+      const error = normalizeProtocolError(frame.error);
+      failInitialization(error);
+      rejectPendingRequests(pendingUnaryRequests, error);
+      rejectPendingStreams(pendingStreamRequests, error);
+      listeners.emitError(error);
+      return;
+    }
+
+    if (frameTag === "Defect") {
+      const error = new Error(extractT3ProtocolErrorMessage(frame.defect));
+      failInitialization(error);
+      rejectPendingRequests(pendingUnaryRequests, error);
+      rejectPendingStreams(pendingStreamRequests, error);
+      listeners.emitError(error);
+      return;
+    }
+
     const requestId = normalizeNonEmptyString(frame.requestId);
-    if (!frameTag || !requestId) {
-      return false;
+    if (!requestId) {
+      return;
     }
 
     if (frameTag === "Chunk" && pendingStreamRequests.has(requestId)) {
       const stream = pendingStreamRequests.get(requestId);
       const values = Array.isArray(frame.values) ? frame.values : [];
+      acknowledgeChunk(requestId);
       try {
         stream.onValues?.(values);
         if (!stream.onValues && typeof stream.onValue === "function") {
@@ -191,11 +281,11 @@ function createT3EndpointTransport({
       } catch {
         // Listener failures should not tear down the underlying stream.
       }
-      return true;
+      return;
     }
 
     if (frameTag !== "Exit") {
-      return false;
+      return;
     }
 
     if (pendingUnaryRequests.has(requestId)) {
@@ -208,7 +298,7 @@ function createT3EndpointTransport({
       } else {
         pending.reject(outcome.error);
       }
-      return true;
+      return;
     }
 
     if (pendingStreamRequests.has(requestId)) {
@@ -230,10 +320,78 @@ function createT3EndpointTransport({
       } else {
         listeners.emitError(outcome.error);
       }
-      return true;
     }
+  }
 
-    return false;
+  function bindSocketLifecycle(socket) {
+    addSocketListener(socket, "open", () => {
+      settleSocketOpen?.();
+      settleSocketOpen = null;
+    });
+
+    addSocketListener(socket, "message", (event) => {
+      const message = coerceSocketMessage(event);
+      if (!message.trim()) {
+        return;
+      }
+      const parsed = safeParseJSON(message);
+      if (isProtocolFrame(parsed)) {
+        return;
+      }
+      listeners.emitMessage(message);
+    });
+
+    addSocketListener(socket, "close", (event) => {
+      const code = normalizeSocketCloseCode(event);
+      const reason = normalizeSocketCloseReason(event);
+      if (readyState !== "ready") {
+        failInitialization(new Error(`T3 endpoint closed during attach: ${reason || code || "no reason"}`));
+      }
+      rejectPendingRequests(
+        pendingUnaryRequests,
+        new Error(`T3 endpoint closed before the attach flow completed: ${reason || code || "no reason"}`)
+      );
+      rejectPendingStreams(
+        pendingStreamRequests,
+        new Error(`T3 endpoint closed before the T3 stream completed: ${reason || code || "no reason"}`)
+      );
+      listeners.emitClose(code, reason || "no reason");
+      void safeDisposeRuntime();
+    });
+
+    addSocketListener(socket, "error", (event) => {
+      const error = normalizeSocketError(event);
+      failInitialization(error);
+      rejectPendingRequests(pendingUnaryRequests, error);
+      rejectPendingStreams(pendingStreamRequests, error);
+      listeners.emitError(error);
+    });
+  }
+
+  function failInitialization(error) {
+    const normalizedError = normalizeProtocolError(error);
+    if (readyState === "ready" || readyState === "failed") {
+      return;
+    }
+    readyState = "failed";
+    settleReady?.reject(normalizedError);
+    settleReady = null;
+    settleProtocolReady?.reject(normalizedError);
+    settleProtocolReady = null;
+  }
+
+  async function safeDisposeRuntime() {
+    if (!runtime) {
+      return;
+    }
+    const currentRuntime = runtime;
+    runtime = null;
+    protocol = null;
+    try {
+      await currentRuntime.dispose();
+    } catch {
+      // Best effort only.
+    }
   }
 
   return {
@@ -253,9 +411,14 @@ function createT3EndpointTransport({
     request,
     send,
     shutdown() {
-      if (socket.readyState === openState || socket.readyState === connectingState) {
-        socket.close();
+      shuttingDown = true;
+      if (activeSocket && (
+        activeSocket.readyState === openState
+        || activeSocket.readyState === connectingState
+      )) {
+        activeSocket.close();
       }
+      void safeDisposeRuntime();
     },
     subscribe,
     whenReady() {
@@ -283,7 +446,7 @@ function composeT3EndpointUrl(endpoint, authToken = "") {
 }
 
 function createRequestId(sequence) {
-  return `androdex-t3-rpc-${sequence}`;
+  return sequence.toString();
 }
 
 function createListenerBag() {
@@ -320,14 +483,16 @@ function parseExitFrame(exit) {
 function extractT3ProtocolErrorMessage(exit) {
   const directMessage = normalizeNonEmptyString(exit?.message)
     || normalizeNonEmptyString(exit?.error?.message)
-    || normalizeNonEmptyString(exit?.cause?.message);
+    || normalizeNonEmptyString(exit?.cause?.message)
+    || normalizeNonEmptyString(exit?.reason?.message);
   if (directMessage) {
     return directMessage;
   }
 
   const nestedMessage = extractNestedCauseMessage(exit?.cause)
     || extractNestedCauseMessage(exit?.defect)
-    || extractNestedCauseMessage(exit?.failure);
+    || extractNestedCauseMessage(exit?.failure)
+    || extractNestedCauseMessage(exit?.reason);
   if (nestedMessage) {
     return nestedMessage;
   }
@@ -351,6 +516,7 @@ function extractNestedCauseMessage(value) {
     value?.cause,
     value?.defect,
     value?.failure,
+    value?.reason,
     value?.left,
     value?.right,
   ];
@@ -402,6 +568,172 @@ function safeParseJSON(value) {
   } catch {
     return null;
   }
+}
+
+function isProtocolFrame(frame) {
+  const tag = normalizeNonEmptyString(frame?._tag);
+  return [
+    "Request",
+    "Ack",
+    "Interrupt",
+    "Ping",
+    "Pong",
+    "Chunk",
+    "Exit",
+    "Defect",
+    "ClientProtocolError",
+    "ClientEnd",
+  ].includes(tag);
+}
+
+function normalizeProtocolError(error) {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(extractT3ProtocolErrorMessage(error));
+}
+
+function addSocketListener(socket, eventName, handler) {
+  if (!socket) {
+    return;
+  }
+  if (typeof socket.__androdexAddEventListener === "function") {
+    socket.__androdexAddEventListener(eventName, handler);
+    return;
+  }
+  if (typeof socket.addEventListener === "function") {
+    socket.addEventListener(eventName, handler);
+    return;
+  }
+  if (typeof socket.on === "function") {
+    socket.on(eventName, (...args) => handler(buildLegacySocketEvent(eventName, args)));
+  }
+}
+
+function buildLegacySocketEvent(eventName, args) {
+  if (eventName === "message") {
+    return { data: args[0] };
+  }
+  if (eventName === "close") {
+    return {
+      code: typeof args[0] === "number" ? args[0] : 1000,
+      reason: normalizeCloseReasonValue(args[1]),
+    };
+  }
+  if (eventName === "error") {
+    return args[0] instanceof Error ? args[0] : { error: args[0] };
+  }
+  return args[0] ?? {};
+}
+
+function coerceSocketMessage(event) {
+  const rawData = Object.prototype.hasOwnProperty.call(event || {}, "data") ? event.data : event;
+  if (typeof rawData === "string") {
+    return rawData;
+  }
+  if (Buffer.isBuffer(rawData)) {
+    return rawData.toString("utf8");
+  }
+  if (rawData instanceof Uint8Array) {
+    return Buffer.from(rawData).toString("utf8");
+  }
+  return "";
+}
+
+function normalizeSocketCloseCode(event) {
+  return typeof event?.code === "number" ? event.code : 1000;
+}
+
+function normalizeSocketCloseReason(event) {
+  return normalizeCloseReasonValue(event?.reason);
+}
+
+function normalizeCloseReasonValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString("utf8");
+  }
+  return "";
+}
+
+function normalizeSocketError(event) {
+  if (event instanceof Error) {
+    return event;
+  }
+  if (event?.error instanceof Error) {
+    return event.error;
+  }
+  if (typeof event?.message === "string" && event.message.trim()) {
+    return new Error(event.message.trim());
+  }
+  return new Error("T3 websocket transport error.");
+}
+
+function ensureCompatibleWebSocket(socket) {
+  if (!socket) {
+    return socket;
+  }
+  if (typeof socket.addEventListener !== "function") {
+    if (socket.handlers instanceof Map) {
+      const handlerEntriesByEvent = new Map();
+      socket.__androdexAddEventListener = function addEventListener(eventName, handler, options = {}) {
+        const listeners = handlerEntriesByEvent.get(eventName) ?? [];
+        listeners.push({
+          handler,
+          once: options?.once === true,
+        });
+        handlerEntriesByEvent.set(eventName, listeners);
+        socket.handlers.set(eventName, (...args) => {
+          const currentListeners = [...(handlerEntriesByEvent.get(eventName) ?? [])];
+          for (const entry of currentListeners) {
+            entry.handler(buildLegacySocketEvent(eventName, args));
+            if (entry.once) {
+              socket.removeEventListener?.(eventName, entry.handler);
+            }
+          }
+        });
+      };
+      socket.removeEventListener = function removeEventListener(eventName, handler) {
+        const listeners = handlerEntriesByEvent.get(eventName) ?? [];
+        handlerEntriesByEvent.set(
+          eventName,
+          listeners.filter((entry) => entry.handler !== handler)
+        );
+      };
+    } else {
+      socket.__androdexAddEventListener = function addEventListener(eventName, handler) {
+        if (typeof socket.on === "function") {
+          socket.on(eventName, (...args) => handler(buildLegacySocketEvent(eventName, args)));
+        }
+      };
+    }
+    socket.addEventListener = socket.__androdexAddEventListener;
+  }
+  return socket;
+}
+
+async function loadEffectRuntimeSupport() {
+  if (!effectRuntimeSupportPromise) {
+    effectRuntimeSupportPromise = Promise.all([
+      import("effect"),
+      import("effect/unstable/rpc"),
+      import("effect/unstable/socket/Socket"),
+    ]).then(([effectModule, rpcModule, socketModule]) => ({
+      Effect: effectModule.Effect,
+      Layer: effectModule.Layer,
+      ManagedRuntime: effectModule.ManagedRuntime,
+      Schedule: effectModule.Schedule,
+      RpcClient: rpcModule.RpcClient,
+      RpcSerialization: rpcModule.RpcSerialization,
+      Socket: socketModule,
+    }));
+  }
+  return effectRuntimeSupportPromise;
 }
 
 module.exports = {

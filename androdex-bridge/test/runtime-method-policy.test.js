@@ -7,7 +7,22 @@ const {
   isReadOnlyRuntimeTarget,
   isRuntimeTargetMethodAllowed,
 } = require("../src/runtime/method-policy");
-const { createRuntimeAdapter } = require("../src/runtime/adapter");
+const runtimeAdapterModule = require("../src/runtime/adapter");
+
+const trackedAdapters = new Set();
+
+test.after(() => {
+  for (const adapter of trackedAdapters) {
+    adapter.shutdown();
+  }
+  trackedAdapters.clear();
+});
+
+const createRuntimeAdapter = (...args) => {
+  const adapter = runtimeAdapterModule.createRuntimeAdapter(...args);
+  trackedAdapters.add(adapter);
+  return adapter;
+};
 
 class FakeWebSocket {
   static OPEN = 1;

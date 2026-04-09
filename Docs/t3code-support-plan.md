@@ -1001,7 +1001,7 @@ Completed so far:
 - readiness-gated T3 workspace activation so incompatible T3 instances never appear active
 - initial read-only T3 snapshot bootstrap via `server.getConfig` plus `orchestration.getSnapshot`
 - snapshot-backed synthesis for `thread/list`, `thread/read`, and `thread/resume`
-- bridge-side T3 protocol transport now speaks the real Effect RPC request/exit/chunk envelope instead of a JSON-RPC-style placeholder
+- bridge-side T3 protocol transport now uses Effect's real websocket protocol socket/runtime stack instead of the provisional manual framing layer, including numeric request ids plus protocol-level ping/pong and stream ack semantics compatible with the live T3 server
 - T3 live cache updates now come from `subscribeOrchestrationDomainEvents`, with replay-gap recovery through `orchestration.replayEvents`
 - T3 replay cursors are now persisted by runtime target plus state-root scope inside bridge daemon config
 - resumed supported T3 Codex threads now receive bridge-managed live turn/assistant/title notifications from the synchronized T3 cache
@@ -1039,6 +1039,8 @@ Completed so far:
 - companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
 - Android `thread/start` is now bridged into T3 `thread.create` for known project workspaces, with runtime-mode derivation from Android access-mode hints and immediate synthesized thread summaries on success
 - manual hardware smoke on Android now proves trusted reconnect succeeds against the saved pair once the real host bridge is running, project switching works against live host-local workspace data, cross-repo `New chat` opens in the newly selected repo instead of bleeding back to the bridge repo, reopening an existing recent thread rehydrates cleanly in that switched workspace, and force-stop relaunch restores the saved pairing without falling back to repair-pairing UI
+- a new real attach/bootstrap probe against a separate local T3 server on loopback now succeeds end to end after the transport replacement: `server.getConfig`, snapshot bootstrap, live subscription startup, replay watermark persistence, and a synthesized `thread/list` all complete through the bridge adapter without touching the live desktop app session
+- attach suitability now also understands T3's current live `ServerConfig` shape by inferring the replay state-root from stable returned config paths when the older top-level `baseDir`/method-advertising fields are absent
 
 Still in progress:
 
@@ -1046,7 +1048,7 @@ Still in progress:
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
 - deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
 - easy installed-desktop T3 attach still needs that runtime-session descriptor hook to ship in a normal T3 desktop release before the installed-app path is truly turnkey for users
-- end-to-end/manual smoke hardening for the same-host `codex-native -> t3-server -> codex-native` runtime switch is still pending a runnable host-local T3 instance on this machine
+- broader manual smoke hardening is now unblocked, but the same-host `codex-native -> t3-server -> codex-native` matrix still needs to be re-run on device now that live attach/bootstrap succeeds
 
 Not started yet:
 
@@ -1095,7 +1097,7 @@ Scope note:
 
 ## Immediate Next Steps
 
-1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
-2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
-3. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
-4. Run the remaining hardware/manual smoke matrix once a local T3 server endpoint is available for the same-host runtime-target switch path.
+1. Re-run the same-host `codex-native -> t3-server -> codex-native` hardware/manual smoke matrix on phone now that live attach/bootstrap succeeds against a separate local T3 server.
+2. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
+3. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
+4. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
