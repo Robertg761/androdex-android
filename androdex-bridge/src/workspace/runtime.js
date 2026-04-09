@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { createRuntimeAdapter } = require("../runtime/adapter");
 const { readDaemonConfig, writeDaemonConfig } = require("../daemon-state");
+const { resolveT3RuntimeEndpoint } = require("../runtime/t3-discovery");
 
 const MAX_RECENT_WORKSPACES = 25;
 
@@ -334,14 +335,40 @@ function createWorkspaceRuntime({
   }
 
   function resolveConfiguredRuntimeEndpoint() {
+    if (resolveConfiguredRuntimeTarget() === "t3-server") {
+      return resolveConfiguredT3Endpoint().endpoint;
+    }
+
     return normalizeNonEmptyString(config?.runtimeEndpoint)
       || normalizeNonEmptyString(config?.codexEndpoint)
       || "";
   }
 
   function resolveConfiguredRuntimeEndpointAuthToken() {
+    if (resolveConfiguredRuntimeTarget() === "t3-server") {
+      return resolveConfiguredT3Endpoint().authToken;
+    }
+
     return normalizeNonEmptyString(config?.runtimeEndpointAuthToken)
       || "";
+  }
+
+  function resolveConfiguredT3Endpoint() {
+    const explicitEndpoint = normalizeNonEmptyString(config?.runtimeEndpoint);
+    if (explicitEndpoint) {
+      return {
+        endpoint: explicitEndpoint,
+        authToken: normalizeNonEmptyString(config?.runtimeEndpointAuthToken),
+      };
+    }
+
+    const discoveredEndpoint = resolveT3RuntimeEndpoint({
+      env: process.env,
+    });
+    return {
+      endpoint: normalizeNonEmptyString(discoveredEndpoint?.endpoint),
+      authToken: normalizeNonEmptyString(discoveredEndpoint?.authToken),
+    };
   }
 
   function isCurrentRuntime(runtime) {

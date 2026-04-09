@@ -150,3 +150,80 @@ test("workspace runtime can switch runtime targets and restart the active worksp
   assert.ok(daemonWrites.some((entry) => entry.runtimeTarget === "t3-server"));
   assert.ok(daemonWrites.some((entry) => entry.activeCwd === workspaceDir));
 });
+
+test("workspace runtime falls back to the trusted T3 desktop session when a runtime-target switch has no explicit endpoint", async () => {
+  const originalHome = process.env.HOME;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "androdex-runtime-switch-discovery-"));
+  const workspaceDir = path.join(tempRoot, "workspace");
+  const recordedAdapterCalls = [];
+
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.mkdirSync(path.join(tempRoot, ".t3", "userdata"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tempRoot, ".t3", "userdata", "runtime-session.json"),
+    JSON.stringify({
+      version: 1,
+      source: "desktop",
+      transport: "websocket",
+      baseUrl: "ws://127.0.0.1:3783/ws",
+      authToken: "androdex-live-test-token",
+      backendPid: process.pid,
+    }),
+    "utf8"
+  );
+
+  try {
+    process.env.HOME = tempRoot;
+    const runtime = createWorkspaceRuntime({
+      config: {
+        activeCwd: workspaceDir,
+        recentWorkspaces: [workspaceDir],
+        runtimeTarget: "codex-native",
+        runtimeProvider: "codex",
+      },
+      createRuntimeAdapterImpl(options) {
+        recordedAdapterCalls.push(options);
+        return {
+          getRuntimeMetadata() {
+            return {
+              runtimeTarget: options.targetKind,
+              runtimeEndpoint: options.endpoint,
+            };
+          },
+          onClose() {},
+          onError() {},
+          onMessage() {},
+          onMetadata() {},
+          send() {},
+          shutdown() {},
+          whenReady() {
+            return Promise.resolve();
+          },
+        };
+      },
+      readDaemonConfigImpl() {
+        return {};
+      },
+      writeDaemonConfigImpl() {},
+    });
+
+    await runtime.activateWorkspace({ cwd: workspaceDir });
+    await runtime.updateRuntimeConfig({
+      runtimeTarget: "t3-server",
+      runtimeProvider: "t3code",
+    });
+    await runtime.shutdown();
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  assert.equal(recordedAdapterCalls.length, 2);
+  assert.equal(recordedAdapterCalls[1].targetKind, "t3-server");
+  assert.equal(recordedAdapterCalls[1].endpoint, "ws://127.0.0.1:3783/ws");
+  assert.equal(recordedAdapterCalls[1].endpointAuthToken, "androdex-live-test-token");
+});

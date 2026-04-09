@@ -286,9 +286,16 @@ function buildRuntimeConfigSnapshot({
   daemonConfig,
   env = process.env,
 } = {}) {
-  const fallbackConfig = readBridgeConfig({ env });
   const daemonRuntimeTarget = normalizeNonEmptyString(daemonConfig?.runtimeTarget);
   const daemonRuntimeEndpoint = normalizeNonEmptyString(daemonConfig?.runtimeEndpoint);
+  const fallbackConfig = readBridgeConfig({
+    env: daemonRuntimeTarget
+      ? {
+          ...env,
+          ANDRODEX_RUNTIME_TARGET: daemonRuntimeTarget,
+        }
+      : env,
+  });
   const fallbackRuntimeTarget = normalizeNonEmptyString(fallbackConfig?.runtimeTarget) || "codex-native";
   const fallbackRuntimeEndpoint = normalizeNonEmptyString(fallbackConfig?.runtimeEndpoint);
   const useDaemonConfig = Boolean(daemonRuntimeTarget || daemonRuntimeEndpoint);
@@ -296,7 +303,7 @@ function buildRuntimeConfigSnapshot({
     ? (daemonRuntimeTarget || "codex-native")
     : fallbackRuntimeTarget;
   const runtimeEndpoint = useDaemonConfig
-    ? daemonRuntimeEndpoint
+    ? (daemonRuntimeEndpoint || (runtimeTarget === "t3-server" ? fallbackRuntimeEndpoint : ""))
     : fallbackRuntimeEndpoint;
   return {
     runtimeTarget,

@@ -1046,6 +1046,7 @@ Completed so far:
 - Android runtime-target handoff now treats missing host runtime metadata as the legacy `codex-native` default, so returning from a T3 leg to an older/default codex-native bridge still clears stale T3 thread selection and scoped timeline state instead of preserving the previous T3 view
 - the full same-host `codex-native -> t3-server -> codex-native` hardware/manual matrix now passes on phone as well: codex-native baseline reconnect succeeds, the T3 leg reopens the saved T3 thread through raw backend UUIDs without the previous canonical-thread-id failure, and the return leg lands back on codex-native home (`40 threads`) instead of reopening the stale T3 thread after the host switches back
 - a new Electron-based `desktop/` control room now gives the host-local bridge a visual control surface for live status, pairing QR generation, runtime-target switching, T3 runtime-session descriptor management, doctor output, and bridge log tails, and that runtime-target choice is now also exposed in Android runtime settings so the same paired phone can explicitly flip the host between Codex and T3 companion mode
+- same-phone runtime-target switching now also honors trusted T3 desktop-session discovery when no explicit `ANDRODEX_T3_ENDPOINT` is stored, so choosing `T3 Code` from Android works against the local `runtime-session.json` descriptor path, and host status/doctor output now show the discovered loopback endpoint instead of incorrectly claiming no endpoint is configured
 
 Still in progress beyond the current companion milestone:
 
