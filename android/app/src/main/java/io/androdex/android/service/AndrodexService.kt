@@ -81,6 +81,8 @@ private const val minimumThreadListLoadingVisibleMs = 350L
 private const val slowThreadLoadLogThresholdMs = 400L
 private const val logTag = "AndrodexService"
 internal const val threadTimelinePersistenceDebounceMs = 250L
+private const val legacyDefaultRuntimeTargetKey = "codex-native"
+private const val legacyDefaultRuntimeTargetDisplayName = "Codex Native"
 
 private data class SubagentIdentityEntry(
     val threadId: String?,
@@ -881,6 +883,19 @@ class AndrodexService(
         repository.setSelectedReasoningEffort(effort)
     }
 
+    suspend fun selectHostRuntimeTarget(targetKind: String) {
+        advanceRuntimeTargetScopedContext()
+        try {
+            repository.setHostRuntimeTarget(targetKind)
+        } catch (error: Throwable) {
+            val expectedContextRevision = threadSessionContextRevision.get()
+            runCatching { loadRuntimeConfig(expectedContextRevision = expectedContextRevision) }
+            runCatching { refreshThreadsInternal(expectedContextRevision = expectedContextRevision) }
+            runCatching { loadWorkspaceState(expectedContextRevision = expectedContextRevision) }
+            throw error
+        }
+    }
+
     suspend fun selectAccessMode(accessMode: AccessMode) {
         repository.setSelectedAccessMode(accessMode)
     }
@@ -1227,13 +1242,20 @@ class AndrodexService(
     }
 
     private fun invalidateRuntimeTargetScopedState() {
+        advanceRuntimeTargetScopedContext()
+        replacePersistedThreadTimelineBaseline(emptyMap())
+        stateFlow.update { current ->
+            current.clearRuntimeTargetScopedState()
+        }
+    }
+
+    private fun advanceRuntimeTargetScopedContext() {
         threadSessionContextRevision.incrementAndGet()
         optimisticWorkspaceThreadIds.clear()
         selectedThreadLoadCounts.clear()
         deferredThreadListRefreshPending = false
         subagentIdentityByThreadId.clear()
         subagentIdentityByAgentId.clear()
-        replacePersistedThreadTimelineBaseline(emptyMap())
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             threadHydrationRequestMutex.withLock {
                 threadHydrationLoads.clear()
@@ -1242,9 +1264,6 @@ class AndrodexService(
                 threadHydrationForceRequestRevisions.clear()
                 threadHydrationForceSatisfiedRevisions.clear()
             }
-        }
-        stateFlow.update { current ->
-            current.clearRuntimeTargetScopedState()
         }
     }
 
@@ -1333,8 +1352,20 @@ class AndrodexService(
             )
             val totalStartedAt = System.currentTimeMillis()
             val loadStartedAt = System.currentTimeMillis()
-            val result = threadCollectionRequestMutex.withLock {
-                repository.loadThread(threadId)
+            val result = try {
+                threadCollectionRequestMutex.withLock {
+                    repository.loadThread(threadId)
+                }
+            } catch (error: Throwable) {
+                if (shouldIgnoreStaleThreadLoadFailure(
+                        threadId = threadId,
+                        error = error,
+                        expectedContextRevision = expectedContextRevision,
+                    )
+                ) {
+                    return
+                }
+                throw error
             }
             if (expectedContextRevision != threadSessionContextRevision.get()) {
                 return
@@ -1627,7 +1658,7 @@ class AndrodexService(
                         connectionStatus = update.status,
                         connectionDetail = update.detail,
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
-                        hostRuntimeMetadata = update.runtimeMetadata ?: it.hostRuntimeMetadata,
+                        hostRuntimeMetadata = resolveHostRuntimeMetadata(update.runtimeMetadata),
                         pendingApproval = if (update.status == ConnectionStatus.CONNECTED) it.pendingApproval else null,
                     )
                 }
@@ -1757,7 +1788,7 @@ class AndrodexService(
                         supportsThreadFork = update.supportsThreadFork,
                         collaborationModes = update.collaborationModes,
                         threadRuntimeOverridesByThread = update.threadRuntimeOverridesByThread,
-                        hostRuntimeMetadata = update.runtimeMetadata ?: it.hostRuntimeMetadata,
+                        hostRuntimeMetadata = resolveHostRuntimeMetadata(update.runtimeMetadata),
                     )
                 }
                 restorePersistedThreadTimelinesForCurrentScope()
@@ -2673,6 +2704,20 @@ class AndrodexService(
         }
     }
 
+    private fun resolveHostRuntimeMetadata(metadata: HostRuntimeMetadata?): HostRuntimeMetadata {
+        val runtimeTarget = metadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() }
+        val backendProvider = metadata?.backendProvider?.trim()?.takeIf { it.isNotEmpty() }
+        if (runtimeTarget != null || backendProvider != null) {
+            return metadata
+        }
+        return HostRuntimeMetadata(
+            runtimeTarget = legacyDefaultRuntimeTargetKey,
+            runtimeTargetDisplayName = legacyDefaultRuntimeTargetDisplayName,
+            backendProvider = legacyDefaultRuntimeTargetKey,
+            backendProviderDisplayName = legacyDefaultRuntimeTargetDisplayName,
+        )
+    }
+
     private fun runtimeTargetIdentityKey(metadata: HostRuntimeMetadata?): String? {
         return metadata?.runtimeTarget
             ?.trim()
@@ -2680,6 +2725,7 @@ class AndrodexService(
             ?: metadata?.backendProvider
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
+            ?: legacyDefaultRuntimeTargetKey
     }
 
     private fun requireThreadCapabilitySupport(threadId: String, action: ThreadCapabilityAction) {
@@ -2788,9 +2834,7 @@ class AndrodexService(
         previous: HostRuntimeMetadata?,
         next: HostRuntimeMetadata?,
     ): Boolean {
-        val previousKey = runtimeTargetIdentityKey(previous) ?: return false
-        val nextKey = runtimeTargetIdentityKey(next) ?: return false
-        return previousKey != nextKey
+        return runtimeTargetIdentityKey(previous) != runtimeTargetIdentityKey(next)
     }
 
     private suspend fun ensureThreadHydrated(
@@ -2930,6 +2974,21 @@ class AndrodexService(
                 syncThreadRunStateFromSnapshot(threadId, repository.readThreadRunSnapshot(threadId))
             }
         }
+    }
+
+    private fun shouldIgnoreStaleThreadLoadFailure(
+        threadId: String,
+        error: Throwable,
+        expectedContextRevision: Long,
+    ): Boolean {
+        if (expectedContextRevision == threadSessionContextRevision.get()) {
+            return false
+        }
+        val normalizedMessage = error.message?.lowercase() ?: return false
+        if (!normalizedMessage.contains("invalid thread id")) {
+            return false
+        }
+        return stateFlow.value.selectedThreadId != threadId
     }
 
     private fun isCurrentThreadOpenAttempt(attemptRevision: Long): Boolean {

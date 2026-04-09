@@ -17,6 +17,19 @@ test("resolveT3RuntimeEndpoint defaults T3 companion mode to the standard local 
   assert.equal(resolved.source, "default-loopback");
 });
 
+test("resolveT3RuntimeEndpoint preserves an explicit auth token alongside an explicit endpoint", () => {
+  const resolved = resolveT3RuntimeEndpoint({
+    env: {
+      ANDRODEX_T3_ENDPOINT: "ws://127.0.0.1:3783/ws",
+      ANDRODEX_T3_AUTH_TOKEN: "desktop-control-room-token",
+    },
+  });
+
+  assert.equal(resolved.endpoint, "ws://127.0.0.1:3783/ws");
+  assert.equal(resolved.authToken, "desktop-control-room-token");
+  assert.equal(resolved.source, "explicit");
+});
+
 test("resolveT3RuntimeEndpoint prefers the local runtime-session descriptor when present", () => {
   const resolved = resolveT3RuntimeEndpoint({
     env: {},

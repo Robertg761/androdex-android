@@ -8,6 +8,7 @@ const {
   isRuntimeTargetMethodAllowed,
 } = require("../src/runtime/method-policy");
 const runtimeAdapterModule = require("../src/runtime/adapter");
+const { createCanonicalThreadId } = require("../src/thread-identity");
 
 const trackedAdapters = new Set();
 
@@ -1518,8 +1519,72 @@ test("T3 runtime adapter dispatches turn/start for companion-supported threads",
   assert.equal(turnStartDispatch.payload.modelSelection.model, "gpt-5.4");
   assert.equal(turnStartDispatch.payload.modelSelection.options.reasoningEffort, "high");
   assert.equal(turnStartDispatch.payload.modelSelection.options.fastMode, true);
+  assert.equal(turnStartDispatch.payload.runtimeMode, "approval-required");
   assert.equal(turnStartDispatch.payload.interactionMode, "plan");
   assert.equal(turnStartDispatch.payload.titleSeed, "Plan the rollout");
+});
+
+test("T3 runtime adapter aligns runtime mode before turn/start when Android access mode changes it", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-turn-start-runtime-mode",
+    method: "turn/start",
+    params: {
+      threadId: "thread-123",
+      input: [
+        {
+          type: "text",
+          text: "Keep this supervised",
+        },
+      ],
+      sandboxPolicy: {
+        type: "workspaceWrite",
+      },
+    },
+  })), true);
+
+  let response = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    response = responses.find((entry) => entry.id === "req-turn-start-runtime-mode") || null;
+    if (response) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(response?.result?.ok, true);
+  assert.equal(response?.result?.started, true);
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatches = Array.from(new Map(
+    socket.sentMessages
+      .map((entry) => JSON.parse(entry))
+      .filter((entry) => entry.tag === "orchestration.dispatchCommand")
+      .map((entry) => [entry.id, entry])
+  ).values());
+
+  assert.deepEqual(dispatches.map((entry) => entry.payload.type), [
+    "thread.runtime-mode.set",
+    "thread.turn.start",
+  ]);
+  assert.equal(dispatches[0].payload.runtimeMode, "approval-required");
+  assert.equal(dispatches[1].payload.runtimeMode, "approval-required");
+  assert.equal(dispatches[1].payload.message.text, "Keep this supervised");
 });
 
 test("T3 runtime adapter dispatches thread/rollback for companion-supported threads", async () => {
@@ -1786,6 +1851,40 @@ test("T3 runtime adapter synthesizes thread/read responses from the snapshot rea
   assert.equal(responses[0].result.thread.turns[0].items[1].type, "assistant_message");
 });
 
+test("T3 runtime adapter accepts canonical Androdex thread IDs for thread/read", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-read-canonical",
+    method: "thread/read",
+    params: {
+      threadId: createCanonicalThreadId("t3-server", "thread-123"),
+      includeTurns: true,
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-read-canonical");
+  assert.equal(responses[0].result.thread.id, "thread-123");
+  assert.equal(responses[0].result.thread.threadCapabilities.companionSupportState, "supported");
+});
+
 test("T3 runtime adapter attaches bridge-managed live updates for supported thread/resume requests", async () => {
   const adapter = createRuntimeAdapter({
     targetKind: "t3-server",
@@ -1821,6 +1920,40 @@ test("T3 runtime adapter attaches bridge-managed live updates for supported thre
   assert.match(responses[0].result.reason, /attached bridge-managed live updates/i);
   assert.equal(responses[0].result.threadCapabilities.companionSupportState, "supported");
   assert.equal(responses[0].result.threadCapabilities.liveUpdates.supported, true);
+});
+
+test("T3 runtime adapter accepts canonical Androdex thread IDs for thread/resume", async () => {
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-resume-canonical",
+    method: "thread/resume",
+    params: {
+      threadId: createCanonicalThreadId("t3-server", "thread-123"),
+    },
+  })), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "req-thread-resume-canonical");
+  assert.equal(responses[0].result.ok, true);
+  assert.equal(responses[0].result.resumed, true);
+  assert.equal(responses[0].result.liveUpdatesAttached, true);
 });
 
 test("T3 runtime adapter returns explicit capability metadata when thread/resume is gated", async () => {

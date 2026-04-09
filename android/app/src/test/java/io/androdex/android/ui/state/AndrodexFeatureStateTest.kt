@@ -513,6 +513,8 @@ class AndrodexFeatureStateTest {
         assertFalse(route.state.canRestoreQueuedDrafts)
         assertTrue(route.state.canResumeQueue)
         assertTrue(appState.settings.isVisible)
+        assertTrue(appState.settings.hostRuntimeTargetOptions.any { it.value == "codex-native" && it.selected })
+        assertTrue(appState.settings.hostRuntimeTargetOptions.any { it.value == "t3-server" && !it.selected })
         assertTrue(appState.settings.modelOptions.any { it.value == "gpt-5.4" && it.selected })
         assertTrue(appState.settings.reasoningOptions.any { it.value == "high" && it.selected })
     }
@@ -723,6 +725,7 @@ class AndrodexFeatureStateTest {
         assertEquals("Active workspace", route.state.fork.targets.last().title)
         assertTrue(appState.settings.accessModeOptions.any { it.value == "full-access" && it.selected })
         assertTrue(appState.settings.serviceTierOptions.any { it.value == "fast" && it.selected })
+        assertTrue(appState.settings.hostRuntimeTargetOptions.any { it.value == "codex-native" && it.selected })
         assertTrue(appState.settings.about.projectUrl.contains("github.com"))
         assertTrue(appState.settings.bridgeStatus.serviceTierMessage.contains("available", ignoreCase = true))
     }

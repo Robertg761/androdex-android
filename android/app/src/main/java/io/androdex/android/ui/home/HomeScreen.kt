@@ -84,6 +84,7 @@ internal fun HomeScreen(
         topBar = {
             Column {
                 HomeTopBar(
+                    runtimeTargetLabel = state.bridgeStatus.runtimeTargetLabel,
                     onOpenSidebar = onOpenSidebar,
                     onOpenSettings = onOpenSettings,
                 )
@@ -156,12 +157,13 @@ internal fun HomeScreen(
 
 @Composable
 private fun HomeTopBar(
+    runtimeTargetLabel: String?,
     onOpenSidebar: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     RemodexPageHeader(
         title = "Androdex",
-        subtitle = "Host-local Codex",
+        subtitle = runtimeTargetLabel?.takeIf { it.isNotBlank() } ?: "Host-local runtime",
         centerTitle = true,
         navigation = {
             RemodexIconButton(

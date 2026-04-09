@@ -8,6 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const WebSocket = require("ws");
 const {
+  buildBridgeManagedRuntimeTargetResult,
   buildUnavailableHostAccountStatus,
   createBridgeManagedInitializeSuccessResponse,
   getRelayWatchdogAction,
@@ -24,6 +25,33 @@ const {
   shouldServeBridgeManagedReadOnlySnapshot,
   shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
+
+test("buildBridgeManagedRuntimeTargetResult returns host runtime selection metadata", () => {
+  const result = buildBridgeManagedRuntimeTargetResult({
+    getStatus() {
+      return {
+        currentCwd: "/tmp/workspace",
+        runtimeTarget: "t3-server",
+        workspaceActive: true,
+        runtimeMetadata: {
+          runtimeAttachState: "ready",
+          runtimeEndpointHost: "127.0.0.1",
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(result, {
+    workspaceActive: true,
+    currentCwd: "/tmp/workspace",
+    runtimeTarget: "t3-server",
+    runtimeTargetDisplayName: "T3 Server",
+    backendProvider: null,
+    backendProviderDisplayName: null,
+    runtimeAttachState: "ready",
+    runtimeEndpointHost: "127.0.0.1",
+  });
+});
 
 test("createBridgeManagedInitializeSuccessResponse can include runtime-target metadata", () => {
   assert.deepEqual(

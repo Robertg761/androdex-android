@@ -2963,6 +2963,84 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun connectionUpdate_missingRuntimeMetadataFallsBackToLegacyCodexAndClearsSelectedThread() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-t3", "T3 thread", null, "/workspace/t3", 1_000L, 1_500L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "message-t3",
+                        threadId = "thread-t3",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "T3 target message",
+                        createdAtEpochMs = 1_000L,
+                        turnId = "turn-t3",
+                        itemId = "item-t3",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-t3",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "t3-server",
+                    runtimeTargetDisplayName = "T3 Server",
+                    backendProvider = "t3-server",
+                    backendProviderDisplayName = "T3 Server",
+                ),
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-t3", "T3 thread", null, "/workspace/t3", 1_000L, 1_500L))
+            )
+        )
+        service.openThread("thread-t3")
+        advanceUntilIdle()
+
+        assertEquals("thread-t3", service.state.value.selectedThreadId)
+        assertEquals("t3-server", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected to legacy codex host",
+                runtimeMetadata = null,
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("codex-native", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertEquals("Codex Native", service.state.value.hostRuntimeMetadata?.runtimeTargetDisplayName)
+        assertNull(service.state.value.selectedThreadId)
+        assertNull(service.state.value.selectedThreadTitle)
+        assertNull(service.state.value.focusedTurnId)
+    }
+
+    @Test
     fun connectionUpdate_runtimeTargetChangeIgnoresLateRefreshAndWorkspaceLoadsFromPreviousTarget() = runTest {
         val repository = FakeRepository().apply {
             refreshedThreads = listOf(
@@ -3404,6 +3482,133 @@ class AndrodexServiceTest {
             ),
             service.state.value.threadRuntimeOverridesByThread["thread-codex"],
         )
+    }
+
+    @Test
+    fun runtimeConfigLoaded_missingRuntimeMetadataFallsBackToLegacyCodexScopeWithoutBleed() = runTest {
+        val t3RuntimeMetadata = HostRuntimeMetadata(
+            runtimeTarget = "t3-server",
+            runtimeTargetDisplayName = "T3 Server",
+            backendProvider = "t3-server",
+            backendProviderDisplayName = "T3 Server",
+        )
+        val repository = FakeRepository().apply {
+            currentThreadTimelineScopeKeyValue = "host-1::t3-server"
+            persistedThreadTimelinesByScope = mapOf(
+                "host-1::codex-native" to mapOf(
+                    "thread-codex" to listOf(
+                        ConversationMessage(
+                            id = "codex-message",
+                            threadId = "thread-codex",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "Codex scope message",
+                            createdAtEpochMs = 1_000L,
+                            turnId = "turn-codex",
+                            itemId = "item-codex",
+                        )
+                    )
+                ),
+                "host-1::t3-server" to mapOf(
+                    "thread-t3" to listOf(
+                        ConversationMessage(
+                            id = "t3-message",
+                            threadId = "thread-t3",
+                            role = ConversationRole.ASSISTANT,
+                            kind = ConversationKind.CHAT,
+                            text = "T3 scope message",
+                            createdAtEpochMs = 2_000L,
+                            turnId = "turn-t3",
+                            itemId = "item-t3",
+                        )
+                    )
+                ),
+            )
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-t3", "T3 thread", null, "/workspace/t3", 1_000L, 1_500L),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "selected-t3",
+                        threadId = "thread-t3",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Selected T3 thread",
+                        createdAtEpochMs = 2_500L,
+                        turnId = "turn-t3",
+                        itemId = "item-selected-t3",
+                    )
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-t3",
+                    latestTurnTerminalState = TurnTerminalState.COMPLETED,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = false,
+                supportsThreadCompaction = false,
+                supportsThreadRollback = false,
+                supportsBackgroundTerminalCleanup = false,
+                supportsThreadFork = false,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = t3RuntimeMetadata,
+            )
+        )
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-t3", "T3 thread", null, "/workspace/t3", 1_000L, 1_500L))
+            )
+        )
+        service.openThread("thread-t3")
+        advanceUntilIdle()
+
+        assertEquals("thread-t3", service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Selected T3 thread"),
+            service.state.value.timelineByThread["thread-t3"].orEmpty().map { it.text },
+        )
+
+        repository.currentThreadTimelineScopeKeyValue = "host-1::codex-native"
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.FULL_ACCESS,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = null,
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("codex-native", service.state.value.hostRuntimeMetadata?.runtimeTarget)
+        assertEquals("Codex Native", service.state.value.hostRuntimeMetadata?.runtimeTargetDisplayName)
+        assertNull(service.state.value.selectedThreadId)
+        assertEquals(
+            listOf("Codex scope message"),
+            service.state.value.timelineByThread["thread-codex"].orEmpty().map { it.text },
+        )
+        assertTrue(service.state.value.timelineByThread["thread-t3"].isNullOrEmpty())
     }
 
     @Test

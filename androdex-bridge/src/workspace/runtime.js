@@ -44,6 +44,7 @@ function createWorkspaceRuntime({
     sendToRuntime,
     sendToCodex,
     shutdown,
+    updateRuntimeConfig,
   };
 
   function getCurrentCwd() {
@@ -99,7 +100,7 @@ function createWorkspaceRuntime({
     return activateWorkspace({ cwd: currentCwd });
   }
 
-  async function activateWorkspace({ cwd = "" } = {}) {
+  async function activateWorkspace({ cwd = "", forceRestart = false } = {}) {
     const nextCwd = normalizeWorkspacePath(normalizeNonEmptyString(cwd) || process.cwd());
     if (!isExistingDirectory(nextCwd)) {
       throw new Error(`Workspace directory not found: ${nextCwd}`);
@@ -108,6 +109,7 @@ function createWorkspaceRuntime({
     const activationId = ++activationSequence;
     const activation = activationQueue.then(() => performWorkspaceActivation({
       cwd: nextCwd,
+      forceRestart,
       activationId,
     }));
     activationQueue = activation.then(
@@ -117,12 +119,12 @@ function createWorkspaceRuntime({
     return activation;
   }
 
-  async function performWorkspaceActivation({ cwd, activationId }) {
+  async function performWorkspaceActivation({ cwd, activationId, forceRestart = false }) {
     if (activationId !== activationSequence) {
       return getStatus();
     }
 
-    if (currentCwd === cwd && activeRuntime) {
+    if (!forceRestart && currentCwd === cwd && activeRuntime) {
       return getStatus();
     }
 
@@ -210,6 +212,39 @@ function createWorkspaceRuntime({
   async function shutdown() {
     activationSequence += 1;
     await shutdownTransport();
+  }
+
+  async function updateRuntimeConfig(nextRuntimeConfig = {}) {
+    const nextTarget = normalizeNonEmptyString(nextRuntimeConfig.runtimeTarget)
+      || normalizeNonEmptyString(nextRuntimeConfig.runtimeProvider);
+    if (!nextTarget) {
+      throw new Error("Runtime target is required.");
+    }
+
+    config.runtimeTarget = nextTarget;
+    config.runtimeProvider = normalizeNonEmptyString(nextRuntimeConfig.runtimeProvider)
+      || (nextTarget === "t3-server" ? "t3code" : "codex");
+    if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpoint")) {
+      config.runtimeEndpoint = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpoint);
+    }
+    if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpointAuthToken")) {
+      config.runtimeEndpointAuthToken = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpointAuthToken);
+    }
+    writeDaemonConfigImpl({
+      ...(readDaemonConfigImpl() || {}),
+      ...config,
+    });
+
+    if (currentCwd && isExistingDirectory(currentCwd)) {
+      return activateWorkspace({
+        cwd: currentCwd,
+        forceRestart: true,
+      });
+    }
+
+    await shutdownTransport();
+    publishTransportMetadata();
+    return getStatus();
   }
 
   async function shutdownTransport() {

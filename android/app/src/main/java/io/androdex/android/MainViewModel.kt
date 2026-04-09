@@ -1645,6 +1645,13 @@ class MainViewModel(
         }
     }
 
+    fun selectHostRuntimeTarget(targetKind: String) {
+        runBusyAction("Switching runtime...") {
+            service.selectHostRuntimeTarget(targetKind)
+            service.loadRuntimeConfig()
+        }
+    }
+
     fun selectAccessMode(accessMode: AccessMode) {
         viewModelScope.launch {
             service.selectAccessMode(accessMode)

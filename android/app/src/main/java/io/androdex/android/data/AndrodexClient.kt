@@ -1221,6 +1221,17 @@ class AndrodexClient(
         emitRuntimeConfig()
     }
 
+    suspend fun setHostRuntimeTarget(targetKind: String) {
+        val normalizedTarget = targetKind.trim().takeIf { it.isNotEmpty() }
+            ?: throw IllegalArgumentException("Runtime target is required.")
+        val result = sendRequest(
+            "bridge/runtimeTarget/set",
+            JSONObject().put("targetKind", normalizedTarget)
+        )
+        hostRuntimeMetadata = decodeHostRuntimeMetadata(result) ?: hostRuntimeMetadata
+        emitRuntimeConfig()
+    }
+
     suspend fun setSelectedAccessMode(accessMode: AccessMode) {
         selectedAccessMode = accessMode
         persistence.saveSelectedAccessMode(accessMode)

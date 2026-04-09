@@ -365,6 +365,7 @@ internal data class RuntimeSettingsUiState(
     val hostAccount: HostAccountUiState?,
     val bridgeStatus: BridgeStatusUiState,
     val about: AboutUiState,
+    val hostRuntimeTargetOptions: List<RuntimeSettingsOptionUiState>,
     val modelOptions: List<RuntimeSettingsOptionUiState>,
     val reasoningOptions: List<RuntimeSettingsOptionUiState>,
     val serviceTierOptions: List<RuntimeSettingsOptionUiState>,
@@ -965,6 +966,22 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
 private fun AndrodexUiState.toRuntimeSettingsUiState(
     isVisible: Boolean,
 ): RuntimeSettingsUiState {
+    val currentRuntimeTarget = hostRuntimeMetadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "codex-native"
+    val hostRuntimeTargetOptions = listOf(
+        RuntimeSettingsOptionUiState(
+            value = "codex-native",
+            title = "Codex",
+            subtitle = "Use the normal host-local Codex runtime.",
+            selected = currentRuntimeTarget == "codex-native",
+        ),
+        RuntimeSettingsOptionUiState(
+            value = "t3-server",
+            title = "T3 Code",
+            subtitle = "Attach the host bridge to a local T3 server.",
+            selected = currentRuntimeTarget == "t3-server",
+        ),
+    )
     val selectedModel = resolveSelectedModel(availableModels, selectedModelId)
     val modelOptions = buildList {
         add(
@@ -1055,6 +1072,7 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
             bridgeStartCommand = AppEnvironment.bridgeStartCommand,
             bridgeUpdateCommand = AppEnvironment.bridgeUpdateCommand,
         ),
+        hostRuntimeTargetOptions = hostRuntimeTargetOptions,
         modelOptions = modelOptions,
         reasoningOptions = reasoningOptions,
         serviceTierOptions = serviceTierOptions,

@@ -6,10 +6,22 @@
 
 const { startBridge } = require("./bridge");
 const { runBridgeDoctor } = require("./doctor");
-const { resetBridgeDeviceState } = require("./pairing/device-state");
+const { getBridgeDoctorReport } = require("./doctor");
 const { openLastActiveThread } = require("./session-state");
 const { watchThreadRollout } = require("./rollout/watch");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
+const {
+  getBridgeDesktopSnapshot,
+  readBridgeLogTail,
+  removeDesktopT3RuntimeSessionDescriptor,
+  restartBridgeServiceFromConfig,
+  resetBridgePairing,
+  resolveT3RuntimeSessionPath,
+  startBridgeServiceFromConfig,
+  stopBridgeService,
+  updateBridgeRuntimeConfig,
+  writeDesktopT3RuntimeSessionDescriptor,
+} = require("./control-panel");
 const {
   getMacOSBridgeServiceStatus,
   printMacOSBridgePairingQr,
@@ -22,16 +34,26 @@ const {
 
 module.exports = {
   getMacOSBridgeServiceStatus,
+  getBridgeDesktopSnapshot,
+  getBridgeDoctorReport,
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
+  readBridgeLogTail,
   readBridgeConfig,
+  removeDesktopT3RuntimeSessionDescriptor,
   resetMacOSBridgePairing,
   runBridgeDoctor,
+  startBridgeServiceFromConfig,
   startBridge,
   runMacOSBridgeService,
   startMacOSBridgeService,
+  restartBridgeServiceFromConfig,
   stopMacOSBridgeService,
-  resetBridgePairing: resetBridgeDeviceState,
+  stopBridgeService,
+  updateBridgeRuntimeConfig,
+  writeDesktopT3RuntimeSessionDescriptor,
+  resolveT3RuntimeSessionPath,
+  resetBridgePairing,
   openLastActiveThread,
   watchThreadRollout,
 };

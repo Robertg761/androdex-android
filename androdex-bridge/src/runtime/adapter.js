@@ -28,6 +28,7 @@ const {
   DEFAULT_RUNTIME_TARGET,
   resolveRuntimeTargetConfig,
 } = require("./target-config");
+const { decodeCanonicalThreadId } = require("../thread-identity");
 
 const T3_ATTACH_TIMEOUT_MS = 5_000;
 const T3_RECONNECT_DELAY_MS = 50;
@@ -182,6 +183,26 @@ function createT3ServerRuntimeAdapter({
   const closeListeners = createHandlerBag();
   const errorListeners = createHandlerBag();
   const initialTransport = createAndBindTransport();
+
+  function normalizeT3IncomingThreadId(value) {
+    const normalizedThreadId = normalizeNonEmptyString(value);
+    if (!normalizedThreadId) {
+      return "";
+    }
+
+    const decodedThreadId = decodeCanonicalThreadId(normalizedThreadId);
+    if (!decodedThreadId) {
+      return normalizedThreadId;
+    }
+
+    if (decodedThreadId.runtimeTarget !== runtimeTarget.kind) {
+      throw new Error(
+        `Thread ${normalizedThreadId} belongs to runtime target ${decodedThreadId.runtimeTarget}, not ${runtimeTarget.kind}. Reopen the thread from the active runtime and retry.`
+      );
+    }
+
+    return decodedThreadId.backendThreadId;
+  }
 
   function updateRuntimeMetadata(nextValues) {
     runtimeMetadata = {
@@ -1083,7 +1104,7 @@ function createT3ServerRuntimeAdapter({
         .then((snapshot) => {
           emitRpcResult(requestId, buildT3ThreadReadResult({
             snapshot,
-            threadId: parsed?.params?.threadId,
+            threadId: normalizeT3IncomingThreadId(parsed?.params?.threadId),
           }));
         })
         .catch((error) => {
@@ -1179,7 +1200,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "thread/resume") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           const resumeSupport = resolveT3ResumeSupport(snapshot, threadId);
           if (!resumeSupport.ok) {
             emitAdapterLog("action_gated", {
@@ -1345,7 +1366,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "turn/start") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           if (!threadId) {
             throw new Error("T3 turn start requires a threadId.");
           }
@@ -1414,7 +1435,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "review/start") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           if (!threadId) {
             throw new Error("T3 review start requires a threadId.");
           }
@@ -1483,7 +1504,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "thread/rollback") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           if (!threadId) {
             throw new Error("T3 rollback requires a threadId.");
           }
@@ -1581,7 +1602,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "thread/backgroundTerminals/clean") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           if (!threadId) {
             throw new Error("T3 background terminal cleanup requires a threadId.");
           }
@@ -1668,7 +1689,7 @@ function createT3ServerRuntimeAdapter({
     if (method === "turn/interrupt") {
       void ensureSnapshotCache()
         .then((snapshot) => {
-          const threadId = normalizeNonEmptyString(parsed?.params?.threadId);
+          const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
           if (!threadId) {
             throw new Error("T3 turn interrupt requires a threadId.");
           }
@@ -1775,7 +1796,7 @@ function createT3ServerRuntimeAdapter({
         emitAdapterLog("action_gated", {
           reasonCode: "runtime_method_rejected",
           method,
-          threadId: normalizeNonEmptyString(parsed?.params?.threadId) || null,
+          threadId: normalizeT3IncomingThreadId(parsed?.params?.threadId) || null,
         });
         throw new Error(
           buildRuntimeTargetMethodRejectionMessage({
@@ -2575,6 +2596,10 @@ function buildT3TurnStartCommand({
   }
 
   const interactionMode = normalizeT3InteractionMode(params?.collaborationMode?.mode);
+  const runtimeMode = resolveT3RuntimeModeForTurnStart({
+    params,
+    thread,
+  });
   const modelSelection = buildT3ModelSelectionFromTurnStartParams({
     params,
     thread,
@@ -2596,6 +2621,7 @@ function buildT3TurnStartCommand({
     },
     ...(modelSelection ? { modelSelection } : {}),
     ...(titleSeed ? { titleSeed } : {}),
+    runtimeMode,
     interactionMode,
     createdAt: new Date().toISOString(),
   };
@@ -2752,6 +2778,11 @@ function prepareT3ThreadForTurnStart({
   params,
   transport,
 }) {
+  const desiredRuntimeMode = resolveT3RuntimeModeForTurnStart({
+    params,
+    thread,
+  });
+  const currentRuntimeMode = normalizeT3RuntimeMode(thread?.runtimeMode) || "approval-required";
   const desiredInteractionMode = normalizeT3InteractionMode(params?.collaborationMode?.mode);
   const currentInteractionMode = normalizeT3InteractionMode(thread?.interactionMode);
   const desiredModelSelection = buildT3ModelSelectionFromTurnStartParams({
@@ -2761,6 +2792,18 @@ function prepareT3ThreadForTurnStart({
   const currentModelSelection = normalizeT3ComparableModelSelection(thread?.modelSelection);
 
   let chain = Promise.resolve();
+  if (desiredRuntimeMode !== currentRuntimeMode) {
+    chain = chain.then(() => transport.request("orchestration.dispatchCommand", {
+      type: "thread.runtime-mode.set",
+      commandId: randomUUID(),
+      threadId,
+      runtimeMode: desiredRuntimeMode,
+      createdAt: new Date().toISOString(),
+    }, {
+      timeoutMs: T3_ATTACH_TIMEOUT_MS,
+    }));
+  }
+
   if (
     desiredModelSelection
     && JSON.stringify(normalizeT3ComparableModelSelection(desiredModelSelection))
@@ -2789,6 +2832,37 @@ function prepareT3ThreadForTurnStart({
   }
 
   return chain;
+}
+
+function resolveT3RuntimeModeForTurnStart({
+  params,
+  thread,
+}) {
+  if (hasExplicitT3RuntimeModeParams(params)) {
+    return buildT3RuntimeModeFromThreadStartParams(params);
+  }
+
+  return normalizeT3RuntimeMode(thread?.runtimeMode) || "approval-required";
+}
+
+function hasExplicitT3RuntimeModeParams(params) {
+  if (params?.sandboxPolicy && typeof params.sandboxPolicy === "object") {
+    return normalizeNonEmptyString(params.sandboxPolicy.type).length > 0;
+  }
+
+  if (typeof params?.sandbox === "string" && params.sandbox.trim()) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeT3RuntimeMode(value) {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "approval-required" || normalized === "full-access") {
+    return normalized;
+  }
+  return "";
 }
 
 function extractT3TurnInput(params) {

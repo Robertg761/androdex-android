@@ -1038,17 +1038,21 @@ Completed so far:
 - the execution plan now includes explicit adapter invariants for metadata-first bootstrap, snapshot-plus-replay ordering, replay cursor scoping, stale-action reconciliation, and log-schema redaction rules so the remaining work is anchored to concrete rules instead of informal intent
 - companion-eligible T3 Codex threads now advertise and support background-terminal cleanup through `thread.session.stop`, and Android now applies the same per-thread capability gating to that action that it already uses for interrupt, rollback, approval, and tool/user-input responses
 - Android `thread/start` is now bridged into T3 `thread.create` for known project workspaces, with runtime-mode derivation from Android access-mode hints and immediate synthesized thread summaries on success
+- existing companion-eligible T3 `turn/start` now always carries an explicit `runtimeMode` in the dispatched T3 command and preflights `thread.runtime-mode.set` when Android access-mode hints differ from the synchronized thread state, matching the current live T3 client contract instead of relying on server-side defaults
 - manual hardware smoke on Android now proves trusted reconnect succeeds against the saved pair once the real host bridge is running, project switching works against live host-local workspace data, cross-repo `New chat` opens in the newly selected repo instead of bleeding back to the bridge repo, reopening an existing recent thread rehydrates cleanly in that switched workspace, and force-stop relaunch restores the saved pairing without falling back to repair-pairing UI
 - a new real attach/bootstrap probe against a separate local T3 server on loopback now succeeds end to end after the transport replacement: `server.getConfig`, snapshot bootstrap, live subscription startup, replay watermark persistence, and a synthesized `thread/list` all complete through the bridge adapter without touching the live desktop app session
 - attach suitability now also understands T3's current live `ServerConfig` shape by inferring the replay state-root from stable returned config paths when the older top-level `baseDir`/method-advertising fields are absent
+- targeted phone smoke against that same isolated local T3 server now succeeds through the real paired Android app path as well: the phone reconnects to the trusted host, surfaces the synthesized T3 thread and `Runtime: T3 Server` status, opens the thread, and an Android-authored `turn/start` is accepted after the `runtimeMode` fix, transitioning the composer into the expected running-state `Stop` / `Queue` UI instead of surfacing the previous `Missing key at ["runtimeMode"]` host error
+- Android runtime-target handoff now treats missing host runtime metadata as the legacy `codex-native` default, so returning from a T3 leg to an older/default codex-native bridge still clears stale T3 thread selection and scoped timeline state instead of preserving the previous T3 view
+- the full same-host `codex-native -> t3-server -> codex-native` hardware/manual matrix now passes on phone as well: codex-native baseline reconnect succeeds, the T3 leg reopens the saved T3 thread through raw backend UUIDs without the previous canonical-thread-id failure, and the return leg lands back on codex-native home (`40 threads`) instead of reopening the stale T3 thread after the host switches back
+- a new Electron-based `desktop/` control room now gives the host-local bridge a visual control surface for live status, pairing QR generation, runtime-target switching, T3 runtime-session descriptor management, doctor output, and bridge log tails, and that runtime-target choice is now also exposed in Android runtime settings so the same paired phone can explicitly flip the host between Codex and T3 companion mode
 
-Still in progress:
+Still in progress beyond the current companion milestone:
 
 - broader Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache, beyond the current resumed-thread turn/assistant/title/plan/task/tool/approval/user-input subset
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
 - deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
 - easy installed-desktop T3 attach still needs that runtime-session descriptor hook to ship in a normal T3 desktop release before the installed-app path is truly turnkey for users
-- broader manual smoke hardening is now unblocked, but the same-host `codex-native -> t3-server -> codex-native` matrix still needs to be re-run on device now that live attach/bootstrap succeeds
 
 Not started yet:
 
@@ -1095,9 +1099,9 @@ Scope note:
 
 - v1 T3 support is companion support for existing Codex-backed T3 threads, not parity with the full T3 desktop product.
 
-## Immediate Next Steps
+## Follow-on Next Steps
 
-1. Re-run the same-host `codex-native -> t3-server -> codex-native` hardware/manual smoke matrix on phone now that live attach/bootstrap succeeds against a separate local T3 server.
-2. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
-3. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
-4. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
+1. Expand duplicate suppression and replay-idempotency coverage beyond the current resumed-thread title/assistant/plan/task/tool/approval/user-input subset.
+2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
+3. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
+4. Decide whether the new Electron control room should stay as a developer-only tool under `desktop/` or graduate into a packaged/signed desktop utility with a stable install/update path.

@@ -99,6 +99,7 @@ interface AndrodexRepositoryContract {
     suspend fun loadRuntimeConfig()
     suspend fun setSelectedModelId(modelId: String?)
     suspend fun setSelectedReasoningEffort(effort: String?)
+    suspend fun setHostRuntimeTarget(targetKind: String) = Unit
     suspend fun setSelectedAccessMode(accessMode: AccessMode) = Unit
     suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) = Unit
     suspend fun setThreadRuntimeOverride(threadId: String, runtimeOverride: ThreadRuntimeOverride?) = Unit
@@ -294,6 +295,10 @@ class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
 
     override suspend fun setSelectedReasoningEffort(effort: String?) {
         client.setSelectedReasoningEffort(effort)
+    }
+
+    override suspend fun setHostRuntimeTarget(targetKind: String) {
+        client.setHostRuntimeTarget(targetKind)
     }
 
     override suspend fun setSelectedAccessMode(accessMode: AccessMode) {

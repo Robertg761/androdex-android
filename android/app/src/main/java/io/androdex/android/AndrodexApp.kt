@@ -218,6 +218,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                 settingsOpen = false
                 viewModel.openManualPairingSetup()
             },
+            onSelectHostRuntimeTarget = viewModel::selectHostRuntimeTarget,
             onSelectModel = viewModel::selectModel,
             onSelectReasoning = viewModel::selectReasoningEffort,
             onSelectServiceTier = { wireValue ->

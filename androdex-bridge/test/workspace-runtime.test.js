@@ -90,3 +90,63 @@ test("workspace runtime forwards trusted desktop runtime-session config into the
   assert.equal(recordedAdapterCalls[0].endpoint.includes("token="), false);
   assert.ok(daemonWrites.some((entry) => entry.activeCwd === workspaceDir));
 });
+
+test("workspace runtime can switch runtime targets and restart the active workspace in place", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "androdex-runtime-switch-"));
+  const workspaceDir = path.join(tempRoot, "workspace");
+  const recordedAdapterCalls = [];
+  const daemonWrites = [];
+
+  fs.mkdirSync(workspaceDir, { recursive: true });
+
+  try {
+    const runtime = createWorkspaceRuntime({
+      config: {
+        activeCwd: workspaceDir,
+        recentWorkspaces: [workspaceDir],
+        runtimeTarget: "codex-native",
+        runtimeProvider: "codex",
+      },
+      createRuntimeAdapterImpl(options) {
+        recordedAdapterCalls.push(options);
+        return {
+          getRuntimeMetadata() {
+            return {
+              runtimeTarget: options.targetKind,
+            };
+          },
+          onClose() {},
+          onError() {},
+          onMessage() {},
+          onMetadata() {},
+          send() {},
+          shutdown() {},
+          whenReady() {
+            return Promise.resolve();
+          },
+        };
+      },
+      readDaemonConfigImpl() {
+        return {};
+      },
+      writeDaemonConfigImpl(nextConfig) {
+        daemonWrites.push(nextConfig);
+      },
+    });
+
+    await runtime.activateWorkspace({ cwd: workspaceDir });
+    await runtime.updateRuntimeConfig({
+      runtimeTarget: "t3-server",
+      runtimeProvider: "t3code",
+    });
+    await runtime.shutdown();
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  assert.equal(recordedAdapterCalls.length, 2);
+  assert.equal(recordedAdapterCalls[0].targetKind, "codex-native");
+  assert.equal(recordedAdapterCalls[1].targetKind, "t3-server");
+  assert.ok(daemonWrites.some((entry) => entry.runtimeTarget === "t3-server"));
+  assert.ok(daemonWrites.some((entry) => entry.activeCwd === workspaceDir));
+});

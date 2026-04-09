@@ -25,7 +25,7 @@ function resolveT3RuntimeEndpoint({
   if (explicitEndpoint) {
     return {
       endpoint: explicitEndpoint,
-      authToken: "",
+      authToken: normalizeNonEmptyString(env?.ANDRODEX_T3_AUTH_TOKEN),
       source: "explicit",
     };
   }

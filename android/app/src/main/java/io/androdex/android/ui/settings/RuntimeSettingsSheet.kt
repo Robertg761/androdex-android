@@ -40,6 +40,7 @@ internal fun RuntimeSettingsSheet(
     onDismiss: () -> Unit,
     onReload: () -> Unit,
     onOpenPairingSetup: () -> Unit,
+    onSelectHostRuntimeTarget: (String) -> Unit,
     onSelectModel: (String?) -> Unit,
     onSelectReasoning: (String?) -> Unit,
     onSelectServiceTier: (String?) -> Unit,
@@ -104,6 +105,19 @@ internal fun RuntimeSettingsSheet(
             ) {
                 Text("Set Up Another Host")
             }
+        }
+
+        SettingsSection(
+            title = "Host runtime",
+            summary = "Choose whether this phone talks to Codex or a local T3 host runtime.",
+        ) {
+            SettingsOptionGroup(
+                title = "Runtime",
+                options = state.hostRuntimeTargetOptions,
+                onSelect = { value ->
+                    value?.let(onSelectHostRuntimeTarget)
+                },
+            )
         }
 
         SettingsSection(

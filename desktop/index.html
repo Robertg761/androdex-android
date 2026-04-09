@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Androdex Control Room</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Host Control</p>
+          <h1>Androdex</h1>
+        </div>
+        <div class="topbar-meta">
+          <div class="status-chip" id="connection-chip">Waiting for bridge</div>
+          <div class="meta-copy">
+            <span id="runtime-label">Runtime unknown</span>
+            <span id="last-refresh-label">Not refreshed yet</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="primary-stack">
+          <article class="panel compact-panel">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Runtime</p>
+                <h2>Host Runtime</h2>
+              </div>
+              <div class="micro-stats">
+                <span class="mini-pill" id="bridge-state">Unknown</span>
+                <span class="mini-pill" id="bridge-pid">PID unknown</span>
+              </div>
+            </div>
+
+            <div class="stats-row">
+              <div>
+                <span class="stat-name">Launchd</span>
+                <span class="stat-value" id="launchd-state">Unknown</span>
+              </div>
+              <div>
+                <span class="stat-name">Installed</span>
+                <span class="stat-value" id="service-installed">Unknown</span>
+              </div>
+              <div>
+                <span class="stat-name">Phone</span>
+                <span class="stat-value" id="trusted-phone">Unknown</span>
+              </div>
+              <div>
+                <span class="stat-name">Refresh</span>
+                <span class="stat-value" id="refresh-state">Unknown</span>
+              </div>
+            </div>
+
+            <form id="runtime-config-form" class="compact-form">
+              <div class="segmented runtime-segmented">
+                <label>
+                  <input type="radio" name="targetKind" value="codex-native" />
+                  <span>Codex</span>
+                </label>
+                <label>
+                  <input type="radio" name="targetKind" value="t3-server" />
+                  <span>T3 Code</span>
+                </label>
+              </div>
+
+              <div id="t3-runtime-fields" class="field-grid">
+                <label class="field">
+                  <span>T3 Endpoint</span>
+                  <input id="runtime-endpoint-input" type="text" placeholder="ws://127.0.0.1:3773/ws" />
+                </label>
+                <label class="field">
+                  <span>T3 Auth Token</span>
+                  <input id="runtime-auth-token-input" type="password" placeholder="Optional explicit token" />
+                </label>
+              </div>
+
+              <label class="toggle-row">
+                <input id="refresh-enabled-input" type="checkbox" />
+                <span>Enable desktop refresh integration</span>
+              </label>
+
+              <div class="button-row">
+                <button type="button" data-action="save-runtime-config" class="ghost">Save</button>
+                <button type="submit" class="accent">Apply Runtime</button>
+                <button type="button" data-action="start-service">Start</button>
+                <button type="button" data-action="restart-service" class="ghost">Restart</button>
+                <button type="button" data-action="stop-service" class="ghost">Stop</button>
+              </div>
+            </form>
+
+            <div class="note-box" id="runtime-config-note"></div>
+            <div class="detail-strip">
+              <span id="runtime-sync-state">Unavailable</span>
+              <span id="runtime-sync-foot">No runtime metadata yet</span>
+            </div>
+          </article>
+
+          <article class="panel compact-panel">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">T3 Session</p>
+                <h2>Descriptor</h2>
+              </div>
+              <div class="micro-stats">
+                <span class="mini-pill" id="t3-discovery-state">Not checked</span>
+              </div>
+            </div>
+
+            <form id="descriptor-form" class="compact-form">
+              <div class="field-grid">
+                <label class="field">
+                  <span>Base URL</span>
+                  <input id="descriptor-base-url-input" type="text" placeholder="ws://127.0.0.1:3783/ws" />
+                </label>
+                <label class="field">
+                  <span>Auth Token</span>
+                  <input id="descriptor-auth-token-input" type="password" placeholder="Required when writing" />
+                </label>
+              </div>
+              <div class="field-grid narrow-grid">
+                <label class="field">
+                  <span>Backend PID</span>
+                  <input id="descriptor-backend-pid-input" type="number" min="0" step="1" placeholder="Optional" />
+                </label>
+              </div>
+              <div class="button-row">
+                <button type="submit" class="accent">Write Descriptor</button>
+                <button type="button" data-action="remove-descriptor" class="ghost">Remove</button>
+                <button type="button" data-open-path="runtimeSessionDir" class="ghost">Open Folder</button>
+              </div>
+            </form>
+
+            <div class="note-box" id="descriptor-status-note"></div>
+            <div class="detail-strip">
+              <span id="t3-discovery-foot">No session data yet</span>
+            </div>
+          </article>
+
+          <article class="panel compact-panel">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Diagnostics</p>
+                <h2>Doctor + Logs</h2>
+              </div>
+              <div class="button-row tight">
+                <button data-action="refresh-all" class="ghost">Refresh</button>
+                <button data-action="run-doctor" class="ghost">Doctor</button>
+                <button data-open-path="logsDir" class="ghost">Logs</button>
+                <button data-open-path="stateDir" class="ghost">State</button>
+              </div>
+            </div>
+
+            <div id="doctor-summary" class="note-box">Run doctor to inspect attach readiness and recommendations.</div>
+            <ul id="doctor-recommendations" class="recommendation-list"></ul>
+
+            <div class="logs-toolbar">
+              <button data-log-kind="stdout" class="ghost active">Stdout</button>
+              <button data-log-kind="stderr" class="ghost">Stderr</button>
+            </div>
+            <pre id="logs-output" class="log-output">Waiting for bridge logs...</pre>
+          </article>
+        </section>
+
+        <aside class="side-stack">
+          <article class="panel compact-panel">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Pairing</p>
+                <h2>Trusted Phone</h2>
+              </div>
+              <button data-action="generate-pairing" class="accent">Fresh QR</button>
+            </div>
+
+            <div class="pairing-card">
+              <div class="qr-frame">
+                <img id="pairing-qr-image" alt="Pairing QR" hidden />
+                <div id="pairing-qr-placeholder">Generate a QR when you need to pair or repair the phone.</div>
+              </div>
+              <div class="pairing-meta">
+                <div>
+                  <span class="stat-name">Status</span>
+                  <span class="stat-value" id="pairing-status-label">No fresh payload yet</span>
+                </div>
+                <div>
+                  <span class="stat-name">Created</span>
+                  <span class="stat-value" id="pairing-created-at-label">Unknown</span>
+                </div>
+                <div>
+                  <span class="stat-name">Freshness</span>
+                  <span class="stat-value" id="pairing-freshness">Unknown</span>
+                </div>
+              </div>
+            </div>
+
+            <textarea id="pairing-payload-text" readonly placeholder="Pairing payload preview appears here."></textarea>
+
+            <div class="button-row">
+              <button data-action="reset-pairing" class="danger">Reset Pairing</button>
+            </div>
+          </article>
+        </aside>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

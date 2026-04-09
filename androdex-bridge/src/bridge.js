@@ -522,6 +522,9 @@ function startBridge({
     if (handleBridgeManagedHandshakeMessage(normalizedMessage)) {
       return;
     }
+    if (handleBridgeManagedRuntimeTargetRequest(normalizedMessage, sendApplicationResponse)) {
+      return;
+    }
     if (handleBridgeManagedRuntimeConfigRequest(normalizedMessage, sendApplicationResponse)) {
       return;
     }
@@ -787,6 +790,61 @@ function startBridge({
     }
 
     return false;
+  }
+
+  function handleBridgeManagedRuntimeTargetRequest(rawMessage, sendResponse) {
+    const parsed = safeParseJSON(rawMessage);
+    const method = normalizeRuntimeMethod(parsed?.method);
+    if (parsed?.id == null) {
+      return false;
+    }
+
+    if (method === "bridge/runtimetarget/read") {
+      sendResponse(JSON.stringify({
+        id: parsed.id,
+        result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime),
+      }));
+      return true;
+    }
+
+    if (method !== "bridge/runtimetarget/set") {
+      return false;
+    }
+
+    const targetKind = normalizeNonEmptyString(parsed?.params?.targetKind);
+    const resolvedTargetConfig = runCatchingResolveRuntimeTargetConfig(targetKind);
+    if (!resolvedTargetConfig) {
+      sendResponse(JSON.stringify({
+        id: parsed.id,
+        error: {
+          code: -32602,
+          message: `Unsupported runtime target: ${targetKind || "unknown"}`,
+        },
+      }));
+      return true;
+    }
+
+    workspaceRuntime.updateRuntimeConfig({
+      runtimeTarget: resolvedTargetConfig.kind,
+      runtimeProvider: resolvedTargetConfig.legacyProviderKind,
+    })
+      .then(() => {
+        sendResponse(JSON.stringify({
+          id: parsed.id,
+          result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime),
+        }));
+      })
+      .catch((error) => {
+        sendResponse(JSON.stringify({
+          id: parsed.id,
+          error: {
+            code: -32000,
+            message: normalizeNonEmptyString(error?.message)
+              || "Unable to switch the host runtime target.",
+          },
+        }));
+      });
+    return true;
   }
 
   async function readSanitizedAuthStatus() {
@@ -1513,6 +1571,18 @@ function buildBridgeRuntimeMetadata({
   };
 }
 
+function buildBridgeManagedRuntimeTargetResult(workspaceRuntime) {
+  const workspaceStatus = workspaceRuntime?.getStatus?.() || {};
+  return {
+    workspaceActive: Boolean(workspaceStatus.workspaceActive),
+    currentCwd: normalizeNonEmptyString(workspaceStatus.currentCwd) || null,
+    ...buildBridgeRuntimeMetadata({
+      runtimeMetadata: workspaceStatus.runtimeMetadata,
+      runtimeTarget: workspaceStatus.runtimeTarget,
+    }),
+  };
+}
+
 function shouldAllowPreResumeRelayResponse(rawMessage) {
   const parsed = safeParseJSON(rawMessage);
   if (!parsed || parsed.id == null) {
@@ -1668,6 +1738,7 @@ function buildMacRegistration(deviceState) {
 module.exports = {
   buildUnavailableHostAccountStatus,
   createBridgeManagedInitializeSuccessResponse,
+  buildBridgeManagedRuntimeTargetResult,
   getRelayWatchdogAction,
   hasRelayConnectionGoneStale,
   logForwardedRequestToCodex,
