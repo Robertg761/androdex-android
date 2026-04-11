@@ -3,13 +3,17 @@ const assert = require("node:assert/strict");
 
 const {
   detectInstalledT3Runtime,
+  extractLatestDesktopWebSocketEndpoint,
+  normalizeDesktopT3WebSocketEndpoint,
   readDesktopT3Session,
   resolveT3RuntimeEndpoint,
 } = require("../src/runtime/t3-discovery");
 
 test("resolveT3RuntimeEndpoint defaults T3 companion mode to the standard local websocket", () => {
   const resolved = resolveT3RuntimeEndpoint({
-    env: {},
+    env: {
+      HOME: "/tmp/androdex-no-t3-discovery",
+    },
   });
 
   assert.equal(resolved.endpoint, "ws://127.0.0.1:3773/ws");
@@ -54,12 +58,28 @@ test("resolveT3RuntimeEndpoint prefers the local runtime-session descriptor when
     },
   });
 
-  assert.equal(resolved.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(resolved.endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(resolved.authToken, "secret-token");
   assert.equal(resolved.source, "runtime-session-file");
 });
 
-test("readDesktopT3Session extracts the latest desktop baseUrl and auth flag from local logs", () => {
+test("normalizeDesktopT3WebSocketEndpoint resolves desktop base URLs to the real websocket route", () => {
+  assert.equal(normalizeDesktopT3WebSocketEndpoint("ws://127.0.0.1:57816"), "ws://127.0.0.1:57816/ws");
+  assert.equal(normalizeDesktopT3WebSocketEndpoint("ws://127.0.0.1:57816/ws"), "ws://127.0.0.1:57816/ws");
+  assert.equal(normalizeDesktopT3WebSocketEndpoint("ws://127.0.0.1:57816/ws/"), "ws://127.0.0.1:57816/ws");
+  assert.equal(normalizeDesktopT3WebSocketEndpoint("ws://127.0.0.1:57816/custom"), "");
+});
+
+test("extractLatestDesktopWebSocketEndpoint maps the latest desktop baseUrl log entry to /ws", () => {
+  const endpoint = extractLatestDesktopWebSocketEndpoint([
+    "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:52331",
+    "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:57816",
+  ].join("\n"));
+
+  assert.equal(endpoint, "ws://127.0.0.1:57816/ws");
+});
+
+test("readDesktopT3Session extracts the latest desktop websocket endpoint and auth flag from local logs", () => {
   const files = new Map([
     ["/tmp/home/.t3/userdata/logs/desktop-main.log", [
       "[desktop] bootstrap resolved websocket endpoint baseUrl=ws://127.0.0.1:52331",
@@ -83,7 +103,7 @@ test("readDesktopT3Session extracts the latest desktop baseUrl and auth flag fro
     },
   });
 
-  assert.equal(session.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(session.endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(session.authEnabled, true);
 });
 
@@ -116,7 +136,7 @@ test("readDesktopT3Session prefers the runtime-session descriptor and keeps the 
     },
   });
 
-  assert.equal(session.endpoint, "ws://127.0.0.1:60000");
+  assert.equal(session.endpoint, "ws://127.0.0.1:60000/ws");
   assert.equal(session.authEnabled, true);
   assert.equal(session.authToken, "secret-token");
   assert.equal(session.source, "runtime-session-file");
@@ -152,7 +172,7 @@ test("readDesktopT3Session ignores stale runtime-session descriptors and falls b
     },
   });
 
-  assert.equal(session.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(session.endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(session.authToken, "");
   assert.equal(session.source, "desktop-log");
   assert.equal(session.descriptorStatus, "stale-backend-pid");
@@ -209,7 +229,7 @@ test("detectInstalledT3Runtime returns desktop session data alongside app discov
   });
 
   assert.equal(runtime.desktopAppInstalled, true);
-  assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(runtime.desktopSession.authEnabled, true);
 });
 
@@ -238,6 +258,6 @@ test("detectInstalledT3Runtime respects env.HOME when discovering desktop sessio
   });
 
   assert.equal(runtime.desktopSession.runtimeSessionPath, "/tmp/custom-home/.t3/userdata/runtime-session.json");
-  assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:61234");
+  assert.equal(runtime.desktopSession.endpoint, "ws://127.0.0.1:61234/ws");
   assert.equal(runtime.desktopSession.authEnabled, true);
 });

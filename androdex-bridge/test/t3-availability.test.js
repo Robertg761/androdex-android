@@ -33,6 +33,25 @@ test("inspectT3Availability flags missing or invalid T3 endpoint configuration",
   assert.match(invalidEndpoint.summary, /ws:\/\/ or wss:\/\//);
 });
 
+test("inspectT3Availability explains when a live desktop session is visible but the trusted auth handoff is missing", () => {
+  const availability = inspectT3Availability({
+    desktopSession: {
+      endpoint: "ws://127.0.0.1:60206",
+      authEnabled: true,
+      authToken: "",
+      descriptorStatus: "missing",
+    },
+    runtimeTarget: "t3-server",
+    runtimeEndpoint: "ws://127.0.0.1:3773/ws",
+    runtimeAttachFailure: "connect ECONNREFUSED 127.0.0.1:3773",
+  });
+
+  assert.equal(availability.reasonCode, "desktop-session-missing-auth-handoff");
+  assert.equal(availability.discoveredDesktopEndpoint, "ws://127.0.0.1:60206");
+  assert.match(availability.summary, /trusted auth handoff is missing/i);
+  assert.match(availability.detail, /runtime-session\.json/);
+});
+
 test("inspectT3Availability keeps T3 attach optional when another runtime target is selected", () => {
   const availability = inspectT3Availability({
     runtimeTarget: "codex-native",

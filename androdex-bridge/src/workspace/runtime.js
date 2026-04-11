@@ -137,6 +137,7 @@ function createWorkspaceRuntime({
       runtimeTarget: resolveConfiguredRuntimeTarget(),
     });
 
+    const runtimeTarget = resolveConfiguredRuntimeTarget();
     const nextRuntime = createRuntimeAdapterImpl({
       endpoint: resolveConfiguredRuntimeEndpoint(),
       endpointAuthToken: resolveConfiguredRuntimeEndpointAuthToken(),
@@ -145,7 +146,8 @@ function createWorkspaceRuntime({
       loadReplayCursor,
       logEvent: onTransportLog,
       persistReplayCursor,
-      targetKind: resolveConfiguredRuntimeTarget(),
+      resolveEndpointConfig: runtimeTarget === "t3-server" ? resolveConfiguredT3Endpoint : null,
+      targetKind: runtimeTarget,
     });
     pendingRuntime = nextRuntime;
     currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || null;

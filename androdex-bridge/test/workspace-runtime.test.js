@@ -84,7 +84,7 @@ test("workspace runtime forwards trusted desktop runtime-session config into the
 
   assert.equal(recordedAdapterCalls.length, 1);
   assert.equal(recordedAdapterCalls[0].targetKind, "t3-server");
-  assert.equal(recordedAdapterCalls[0].endpoint, "ws://127.0.0.1:57816");
+  assert.equal(recordedAdapterCalls[0].endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(recordedAdapterCalls[0].endpointAuthToken, "secret-token");
   assert.equal(recordedAdapterCalls[0].cwd, workspaceDir);
   assert.equal(recordedAdapterCalls[0].endpoint.includes("token="), false);

@@ -6,6 +6,7 @@ const { getBridgeDoctorReport, runBridgeDoctor } = require("../src/doctor");
 test("getBridgeDoctorReport diagnoses missing T3 endpoint configuration", async () => {
   const report = await getBridgeDoctorReport({
     env: {
+      HOME: "/tmp/androdex-no-t3-doctor",
       ANDRODEX_RUNTIME_TARGET: "t3-server",
     },
     getMacOSBridgeServiceStatusImpl() {
@@ -160,16 +161,16 @@ test("getBridgeDoctorReport surfaces installed desktop-session endpoints and aut
         cliInstalled: false,
         cliPath: "",
         desktopSession: {
-          endpoint: "ws://127.0.0.1:57816",
+          endpoint: "ws://127.0.0.1:57816/ws",
           authEnabled: true,
         },
       };
     },
   });
 
-  assert.equal(report.tools.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
+  assert.equal(report.tools.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(report.desktopSessionProbe.reachable, false);
-  assert.ok(report.recommendations.some((message) => message.includes("ws://127.0.0.1:57816")));
+  assert.ok(report.recommendations.some((message) => message.includes("ws://127.0.0.1:57816/ws")));
   assert.ok(report.recommendations.some((message) => message.includes("auth handoff")));
 });
 
@@ -201,7 +202,7 @@ test("getBridgeDoctorReport does not warn about missing auth handoff when a runt
         cliPath: "",
         desktopSession: {
           runtimeSessionPath: "/tmp/home/.t3/userdata/runtime-session.json",
-          endpoint: "ws://127.0.0.1:57816",
+          endpoint: "ws://127.0.0.1:57816/ws",
           authEnabled: true,
           authToken: "secret-token",
           source: "runtime-session-file",
@@ -244,7 +245,7 @@ test("getBridgeDoctorReport warns when the local runtime-session descriptor look
         cliPath: "",
         desktopSession: {
           runtimeSessionPath: "/tmp/home/.t3/userdata/runtime-session.json",
-          endpoint: "ws://127.0.0.1:57816",
+          endpoint: "ws://127.0.0.1:57816/ws",
           authEnabled: true,
           authToken: "",
           source: "desktop-log",

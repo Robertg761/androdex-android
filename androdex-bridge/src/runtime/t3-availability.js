@@ -5,12 +5,21 @@
 // Depends on: none
 
 function inspectT3Availability({
+  desktopSession = null,
   runtimeTarget = "",
   runtimeEndpoint = "",
   runtimeAttachFailure = "",
 } = {}) {
   const normalizedTarget = normalizeNonEmptyString(runtimeTarget) || "codex-native";
   const attachFailure = normalizeNonEmptyString(runtimeAttachFailure);
+  const discoveredDesktopEndpoint = normalizeNonEmptyString(desktopSession?.endpoint);
+  const discoveredDesktopAuthToken = normalizeNonEmptyString(desktopSession?.authToken);
+  const discoveredDesktopDescriptorStatus = normalizeNonEmptyString(desktopSession?.descriptorStatus);
+  const desktopSessionRequiresTrustedHandoff = Boolean(
+    discoveredDesktopEndpoint
+    && desktopSession?.authEnabled === true
+    && !discoveredDesktopAuthToken
+  );
   if (normalizedTarget !== "t3-server") {
     return {
       runtimeTarget: normalizedTarget,
@@ -26,11 +35,34 @@ function inspectT3Availability({
       loopbackOnly: true,
       summary: "T3 is optional. Set ANDRODEX_RUNTIME_TARGET=t3-server to attach to a host-local T3 runtime.",
       detail: "",
+      discoveredDesktopEndpoint,
       runtimeAttachFailure: attachFailure,
     };
   }
 
   const endpoint = normalizeNonEmptyString(runtimeEndpoint);
+  if (desktopSessionRequiresTrustedHandoff
+    && endpoint
+    && endpoint !== discoveredDesktopEndpoint
+    && isConnectionRefusedFailure(attachFailure)) {
+    return {
+      runtimeTarget: normalizedTarget,
+      selected: true,
+      configured: true,
+      reachableHint: "desktop-session-untrusted",
+      reasonCode: "desktop-session-missing-auth-handoff",
+      endpoint,
+      endpointHost: "",
+      endpointPort: "",
+      endpointPath: "",
+      endpointProtocol: "",
+      loopbackOnly: true,
+      summary: "T3 desktop session detected, but its trusted auth handoff is missing.",
+      detail: `A local T3 desktop session is advertising ${discoveredDesktopEndpoint}, but Androdex cannot attach securely until ~/.t3/userdata/runtime-session.json contains a trusted auth token.`,
+      discoveredDesktopEndpoint,
+      runtimeAttachFailure: attachFailure,
+    };
+  }
   if (!endpoint) {
     return {
       runtimeTarget: normalizedTarget,
@@ -45,7 +77,10 @@ function inspectT3Availability({
       endpointProtocol: "",
       loopbackOnly: true,
       summary: "T3 target selected, but no endpoint is configured.",
-      detail: "Set ANDRODEX_T3_ENDPOINT to a loopback T3 websocket such as ws://127.0.0.1:3773/ws.",
+      detail: desktopSessionRequiresTrustedHandoff && discoveredDesktopDescriptorStatus === "missing"
+        ? `A local T3 desktop session is visible at ${discoveredDesktopEndpoint}, but its trusted ~/.t3/userdata/runtime-session.json handoff is missing.`
+        : "Set ANDRODEX_T3_ENDPOINT to a loopback T3 websocket such as ws://127.0.0.1:3773/ws.",
+      discoveredDesktopEndpoint,
       runtimeAttachFailure: attachFailure,
     };
   }
@@ -68,6 +103,7 @@ function inspectT3Availability({
       loopbackOnly: false,
       summary: "T3 endpoint is configured, but it is not a valid websocket URL.",
       detail: "Use a loopback websocket such as ws://127.0.0.1:3773/ws.",
+      discoveredDesktopEndpoint,
       runtimeAttachFailure: attachFailure,
     };
   }
@@ -98,6 +134,7 @@ function inspectT3Availability({
     loopbackOnly,
     summary: buildSummary({ validProtocol, loopbackOnly }),
     detail: buildDetail({ validProtocol, loopbackOnly, port, pathname }),
+    discoveredDesktopEndpoint,
     runtimeAttachFailure: attachFailure,
   };
 }
@@ -142,6 +179,11 @@ function defaultPortForProtocol(protocol) {
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function isConnectionRefusedFailure(value) {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  return normalized.includes("econnrefused") || normalized.includes("connection refused");
 }
 
 module.exports = {

@@ -1047,6 +1047,19 @@ Completed so far:
 - the full same-host `codex-native -> t3-server -> codex-native` hardware/manual matrix now passes on phone as well: codex-native baseline reconnect succeeds, the T3 leg reopens the saved T3 thread through raw backend UUIDs without the previous canonical-thread-id failure, and the return leg lands back on codex-native home (`40 threads`) instead of reopening the stale T3 thread after the host switches back
 - a new Electron-based `desktop/` control room now gives the host-local bridge a visual control surface for live status, pairing QR generation, runtime-target switching, T3 runtime-session descriptor management, doctor output, and bridge log tails, and that runtime-target choice is now also exposed in Android runtime settings so the same paired phone can explicitly flip the host between Codex and T3 companion mode
 - same-phone runtime-target switching now also honors trusted T3 desktop-session discovery when no explicit `ANDRODEX_T3_ENDPOINT` is stored, so choosing `T3 Code` from Android works against the local `runtime-session.json` descriptor path, and host status/doctor output now show the discovered loopback endpoint instead of incorrectly claiming no endpoint is configured
+- bridge-managed runtime switching now also clears stale runtime endpoint/auth state when Android flips the host back to `codex-native`, so the same phone can move through `Codex -> T3 Code` without leaking the previous T3 websocket into the Codex leg or surfacing the bogus `Unexpected server response: 401` host error
+- host status now also distinguishes "T3 desktop is visibly running but its trusted auth handoff is missing" from a truly missing endpoint, and a local `scripts/run-t3code-source-desktop.sh` helper now provides a repeatable source-backed desktop launch path on machines where the stock installed T3 app build still lacks the runtime-session descriptor hook
+- packaged Androdex now also normalizes real T3 desktop `runtime-session.json` `baseUrl` values into the actual websocket route (`.../ws`) before attach, which clears the live `Unexpected server response: 200` failure that happened when the installed bridge tried to speak websocket RPC to the desktop app's plain HTTP base URL
+- newly created companion-eligible T3 threads now mark themselves as bridge-live-attached as soon as `thread/start` succeeds, and `thread/read` now does a guarded fresh-snapshot pull for live-attached threads without letting a stale snapshot overwrite newer replay/live state, which closes the phone-side "new thread exists on desktop but refresh still shows stale history" gap that surfaced during physical testing
+- the latest physical-phone smoke against the live source-backed T3 desktop session now confirms: relaunch/reconnect lands back on the `T3 Server` home screen with the expected project and recent-thread count; recent T3 conversations reopen on-device; a phone-authored prompt in an existing T3 thread dispatches successfully and drives the expected running-state `Stop` / `Queue` UI; and the host stays attached cleanly throughout with no bridge stderr during those paths
+- foreground repo-bridge runs (`node androdex-bridge/bin/androdex.js run`) now honor the saved daemon/runtime config instead of silently falling back to shell-env `codex-native`, which fixes the confusing live-phone state where the repo bridge was actually attached to T3 but Android still surfaced stale `Codex Native` metadata after reconnects
+- Android `New chat` in T3 mode now bootstraps an unseen selected workspace into a real T3 `project.create` before dispatching `thread.create`, so the phone no longer dead-ends on the previous "known project workspace" limitation when the active host folder has not been materialized in T3 yet
+- fresh hardware smoke against the isolated local T3 server now confirms that fix end to end on device: home shows `T3 Server` with the selected `androdex` project, `New chat` opens a real new T3 thread instead of surfacing the old error dialog, an Android-authored prompt persists in-thread with the expected running-state `Stop` / `Queue` controls, and backing out to the thread list then reopening the thread preserves the prompt plus active-run state instead of losing the just-created conversation
+- resumed-thread live completion now also covers the real T3 ordering where an assistant message can be the first terminal signal for a new turn, so the bridge emits the missing `turn/completed` notification instead of leaving Android waiting for a later session event that may never arrive in that shape
+- Android selected-thread recovery now preserves a known terminal turn against an immediately stale `thread/read` refresh, and it also runs a lightweight running-thread snapshot watchdog that self-heals the UI when a terminal live update is missed entirely; on-device smoke now confirms the previous stuck `Stop` / `Queue` state clears back to the normal idle composer within the same open T3 thread
+- Android reconnect handling now treats plain transport interruptions like `Disconnected` / `Socket closed` as transient connection-state noise once a reconnect-friendly connection update arrives, so the app no longer leaves a stale fatal modal onscreen after the trusted session has already recovered
+- the latest physical-phone success-path smoke against the isolated local T3 server now passes cleanly end to end after that reconnect cleanup: `New chat` opens a fresh T3 thread, an Android-authored prompt completes with a real assistant reply in-thread, the composer returns to idle, and no stale `Disconnected` modal remains after the reconnect/rehydration path
+- interrupt-on-phone is at least safe in the current build, but the tested run happened to finish on the host before the `Stop` tap was processed, so Android surfaced the graceful refresh message (`This run was already resolved on the host. Androdex refreshed thread state.`) rather than proving a clean mid-flight interrupt on this exact smoke pass
 
 Still in progress beyond the current companion milestone:
 
@@ -1054,6 +1067,7 @@ Still in progress beyond the current companion milestone:
 - broader replay checkpoint persistence, duplicate suppression, and idempotent merge coverage outside the currently hardened resumed-thread title/assistant/plan/task/tool/approval/user-input subset
 - deeper workspace/project remapping and repair flows beyond the new project-root read fallback and capability metadata
 - easy installed-desktop T3 attach still needs that runtime-session descriptor hook to ship in a normal T3 desktop release before the installed-app path is truly turnkey for users
+- on this machine specifically, the stock installed `T3 Code (Alpha)` `0.0.15` bundle is still on the pre-descriptor behavior, so the reliable attach path today is the source-backed desktop launcher until a newer packaged T3 desktop release is installed
 
 Not started yet:
 
@@ -1079,14 +1093,14 @@ Not started yet:
 
 - workspace activation: supported for suitable host-local T3 instances only
 - `thread/list` / `thread/read`: supported through snapshot plus replay synthesis
-- `thread/start`: supported when the requested local workspace maps to a known T3 project
+- `thread/start`: supported for selected local workspaces, including auto-bootstrap of a new T3 project when the runtime has not materialized that workspace yet
 - `thread/resume`: supported for companion-eligible Codex-backed threads only
 - live turn, assistant, title, plan, task, tool, approval, and user-input activity updates: supported for resumed companion-eligible threads only
 - unsupported-provider or unresolved-workspace threads: discoverable, readable, and explicitly action-gated
 - missing-worktree but available-project-root threads: readable, resumable, and explicitly marked as using a project-root fallback instead of an exact worktree match
-- send / plan flows: supported for existing companion-eligible Codex-backed threads only
+- send / plan flows: supported for existing companion-eligible Codex-backed threads and newly created companion-managed T3 threads
 - review/start flows: supported for existing companion-eligible Codex-backed threads by translating Android review requests into T3 `thread.turn.start` review prompts
-- new thread creation: supported for known project workspaces only
+- new thread creation: supported for selected local workspaces, including on-demand T3 project bootstrap
 - subagent flows: not supported yet
 - interrupt: supported for companion-eligible Codex-backed threads when the synchronized T3 snapshot still shows an active run
 - approval responses: supported for companion-eligible Codex-backed threads through bridge-managed synthetic approval requests and `thread.approval.respond`
@@ -1106,3 +1120,4 @@ Scope note:
 2. Broaden Android-visible live thread/timeline push semantics on top of the synchronized T3 bridge cache beyond the current resumed-thread subset.
 3. Tackle the next remaining T3 mutating gap after thread creation, turn start, review start, interrupt, rollback, background-terminal cleanup, approval response, and tool/user-input response support.
 4. Decide whether the new Electron control room should stay as a developer-only tool under `desktop/` or graduate into a packaged/signed desktop utility with a stable install/update path.
+5. Replace the temporary source-backed T3 desktop launcher workaround once the stock packaged T3 desktop build on this machine ships the runtime-session descriptor hook.

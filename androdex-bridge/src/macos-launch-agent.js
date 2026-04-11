@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
+const { resolveRuntimeTargetConfig } = require("./runtime/target-config");
 const { inspectT3Availability } = require("./runtime/t3-availability");
 const { detectInstalledT3Runtime } = require("./runtime/t3-discovery");
 const { printQR } = require("./pairing/qr");
@@ -180,14 +181,15 @@ function getMacOSBridgeServiceStatus({
   const daemonConfig = readDaemonConfig({ env, fsImpl });
   const bridgeStatus = readBridgeStatus({ env, fsImpl });
   const runtimeConfig = buildRuntimeConfigSnapshot({ daemonConfig, env });
+  const t3Runtime = runtimeConfig.runtimeTarget === "t3-server"
+    ? detectInstalledT3RuntimeImpl({ env, fsImpl, execFileSyncImpl })
+    : null;
   const t3Availability = inspectT3Availability({
+    desktopSession: t3Runtime?.desktopSession || null,
     runtimeTarget: runtimeConfig.runtimeTarget,
     runtimeEndpoint: runtimeConfig.runtimeEndpoint,
     runtimeAttachFailure: bridgeStatus?.runtimeAttachFailure,
   });
-  const t3Runtime = runtimeConfig.runtimeTarget === "t3-server"
-    ? detectInstalledT3RuntimeImpl({ env, fsImpl, execFileSyncImpl })
-    : null;
   return {
     label: SERVICE_LABEL,
     platform: "darwin",
@@ -308,6 +310,47 @@ function buildRuntimeConfigSnapshot({
   return {
     runtimeTarget,
     runtimeEndpoint,
+  };
+}
+
+function readForegroundBridgeConfig({
+  env = process.env,
+  fsImpl = fs,
+} = {}) {
+  const daemonConfig = readDaemonConfig({ env, fsImpl }) || {};
+  const daemonRuntimeTarget = normalizeNonEmptyString(daemonConfig?.runtimeTarget);
+  const fallbackConfig = readBridgeConfig({
+    env: daemonRuntimeTarget
+      ? {
+          ...env,
+          ANDRODEX_RUNTIME_TARGET: daemonRuntimeTarget,
+        }
+      : env,
+  });
+  const runtimeConfig = buildRuntimeConfigSnapshot({
+    daemonConfig,
+    env,
+  });
+  const resolvedTargetConfig = resolveRuntimeTargetConfig({
+    kind: runtimeConfig.runtimeTarget || "codex-native",
+  });
+  const daemonRuntimeEndpoint = normalizeNonEmptyString(daemonConfig?.runtimeEndpoint);
+  const runtimeEndpointAuthToken = runtimeConfig.runtimeTarget === "t3-server"
+    ? (daemonRuntimeEndpoint
+        ? normalizeNonEmptyString(daemonConfig?.runtimeEndpointAuthToken)
+        : normalizeNonEmptyString(fallbackConfig?.runtimeEndpointAuthToken))
+    : "";
+
+  return {
+    ...fallbackConfig,
+    ...daemonConfig,
+    runtimeTarget: runtimeConfig.runtimeTarget,
+    runtimeProvider: resolvedTargetConfig.legacyProviderKind,
+    runtimeEndpoint: runtimeConfig.runtimeEndpoint,
+    runtimeEndpointAuthToken,
+    runtimeEndpointSource: daemonRuntimeEndpoint
+      ? normalizeNonEmptyString(daemonConfig?.runtimeEndpointSource) || "daemon-config"
+      : normalizeNonEmptyString(fallbackConfig?.runtimeEndpointSource),
   };
 }
 
@@ -668,6 +711,7 @@ module.exports = {
   getMacOSBridgeServiceStatus,
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
+  readForegroundBridgeConfig,
   resetMacOSBridgePairing,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,

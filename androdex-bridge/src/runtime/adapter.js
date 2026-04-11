@@ -43,6 +43,7 @@ function createRuntimeAdapter({
   targetKind = DEFAULT_RUNTIME_TARGET,
   endpoint = "",
   endpointAuthToken = "",
+  resolveEndpointConfig = null,
   env = process.env,
   cwd = "",
   loadReplayCursor = null,
@@ -66,6 +67,7 @@ function createRuntimeAdapter({
       runtimeTarget,
       endpoint,
       endpointAuthToken,
+      resolveEndpointConfig,
       env,
       loadReplayCursor,
       logEvent,
@@ -116,14 +118,19 @@ function createT3ServerRuntimeAdapter({
   runtimeTarget,
   endpoint = "",
   endpointAuthToken = "",
+  resolveEndpointConfig = null,
   env = process.env,
   loadReplayCursor = null,
   logEvent = null,
   persistReplayCursor = null,
   WebSocketImpl,
 } = {}) {
-  const normalizedEndpoint = normalizeNonEmptyString(endpoint);
-  if (!normalizedEndpoint) {
+  const initialEndpointConfig = resolveT3TransportEndpointConfig({
+    fallbackAuthToken: endpointAuthToken,
+    fallbackEndpoint: endpoint,
+    resolveEndpointConfig,
+  });
+  if (!initialEndpointConfig.endpoint) {
     const endpointHint = Array.isArray(runtimeTarget?.endpointEnvVars)
       && runtimeTarget.endpointEnvVars.length > 0
       ? runtimeTarget.endpointEnvVars.join(" or ")
@@ -133,7 +140,9 @@ function createT3ServerRuntimeAdapter({
     );
   }
 
-  const parsedEndpoint = ensureLoopbackEndpoint(normalizedEndpoint);
+  let resolvedEndpoint = initialEndpointConfig.endpoint;
+  let resolvedEndpointAuthToken = initialEndpointConfig.authToken;
+  let parsedEndpoint = ensureLoopbackEndpoint(resolvedEndpoint);
   const metadataListeners = createHandlerBag();
   const messageListeners = createHandlerBag();
   let snapshotCache = createEmptyT3Snapshot();
@@ -184,6 +193,26 @@ function createT3ServerRuntimeAdapter({
   const errorListeners = createHandlerBag();
   const initialTransport = createAndBindTransport();
 
+  function refreshTransportEndpointConfig() {
+    const nextConfig = resolveT3TransportEndpointConfig({
+      currentAuthToken: resolvedEndpointAuthToken,
+      currentEndpoint: resolvedEndpoint,
+      fallbackAuthToken: endpointAuthToken,
+      fallbackEndpoint: endpoint,
+      resolveEndpointConfig,
+    });
+    resolvedEndpoint = nextConfig.endpoint;
+    resolvedEndpointAuthToken = nextConfig.authToken;
+    parsedEndpoint = ensureLoopbackEndpoint(resolvedEndpoint);
+    updateRuntimeMetadata({
+      runtimeEndpointHost: normalizeNonEmptyString(parsedEndpoint.hostname),
+    });
+    return {
+      authToken: resolvedEndpointAuthToken,
+      endpoint: resolvedEndpoint,
+    };
+  }
+
   function normalizeT3IncomingThreadId(value) {
     const normalizedThreadId = normalizeNonEmptyString(value);
     if (!normalizedThreadId) {
@@ -213,6 +242,7 @@ function createT3ServerRuntimeAdapter({
   }
 
   async function performSuitabilityProbe({ request }) {
+    const activeEndpoint = resolvedEndpoint;
     emitAdapterLog("attach_probe_started", {
       reasonCode: "attach_probe_started",
     });
@@ -225,10 +255,10 @@ function createT3ServerRuntimeAdapter({
       timeoutMs: T3_ATTACH_TIMEOUT_MS,
     });
     const validatedMetadata = validateT3AttachConfig({
-      endpoint: normalizedEndpoint,
+      endpoint: activeEndpoint,
       config: configResult,
       requirements: createT3AttachRequirements({
-        endpoint: normalizedEndpoint,
+        endpoint: activeEndpoint,
         env,
       }),
     });
@@ -703,6 +733,15 @@ function createT3ServerRuntimeAdapter({
       messageId,
       message: messageText,
     });
+
+    for (const notification of buildAssistantMessageTurnLifecycleNotifications({
+      beforeThread,
+      afterThread,
+      threadId,
+      message,
+    })) {
+      emitNotification(notification.method, notification.params);
+    }
   }
 
   function persistAppliedReplaySequence(sequence) {
@@ -972,10 +1011,62 @@ function createT3ServerRuntimeAdapter({
     });
   }
 
+  function attachBridgeManagedLiveUpdates({
+    snapshot,
+    threadId,
+  }) {
+    const resumeSupport = resolveT3ResumeSupport(snapshot, threadId);
+    if (!resumeSupport.ok) {
+      return resumeSupport;
+    }
+
+    resumedThreadIds.add(threadId);
+    emitOutstandingSyntheticApprovalRequest({
+      threadId,
+      thread: findT3Thread(snapshot, threadId),
+    });
+    emitOutstandingSyntheticUserInputRequest({
+      threadId,
+      thread: findT3Thread(snapshot, threadId),
+    });
+
+    return {
+      ok: true,
+      threadCapabilities: resumeSupport.threadCapabilities,
+    };
+  }
+
+  async function loadSnapshotForThreadRead(threadId) {
+    const snapshot = await ensureSnapshotCache();
+    if (!resumedThreadIds.has(threadId)) {
+      return snapshot;
+    }
+
+    const thread = findT3Thread(snapshot, threadId);
+    if (!thread || !isT3ThreadEligibleForLiveUpdates(snapshot, thread)) {
+      return snapshot;
+    }
+
+    const previousSnapshot = snapshot;
+    const minimumSequence = Math.max(
+      appliedSequence,
+      normalizeSequenceNumber(previousSnapshot?.snapshotSequence),
+    );
+    const refreshedSnapshot = await refreshSnapshotCache();
+    if (normalizeSequenceNumber(refreshedSnapshot?.snapshotSequence) >= minimumSequence) {
+      return refreshedSnapshot;
+    }
+
+    snapshotCache = previousSnapshot;
+    publishReadModelMetadata();
+    return previousSnapshot;
+  }
+
   function createAndBindTransport() {
+    const endpointConfig = refreshTransportEndpointConfig();
     const nextTransport = createT3EndpointTransport({
-      endpoint: normalizedEndpoint,
-      authToken: endpointAuthToken,
+      endpoint: endpointConfig.endpoint,
+      authToken: endpointConfig.authToken,
       WebSocketImpl,
       onBeforeReadyRequest: performSuitabilityProbe,
     });
@@ -1100,11 +1191,17 @@ function createT3ServerRuntimeAdapter({
     }
 
     if (method === "thread/read") {
-      void ensureSnapshotCache()
+      void Promise.resolve()
+        .then(() => normalizeT3IncomingThreadId(parsed?.params?.threadId))
+        .then((threadId) => loadSnapshotForThreadRead(threadId)
+          .then((snapshot) => ({
+            snapshot,
+            threadId,
+          })))
         .then((snapshot) => {
           emitRpcResult(requestId, buildT3ThreadReadResult({
-            snapshot,
-            threadId: normalizeT3IncomingThreadId(parsed?.params?.threadId),
+            snapshot: snapshot.snapshot,
+            threadId: snapshot.threadId,
           }));
         })
         .catch((error) => {
@@ -1118,10 +1215,23 @@ function createT3ServerRuntimeAdapter({
         .then((snapshot) => {
           const params = parsed?.params && typeof parsed.params === "object" ? parsed.params : {};
           const preferredWorkspacePath = normalizeNonEmptyString(params?.cwd) || null;
-          const project = resolveT3ProjectForThreadStart({
+          return resolveOrCreateT3ProjectForThreadStart({
             snapshot,
             preferredWorkspacePath,
-          });
+            params,
+            transport,
+            refreshSnapshot: refreshSnapshotCache,
+            ensureSnapshot: ensureSnapshotCache,
+            createEventWaiter: createAppliedDomainEventWaiter,
+            emitAdapterLog,
+          }).then(({ project, snapshot: resolvedSnapshot }) => ({
+            params,
+            preferredWorkspacePath,
+            project,
+            snapshot: resolvedSnapshot,
+          }));
+        })
+        .then(({ params, preferredWorkspacePath, project, snapshot }) => {
           if (!project) {
             throw new Error(
               preferredWorkspacePath
@@ -1170,6 +1280,10 @@ function createT3ServerRuntimeAdapter({
               await createWaiter.promise;
               resolvedSnapshot = await ensureSnapshotCache();
             }
+            const liveUpdateAttachment = attachBridgeManagedLiveUpdates({
+              snapshot: resolvedSnapshot,
+              threadId,
+            });
             const threadResult = buildT3ThreadReadResult({
               snapshot: resolvedSnapshot,
               threadId,
@@ -1182,6 +1296,7 @@ function createT3ServerRuntimeAdapter({
               sequence: normalizeSequenceNumber(dispatchResult?.sequence),
             });
             emitRpcResult(requestId, {
+              liveUpdatesAttached: liveUpdateAttachment.ok === true,
               thread: threadResult.thread,
             });
           }).finally(() => {
@@ -1201,34 +1316,28 @@ function createT3ServerRuntimeAdapter({
       void ensureSnapshotCache()
         .then((snapshot) => {
           const threadId = normalizeT3IncomingThreadId(parsed?.params?.threadId);
-          const resumeSupport = resolveT3ResumeSupport(snapshot, threadId);
-          if (!resumeSupport.ok) {
+          const liveUpdateAttachment = attachBridgeManagedLiveUpdates({
+            snapshot,
+            threadId,
+          });
+          if (!liveUpdateAttachment.ok) {
             emitAdapterLog("action_gated", {
               reasonCode: "resume_live_updates_unsupported",
               method,
               threadId,
               companionSupportState: normalizeNonEmptyString(
-                resumeSupport.result?.threadCapabilities?.companionSupportState
+                liveUpdateAttachment.result?.threadCapabilities?.companionSupportState
               ) || null,
             });
-            emitRpcResult(requestId, resumeSupport.result);
+            emitRpcResult(requestId, liveUpdateAttachment.result);
             return;
           }
-          resumedThreadIds.add(threadId);
-          emitOutstandingSyntheticApprovalRequest({
-            threadId,
-            thread: findT3Thread(snapshot, threadId),
-          });
-          emitOutstandingSyntheticUserInputRequest({
-            threadId,
-            thread: findT3Thread(snapshot, threadId),
-          });
           emitRpcResult(requestId, {
             ok: true,
             resumed: true,
             liveUpdatesAttached: true,
             reason: "The read-only T3 adapter attached bridge-managed live updates for this T3 thread.",
-            threadCapabilities: resumeSupport.threadCapabilities,
+            threadCapabilities: liveUpdateAttachment.threadCapabilities,
           });
         })
         .catch((error) => {
@@ -1963,6 +2072,42 @@ function buildTurnLifecycleNotifications({
   }
 
   return [];
+}
+
+function buildAssistantMessageTurnLifecycleNotifications({
+  beforeThread,
+  afterThread,
+  threadId,
+  message,
+}) {
+  const beforeTurn = normalizeLatestTurn(beforeThread?.latestTurn);
+  const afterTurn = normalizeLatestTurn(afterThread?.latestTurn);
+  const messageTurnId = normalizeNonEmptyString(message?.turnId);
+  if (!afterTurn?.turnId || !messageTurnId || afterTurn.turnId !== messageTurnId) {
+    return [];
+  }
+  if (afterTurn.state === "running" || beforeTurn?.turnId === afterTurn.turnId) {
+    return [];
+  }
+
+  if (afterTurn.state === "error") {
+    return [{
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: afterTurn.turnId,
+      },
+    }];
+  }
+
+  return [{
+    method: "turn/completed",
+    params: {
+      threadId,
+      turnId: afterTurn.turnId,
+      status: afterTurn.state === "interrupted" ? "interrupted" : "completed",
+    },
+  }];
 }
 
 function normalizeLatestTurn(latestTurn) {
@@ -2704,6 +2849,130 @@ function resolveT3ProjectForThreadStart({
   return null;
 }
 
+async function resolveOrCreateT3ProjectForThreadStart({
+  snapshot,
+  preferredWorkspacePath,
+  params,
+  transport = null,
+  refreshSnapshot = null,
+  ensureSnapshot = null,
+  createEventWaiter = null,
+  emitAdapterLog = null,
+}) {
+  const existingProject = resolveT3ProjectForThreadStart({
+    snapshot,
+    preferredWorkspacePath,
+  });
+  if (existingProject) {
+    return {
+      project: existingProject,
+      snapshot,
+    };
+  }
+
+  const normalizedWorkspacePath = normalizeNonEmptyString(preferredWorkspacePath);
+  if (!normalizedWorkspacePath) {
+    return {
+      project: null,
+      snapshot,
+    };
+  }
+
+  if (!transport || typeof transport.request !== "function") {
+    throw new Error("T3 project bootstrap requires an available transport.");
+  }
+  if (typeof refreshSnapshot !== "function" || typeof ensureSnapshot !== "function") {
+    throw new Error("T3 project bootstrap requires snapshot refresh helpers.");
+  }
+  if (typeof createEventWaiter !== "function") {
+    throw new Error("T3 project bootstrap requires applied-event waiters.");
+  }
+
+  const createdAt = new Date().toISOString();
+  const projectId = randomUUID();
+  const projectTitle = buildT3ProjectCreateTitle({
+    preferredWorkspacePath: normalizedWorkspacePath,
+  });
+  const provisionalProject = {
+    id: projectId,
+    title: projectTitle,
+    workspaceRoot: normalizedWorkspacePath,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt,
+    updatedAt: createdAt,
+    deletedAt: null,
+  };
+  const defaultModelSelection = buildT3ModelSelectionForThreadCreate({
+    snapshot,
+    project: provisionalProject,
+    params,
+  });
+  const createWaiter = createEventWaiter({
+    match(event) {
+      const eventType = normalizeNonEmptyString(event?.type);
+      const eventProjectId = normalizeNonEmptyString(event?.payload?.projectId)
+        || normalizeNonEmptyString(event?.aggregateId);
+      return eventType === "project.created" && eventProjectId === projectId;
+    },
+    errorMessage: "Timed out waiting for the T3 project to be created.",
+  });
+
+  return transport.request("orchestration.dispatchCommand", {
+    type: "project.create",
+    commandId: randomUUID(),
+    projectId,
+    title: projectTitle,
+    workspaceRoot: normalizedWorkspacePath,
+    defaultModelSelection,
+    createdAt,
+  }, {
+    timeoutMs: T3_ATTACH_TIMEOUT_MS,
+  }).then(async (dispatchResult) => {
+    let resolvedSnapshot = await refreshSnapshot();
+    let resolvedProject = resolveT3ProjectForThreadStart({
+      snapshot: resolvedSnapshot,
+      preferredWorkspacePath: normalizedWorkspacePath,
+    });
+    if (!resolvedProject) {
+      await createWaiter.promise;
+      resolvedSnapshot = await ensureSnapshot();
+      resolvedProject = resolveT3ProjectForThreadStart({
+        snapshot: resolvedSnapshot,
+        preferredWorkspacePath: normalizedWorkspacePath,
+      });
+    }
+    emitAdapterLog?.("command_dispatched", {
+      reasonCode: "project_create_dispatched",
+      method: "thread/start",
+      projectId,
+      workspacePath: normalizedWorkspacePath,
+      sequence: normalizeSequenceNumber(dispatchResult?.sequence),
+    });
+    return {
+      project: resolvedProject || {
+        ...provisionalProject,
+        defaultModelSelection,
+      },
+      snapshot: resolvedSnapshot,
+    };
+  }).finally(() => {
+    createWaiter.cancel();
+  });
+}
+
+function buildT3ProjectCreateTitle({
+  preferredWorkspacePath,
+}) {
+  const normalizedWorkspacePath = normalizeNonEmptyString(preferredWorkspacePath);
+  if (!normalizedWorkspacePath) {
+    return "Project";
+  }
+  const trimmed = normalizedWorkspacePath.replace(/[\\/]+$/, "");
+  const segment = trimmed.split(/[\\/]/).pop();
+  return segment || "Project";
+}
+
 function buildT3ThreadCreateTitle({
   preferredWorkspacePath,
   project,
@@ -2750,8 +3019,24 @@ function buildT3ModelSelectionForThreadCreate({
     return explicitSelection;
   }
 
+  const projectDefaultModelSelection = project?.defaultModelSelection;
+  if (projectDefaultModelSelection
+    && normalizeNonEmptyString(projectDefaultModelSelection?.provider).toLowerCase() === "codex"
+    && normalizeNonEmptyString(projectDefaultModelSelection?.model)) {
+    return projectDefaultModelSelection;
+  }
+
   const projectId = normalizeNonEmptyString(project?.id);
   const threads = Array.isArray(snapshot?.threads) ? snapshot.threads : [];
+  const projects = Array.isArray(snapshot?.projects) ? snapshot.projects : [];
+  const projectEntry = projects.find((entry) =>
+    normalizeNonEmptyString(entry?.id) === projectId
+  );
+  if (projectEntry?.defaultModelSelection
+    && normalizeNonEmptyString(projectEntry.defaultModelSelection?.provider).toLowerCase() === "codex"
+    && normalizeNonEmptyString(projectEntry.defaultModelSelection?.model)) {
+    return projectEntry.defaultModelSelection;
+  }
   const projectThread = threads.find((thread) =>
     normalizeNonEmptyString(thread?.projectId) === projectId
       && normalizeNonEmptyString(thread?.modelSelection?.provider).toLowerCase() === "codex"
@@ -2759,6 +3044,14 @@ function buildT3ModelSelectionForThreadCreate({
   );
   if (projectThread?.modelSelection) {
     return projectThread.modelSelection;
+  }
+
+  const fallbackProject = projects.find((entry) =>
+    normalizeNonEmptyString(entry?.defaultModelSelection?.provider).toLowerCase() === "codex"
+      && normalizeNonEmptyString(entry?.defaultModelSelection?.model)
+  );
+  if (fallbackProject?.defaultModelSelection) {
+    return fallbackProject.defaultModelSelection;
   }
 
   const fallbackThread = threads.find((thread) =>
@@ -3144,6 +3437,41 @@ function classifyRuntimeFailure(message) {
     return "connection_closed";
   }
   return "runtime_error";
+}
+
+function resolveT3TransportEndpointConfig({
+  currentAuthToken = "",
+  currentEndpoint = "",
+  fallbackAuthToken = "",
+  fallbackEndpoint = "",
+  resolveEndpointConfig = null,
+} = {}) {
+  let candidate = null;
+  if (typeof resolveEndpointConfig === "function") {
+    try {
+      candidate = resolveEndpointConfig();
+    } catch {
+      candidate = null;
+    }
+  }
+
+  const discoveredEndpoint = normalizeNonEmptyString(candidate?.endpoint);
+  const endpoint = discoveredEndpoint
+    || normalizeNonEmptyString(currentEndpoint)
+    || normalizeNonEmptyString(fallbackEndpoint);
+  const discoveredAuthToken = normalizeNonEmptyString(candidate?.authToken);
+  const authToken = discoveredAuthToken
+    || (endpoint === normalizeNonEmptyString(currentEndpoint)
+      ? normalizeNonEmptyString(currentAuthToken)
+      : "")
+    || (endpoint === normalizeNonEmptyString(fallbackEndpoint)
+      ? normalizeNonEmptyString(fallbackAuthToken)
+      : "");
+
+  return {
+    authToken,
+    endpoint,
+  };
 }
 
 module.exports = {

@@ -57,6 +57,7 @@ test("readBridgeConfig resolves the T3 endpoint into the generic runtime endpoin
 test("readBridgeConfig defaults T3 companion mode to the standard loopback endpoint", () => {
   const config = readBridgeConfig({
     env: {
+      HOME: "/tmp/androdex-no-t3-config",
       ANDRODEX_RUNTIME_TARGET: "t3-server",
     },
   });
@@ -94,7 +95,7 @@ test("readBridgeConfig prefers the local T3 runtime-session descriptor and keeps
   process.env.HOME = originalHome;
   fs.rmSync(tempRoot, { recursive: true, force: true });
 
-  assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:57816");
+  assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:57816/ws");
   assert.equal(config.runtimeEndpointAuthToken, "secret-token");
   assert.equal(config.runtimeEndpointSource, "runtime-session-file");
 });

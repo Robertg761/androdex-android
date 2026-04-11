@@ -8,6 +8,7 @@
 const {
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
+  readForegroundBridgeConfig,
   readBridgeConfig,
   resetMacOSBridgePairing,
   runMacOSBridgeService,
@@ -24,6 +25,7 @@ const { version } = require("../package.json");
 const defaultDeps = {
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
+  readForegroundBridgeConfig,
   readBridgeConfig,
   resetMacOSBridgePairing,
   runMacOSBridgeService,
@@ -77,7 +79,12 @@ async function main({
       consoleImpl,
       exitImpl,
     });
-    deps.startBridge();
+    const config = typeof deps.readForegroundBridgeConfig === "function"
+      ? deps.readForegroundBridgeConfig()
+      : deps.readBridgeConfig();
+    deps.startBridge({
+      config,
+    });
     return;
   }
 

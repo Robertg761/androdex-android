@@ -272,6 +272,16 @@ class AndrodexFeatureStateTest {
         assertEquals(SharedStatusTone.Success, route.state.bridgeStatus.tone)
         assertEquals("Codex Native", route.state.bridgeStatus.runtimeTargetLabel)
         assertEquals("Codex Native", route.state.bridgeStatus.backendProviderLabel)
+        assertTrue(
+            route.state.hostRuntimeTargetOptions.any { option ->
+                option.value == "codex-native" && option.selected
+            }
+        )
+        assertTrue(
+            route.state.hostRuntimeTargetOptions.any { option ->
+                option.value == "t3-server" && !option.selected
+            }
+        )
         assertEquals(
             "Ready • Live • Protocol 2026-04-01 • Auth Bootstrap token",
             route.state.bridgeStatus.runtimeSyncLabel,
@@ -333,6 +343,8 @@ class AndrodexFeatureStateTest {
         assertEquals(null, homeState.createThreadBlockedReason)
         assertTrue(homeState.threadList.createThreadSupported)
         assertEquals(null, homeState.threadList.createThreadBlockedReason)
+        assertTrue(homeState.hostRuntimeTargetOptions.any { it.value == "t3-server" && it.selected })
+        assertTrue(homeState.hostRuntimeTargetOptions.any { it.value == "codex-native" && !it.selected })
         assertEquals(
             "Use the active project to start a chat.",
             homeState.threadList.emptyState?.message,

@@ -77,6 +77,7 @@ import kotlin.math.abs
 private const val savedReconnectRetryDelayMs = 5_000L
 private const val appBackgroundGraceMs = 20_000L
 private const val executionReloadMergeWindowMs = 5_000L
+private const val runningThreadRecoveryPollMs = 4_000L
 private const val minimumThreadListLoadingVisibleMs = 350L
 private const val slowThreadLoadLogThresholdMs = 400L
 private const val logTag = "AndrodexService"
@@ -130,6 +131,7 @@ data class AndrodexServiceState(
     val readyThreadIds: Set<String> = emptySet(),
     val failedThreadIds: Set<String> = emptySet(),
     val latestTurnTerminalStateByThread: Map<String, TurnTerminalState> = emptyMap(),
+    val latestResolvedTurnIdByThread: Map<String, String> = emptyMap(),
     val tokenUsageByThread: Map<String, ThreadTokenUsage> = emptyMap(),
     val isLoadingRuntimeConfig: Boolean = false,
     val availableModels: List<ModelOption> = emptyList(),
@@ -194,6 +196,7 @@ class AndrodexService(
     private val threadHydrationForceRequestRevisions = mutableMapOf<String, Int>()
     private val threadHydrationForceSatisfiedRevisions = mutableMapOf<String, Int>()
     private val selectedThreadLoadCounts = mutableMapOf<String, Int>()
+    private val runningThreadRecoveryJobs = mutableMapOf<String, Job>()
     private var deferredThreadListRefreshPending = false
     private val subagentIdentityByThreadId = mutableMapOf<String, SubagentIdentityEntry>()
     private val subagentIdentityByAgentId = mutableMapOf<String, SubagentIdentityEntry>()
@@ -1011,6 +1014,36 @@ class AndrodexService(
         }
     }
 
+    private suspend fun syncConnectedSessionState(
+        expectedContextRevision: Long,
+        includeRuntimeConfig: Boolean,
+    ) {
+        val threadRefreshError = runCatching {
+            refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
+        }.exceptionOrNull()
+
+        if (includeRuntimeConfig) {
+            loadRuntimeConfig(expectedContextRevision = expectedContextRevision)
+        }
+
+        val workspaceLoadError = runCatching {
+            loadWorkspaceState(expectedContextRevision = expectedContextRevision)
+        }.exceptionOrNull()
+
+        if (expectedContextRevision != threadSessionContextRevision.get()) {
+            return
+        }
+
+        val startupError = threadRefreshError ?: workspaceLoadError
+        if (startupError != null) {
+            reportError(startupError.message ?: "Failed to refresh the host session.")
+            return
+        }
+
+        recoverVisibleThreadState()
+        routePendingNotificationOpenIfPossible()
+    }
+
     fun clearWorkspaceBrowser() {
         stateFlow.update {
             it.copy(
@@ -1223,6 +1256,7 @@ class AndrodexService(
                 readyThreadIds = emptySet(),
                 failedThreadIds = emptySet(),
                 latestTurnTerminalStateByThread = emptyMap(),
+                latestResolvedTurnIdByThread = emptyMap(),
                 tokenUsageByThread = emptyMap(),
                 pendingNotificationOpenThreadId = if (preservePendingNotificationTarget) {
                     current.pendingNotificationOpenThreadId
@@ -1254,6 +1288,7 @@ class AndrodexService(
         optimisticWorkspaceThreadIds.clear()
         selectedThreadLoadCounts.clear()
         deferredThreadListRefreshPending = false
+        cancelAllRunningThreadRecoveries()
         subagentIdentityByThreadId.clear()
         subagentIdentityByAgentId.clear()
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -1289,6 +1324,7 @@ class AndrodexService(
         optimisticWorkspaceThreadIds.clear()
         selectedThreadLoadCounts.clear()
         deferredThreadListRefreshPending = false
+        cancelAllRunningThreadRecoveries()
         subagentIdentityByThreadId.clear()
         subagentIdentityByAgentId.clear()
         threadHydrationRequestMutex.withLock {
@@ -1660,6 +1696,16 @@ class AndrodexService(
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
                         hostRuntimeMetadata = resolveHostRuntimeMetadata(update.runtimeMetadata),
                         pendingApproval = if (update.status == ConnectionStatus.CONNECTED) it.pendingApproval else null,
+                        errorMessage = if (
+                            shouldClearTransientTransportErrorOnConnectionUpdate(
+                                message = it.errorMessage,
+                                status = update.status,
+                            )
+                        ) {
+                            null
+                        } else {
+                            it.errorMessage
+                        },
                     )
                 }
                 when (update.status) {
@@ -1671,14 +1717,10 @@ class AndrodexService(
                         }
                         val expectedContextRevision = threadSessionContextRevision.get()
                         scope.launch {
-                            refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
-                            loadRuntimeConfig(expectedContextRevision = expectedContextRevision)
-                            loadWorkspaceState(expectedContextRevision = expectedContextRevision)
-                            if (expectedContextRevision != threadSessionContextRevision.get()) {
-                                return@launch
-                            }
-                            recoverVisibleThreadState()
-                            routePendingNotificationOpenIfPossible()
+                            syncConnectedSessionState(
+                                expectedContextRevision = expectedContextRevision,
+                                includeRuntimeConfig = true,
+                            )
                         }
                     }
 
@@ -1795,13 +1837,10 @@ class AndrodexService(
                 if (runtimeTargetChanged) {
                     val expectedContextRevision = threadSessionContextRevision.get()
                     scope.launch {
-                        refreshThreadsInternal(expectedContextRevision = expectedContextRevision)
-                        loadWorkspaceState(expectedContextRevision = expectedContextRevision)
-                        if (expectedContextRevision != threadSessionContextRevision.get()) {
-                            return@launch
-                        }
-                        recoverVisibleThreadState()
-                        routePendingNotificationOpenIfPossible()
+                        syncConnectedSessionState(
+                            expectedContextRevision = expectedContextRevision,
+                            includeRuntimeConfig = false,
+                        )
                     }
                 }
             }
@@ -2271,6 +2310,11 @@ class AndrodexService(
                     put(threadId, normalizedTurnId)
                 }
             }
+            val nextResolvedTurns = current.latestResolvedTurnIdByThread.toMutableMap().apply {
+                if (normalizedTurnId != null && get(threadId) != normalizedTurnId) {
+                    remove(threadId)
+                }
+            }
             current.copy(
                 activeTurnIdByThread = nextActiveTurns,
                 runningThreadIds = current.runningThreadIds + threadId,
@@ -2281,8 +2325,10 @@ class AndrodexService(
                 },
                 readyThreadIds = current.readyThreadIds - threadId,
                 failedThreadIds = current.failedThreadIds - threadId,
+                latestResolvedTurnIdByThread = nextResolvedTurns,
             )
         }
+        scheduleRunningThreadRecovery(threadId)
     }
 
     private fun markTurnCompleted(
@@ -2293,8 +2339,12 @@ class AndrodexService(
         stateFlow.update { current ->
             val normalizedTurnId = turnId?.trim()?.takeIf { it.isNotEmpty() }
             val nextActiveTurns = current.activeTurnIdByThread.toMutableMap()
+            val nextResolvedTurns = current.latestResolvedTurnIdByThread.toMutableMap()
             if (normalizedTurnId == null || nextActiveTurns[threadId] == normalizedTurnId) {
                 nextActiveTurns.remove(threadId)
+            }
+            if (normalizedTurnId != null) {
+                nextResolvedTurns[threadId] = normalizedTurnId
             }
             val selectedThreadId = current.selectedThreadId
             val nextReady = current.readyThreadIds.toMutableSet().apply {
@@ -2316,8 +2366,10 @@ class AndrodexService(
                 readyThreadIds = nextReady,
                 failedThreadIds = nextFailed,
                 latestTurnTerminalStateByThread = current.latestTurnTerminalStateByThread + (threadId to terminalState),
+                latestResolvedTurnIdByThread = nextResolvedTurns,
             )
         }
+        cancelRunningThreadRecovery(threadId)
     }
 
     private fun clearThreadOutcome(threadId: String) {
@@ -2337,6 +2389,7 @@ class AndrodexService(
                 protectedRunningFallbackThreadIds = current.protectedRunningFallbackThreadIds - threadId,
             )
         }
+        cancelRunningThreadRecovery(threadId)
     }
 
     private fun clearThreadRunState() {
@@ -2348,8 +2401,50 @@ class AndrodexService(
                 readyThreadIds = emptySet(),
                 failedThreadIds = emptySet(),
                 latestTurnTerminalStateByThread = emptyMap(),
+                latestResolvedTurnIdByThread = emptyMap(),
             )
         }
+        cancelAllRunningThreadRecoveries()
+    }
+
+    private fun scheduleRunningThreadRecovery(threadId: String) {
+        if (threadId.isBlank()) {
+            return
+        }
+        runningThreadRecoveryJobs.remove(threadId)?.cancel()
+        runningThreadRecoveryJobs[threadId] = scope.launch {
+            while (isActive) {
+                delay(runningThreadRecoveryPollMs)
+                if (!isThreadConsideredRunning(threadId)) {
+                    break
+                }
+                val snapshot = runCatching { repository.readThreadRunSnapshot(threadId) }.getOrNull() ?: continue
+                syncThreadRunStateFromSnapshot(threadId, snapshot)
+                if (!isThreadConsideredRunning(threadId)) {
+                    if (stateFlow.value.selectedThreadId == threadId) {
+                        runCatching {
+                            ensureThreadHydrated(threadId, forceRefresh = true)
+                        }
+                    }
+                    break
+                }
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (runningThreadRecoveryJobs[threadId] == job) {
+                    runningThreadRecoveryJobs.remove(threadId)
+                }
+            }
+        }
+    }
+
+    private fun cancelRunningThreadRecovery(threadId: String) {
+        runningThreadRecoveryJobs.remove(threadId)?.cancel()
+    }
+
+    private fun cancelAllRunningThreadRecoveries() {
+        runningThreadRecoveryJobs.values.forEach { it.cancel() }
+        runningThreadRecoveryJobs.clear()
     }
 
     private fun resolveToolInputThreadOwnership(request: ToolUserInputRequest): ToolInputThreadOwnership {
@@ -2427,37 +2522,58 @@ class AndrodexService(
             val nextRunning = current.runningThreadIds.toMutableSet()
             val nextProtected = current.protectedRunningFallbackThreadIds.toMutableSet()
             val nextLatestTerminal = current.latestTurnTerminalStateByThread.toMutableMap()
+            val nextResolvedTurns = current.latestResolvedTurnIdByThread.toMutableMap()
             val nextReady = current.readyThreadIds.toMutableSet().apply { remove(threadId) }
             val nextFailed = current.failedThreadIds.toMutableSet().apply { remove(threadId) }
+            val snapshotLatestTurnId = snapshot.latestTurnId?.trim()?.takeIf { it.isNotEmpty() }
+            val currentResolvedTurnId = nextResolvedTurns[threadId]
+            val currentTerminalState = nextLatestTerminal[threadId]
+            val shouldIgnoreStaleRunningSnapshot =
+                currentResolvedTurnId != null
+                    && snapshotLatestTurnId == currentResolvedTurnId
+                    && currentTerminalState != null
+                    && snapshot.latestTurnTerminalState == null
+                    && (
+                        snapshot.interruptibleTurnId == currentResolvedTurnId
+                            || snapshot.hasInterruptibleTurnWithoutId
+                            || snapshot.shouldAssumeRunningFromLatestTurn
+                        )
 
-            when {
-                snapshot.interruptibleTurnId != null -> {
-                    nextActiveTurns[threadId] = snapshot.interruptibleTurnId
-                    nextRunning += threadId
-                    nextProtected -= threadId
-                }
+            if (shouldIgnoreStaleRunningSnapshot) {
+                nextActiveTurns.remove(threadId)
+                nextRunning -= threadId
+                nextProtected -= threadId
+            } else {
+                when {
+                    snapshot.interruptibleTurnId != null -> {
+                        nextActiveTurns[threadId] = snapshot.interruptibleTurnId
+                        nextRunning += threadId
+                        nextProtected -= threadId
+                    }
 
-                snapshot.shouldAssumeRunningFromLatestTurn && snapshot.latestTurnId != null -> {
-                    nextActiveTurns[threadId] = snapshot.latestTurnId
-                    nextRunning += threadId
-                    nextProtected -= threadId
-                }
+                    snapshot.shouldAssumeRunningFromLatestTurn && snapshot.latestTurnId != null -> {
+                        nextActiveTurns[threadId] = snapshot.latestTurnId
+                        nextRunning += threadId
+                        nextProtected -= threadId
+                    }
 
-                snapshot.hasInterruptibleTurnWithoutId -> {
-                    nextActiveTurns.remove(threadId)
-                    nextRunning -= threadId
-                    nextProtected += threadId
-                }
+                    snapshot.hasInterruptibleTurnWithoutId -> {
+                        nextActiveTurns.remove(threadId)
+                        nextRunning -= threadId
+                        nextProtected += threadId
+                    }
 
-                else -> {
-                    nextActiveTurns.remove(threadId)
-                    nextRunning -= threadId
-                    nextProtected -= threadId
+                    else -> {
+                        nextActiveTurns.remove(threadId)
+                        nextRunning -= threadId
+                        nextProtected -= threadId
+                    }
                 }
             }
 
             snapshot.latestTurnTerminalState?.let { terminalState ->
                 nextLatestTerminal[threadId] = terminalState
+                snapshotLatestTurnId?.let { nextResolvedTurns[threadId] = it }
                 if (!isThreadConsideredRunning(
                         threadId,
                         current.copy(
@@ -2474,6 +2590,10 @@ class AndrodexService(
                         TurnTerminalState.STOPPED -> Unit
                     }
                 }
+            } ?: run {
+                if (snapshotLatestTurnId != null && currentResolvedTurnId != null && currentResolvedTurnId != snapshotLatestTurnId) {
+                    nextResolvedTurns.remove(threadId)
+                }
             }
 
             current.copy(
@@ -2483,6 +2603,7 @@ class AndrodexService(
                 readyThreadIds = nextReady,
                 failedThreadIds = nextFailed,
                 latestTurnTerminalStateByThread = nextLatestTerminal,
+                latestResolvedTurnIdByThread = nextResolvedTurns,
             )
         }
     }
@@ -2624,6 +2745,7 @@ class AndrodexService(
             readyThreadIds = readyThreadIds - normalizedThreadId,
             failedThreadIds = failedThreadIds - normalizedThreadId,
             latestTurnTerminalStateByThread = latestTurnTerminalStateByThread - normalizedThreadId,
+            latestResolvedTurnIdByThread = latestResolvedTurnIdByThread - normalizedThreadId,
             tokenUsageByThread = tokenUsageByThread - normalizedThreadId,
             pendingToolInputsByThread = pendingToolInputsByThread - normalizedThreadId,
         )
@@ -2640,6 +2762,7 @@ class AndrodexService(
             readyThreadIds = emptySet(),
             failedThreadIds = emptySet(),
             latestTurnTerminalStateByThread = emptyMap(),
+            latestResolvedTurnIdByThread = emptyMap(),
             tokenUsageByThread = emptyMap(),
             focusedTurnId = null,
             pendingToolInputsByThread = emptyMap(),
@@ -2675,6 +2798,7 @@ class AndrodexService(
             readyThreadIds = emptySet(),
             failedThreadIds = emptySet(),
             latestTurnTerminalStateByThread = emptyMap(),
+            latestResolvedTurnIdByThread = emptyMap(),
             tokenUsageByThread = emptyMap(),
             threadRuntimeOverridesByThread = emptyMap(),
             activeWorkspacePath = null,
@@ -3047,6 +3171,7 @@ class AndrodexService(
                 readyThreadIds = previousState.readyThreadIds,
                 failedThreadIds = previousState.failedThreadIds,
                 latestTurnTerminalStateByThread = previousState.latestTurnTerminalStateByThread,
+                latestResolvedTurnIdByThread = previousState.latestResolvedTurnIdByThread,
                 tokenUsageByThread = previousState.tokenUsageByThread,
                 focusedTurnId = previousState.focusedTurnId,
                 pendingToolInputsByThread = previousState.pendingToolInputsByThread,
@@ -3474,6 +3599,30 @@ class AndrodexService(
             current.copy(threadTimelineStateByThread = nextTimeline)
         }
     }
+}
+
+private fun shouldClearTransientTransportErrorOnConnectionUpdate(
+    message: String?,
+    status: ConnectionStatus,
+): Boolean {
+    if (!isTransientTransportInterruptionMessage(message)) {
+        return false
+    }
+    return status == ConnectionStatus.CONNECTING
+        || status == ConnectionStatus.HANDSHAKING
+        || status == ConnectionStatus.RETRYING_SAVED_PAIRING
+        || status == ConnectionStatus.CONNECTED
+}
+
+private fun isTransientTransportInterruptionMessage(message: String?): Boolean {
+    val normalized = message?.trim()?.lowercase().orEmpty()
+    if (normalized.isEmpty()) {
+        return false
+    }
+    return normalized == "disconnected"
+        || normalized == "socket closed"
+        || normalized == "socket failure"
+        || normalized == "connection lost"
 }
 
 private fun AndrodexServiceState.threadMessages(threadId: String): List<ConversationMessage> {
@@ -4211,10 +4360,19 @@ private fun messagesRepresentSameItem(
     val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() }
     val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() }
     if (existingTurnId != null && incomingTurnId != null) {
-        return existing.threadId == incoming.threadId
-            && existing.role == incoming.role
-            && existing.kind == incoming.kind
-            && existingTurnId == incomingTurnId
+        if (existing.threadId != incoming.threadId
+            || existing.role != incoming.role
+            || existing.kind != incoming.kind
+            || existingTurnId != incomingTurnId
+        ) {
+            return false
+        }
+
+        if (existing.kind == ConversationKind.CHAT && incoming.kind == ConversationKind.CHAT) {
+            return chatMessagesRepresentSameTurnItem(existing, incoming)
+        }
+
+        return true
     }
 
     if (existing.threadId == incoming.threadId
@@ -4237,6 +4395,37 @@ private fun messagesRepresentSameItem(
     }
 
     return false
+}
+
+private fun chatMessagesRepresentSameTurnItem(
+    existing: ConversationMessage,
+    incoming: ConversationMessage,
+): Boolean {
+    val existingTurnId = existing.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val incomingTurnId = incoming.turnId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    if (existing.threadId != incoming.threadId
+        || existing.role != incoming.role
+        || existing.kind != ConversationKind.CHAT
+        || incoming.kind != ConversationKind.CHAT
+        || existingTurnId != incomingTurnId
+        || attachmentSignature(existing.attachments) != attachmentSignature(incoming.attachments)
+    ) {
+        return false
+    }
+
+    if (existing.text == incoming.text) {
+        return true
+    }
+
+    if (!(existing.isStreaming || incoming.isStreaming)) {
+        return false
+    }
+
+    if (existing.text.isBlank() || incoming.text.isBlank()) {
+        return true
+    }
+
+    return existing.text.startsWith(incoming.text) || incoming.text.startsWith(existing.text)
 }
 
 private fun subagentMessagesRepresentSameItem(

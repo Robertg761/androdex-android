@@ -916,6 +916,164 @@ class ThreadCreateFakeWebSocket extends FakeWebSocket {
   }
 }
 
+class ThreadCreateBootstrapProjectFakeWebSocket extends FakeWebSocket {
+  constructor(url) {
+    super(url);
+    this.snapshotValue = {
+      snapshotSequence: 7,
+      updatedAt: "2026-04-07T12:00:00.000Z",
+      projects: [
+        {
+          id: "project-bootstrap",
+          title: "Bootstrap",
+          workspaceRoot: "/tmp/bootstrap",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+          createdAt: "2026-04-07T11:00:00.000Z",
+          updatedAt: "2026-04-07T11:30:00.000Z",
+          deletedAt: null,
+        },
+      ],
+      threads: [],
+    };
+  }
+
+  send(message) {
+    this.sentMessages.push(message);
+    const parsed = JSON.parse(message);
+    if (parsed.tag === "server.getConfig") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              protocolVersion: "2026-04-01",
+              authMode: "bootstrap-token",
+              baseDir: "/tmp/t3-state",
+              rpcMethods: [
+                "server.getConfig",
+                "orchestration.getSnapshot",
+                "orchestration.replayEvents",
+              ],
+              subscriptions: [
+                "subscribeOrchestrationDomainEvents",
+              ],
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (parsed.tag === "orchestration.getSnapshot") {
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: this.snapshotValue,
+          },
+        })));
+      });
+      return;
+    }
+    if (
+      parsed.tag === "orchestration.dispatchCommand"
+      && parsed.payload?.type === "project.create"
+    ) {
+      this.snapshotValue = {
+        ...this.snapshotValue,
+        snapshotSequence: 8,
+        updatedAt: parsed.payload.createdAt,
+        projects: [
+          ...this.snapshotValue.projects,
+          {
+            id: parsed.payload.projectId,
+            title: parsed.payload.title,
+            workspaceRoot: parsed.payload.workspaceRoot,
+            defaultModelSelection: parsed.payload.defaultModelSelection ?? null,
+            scripts: [],
+            createdAt: parsed.payload.createdAt,
+            updatedAt: parsed.payload.createdAt,
+            deletedAt: null,
+          },
+        ],
+      };
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              sequence: 8,
+            },
+          },
+        })));
+      });
+      return;
+    }
+    if (
+      parsed.tag === "orchestration.dispatchCommand"
+      && parsed.payload?.type === "thread.create"
+    ) {
+      this.snapshotValue = {
+        ...this.snapshotValue,
+        snapshotSequence: 9,
+        updatedAt: parsed.payload.createdAt,
+        threads: [
+          {
+            id: parsed.payload.threadId,
+            projectId: parsed.payload.projectId,
+            title: parsed.payload.title,
+            modelSelection: parsed.payload.modelSelection,
+            runtimeMode: parsed.payload.runtimeMode,
+            interactionMode: parsed.payload.interactionMode,
+            branch: parsed.payload.branch,
+            worktreePath: parsed.payload.worktreePath,
+            latestTurn: null,
+            createdAt: parsed.payload.createdAt,
+            updatedAt: parsed.payload.createdAt,
+            archivedAt: null,
+            deletedAt: null,
+            messages: [],
+            proposedPlans: [],
+            activities: [],
+            checkpoints: [],
+            session: {
+              threadId: parsed.payload.threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: parsed.payload.runtimeMode,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: parsed.payload.createdAt,
+            },
+          },
+        ],
+      };
+      queueMicrotask(() => {
+        this.handlers.get("message")?.(Buffer.from(JSON.stringify({
+          _tag: "Exit",
+          requestId: parsed.id,
+          exit: {
+            _tag: "Success",
+            value: {
+              sequence: 9,
+            },
+          },
+        })));
+      });
+      return;
+    }
+    super.send(message);
+  }
+}
+
 class UserInputThreadFakeWebSocket extends FakeWebSocket {
   send(message) {
     this.sentMessages.push(message);
@@ -1745,6 +1903,64 @@ test("T3 runtime adapter dispatches thread/start through thread.create for known
   assert.equal(dispatches[0].payload.type, "thread.create");
   assert.equal(dispatches[0].payload.projectId, "project-create");
   assert.equal(dispatches[0].payload.runtimeMode, "approval-required");
+});
+
+test("T3 runtime adapter bootstraps a missing project before thread/start in a selected workspace", async () => {
+  FakeWebSocket.instances = [];
+  const adapter = createRuntimeAdapter({
+    targetKind: "t3-server",
+    endpoint: "ws://127.0.0.1:7777",
+    env: {
+      ANDRODEX_T3_AUTH_MODE: "bootstrap-token",
+      ANDRODEX_T3_BASE_DIR: "/tmp/t3-state",
+      ANDRODEX_T3_PROTOCOL_VERSION: "2026-04-01",
+    },
+    WebSocketImpl: ThreadCreateBootstrapProjectFakeWebSocket,
+  });
+
+  const responses = [];
+  adapter.onMessage((message) => {
+    responses.push(JSON.parse(message));
+  });
+  await adapter.whenReady();
+  assert.equal(adapter.send(JSON.stringify({
+    id: "req-thread-start-bootstrap",
+    method: "thread/start",
+    params: {
+      cwd: "/Users/robert/Documents/Projects/androdex",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+      },
+    },
+  })), true);
+
+  let response = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    response = responses.find((entry) => entry.id === "req-thread-start-bootstrap") || null;
+    if (response) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  assert.equal(response?.result?.thread?.cwd, "/Users/robert/Documents/Projects/androdex");
+  assert.equal(response?.result?.thread?.title, "androdex");
+  assert.equal(response?.result?.thread?.threadCapabilities?.turnStart?.supported, true);
+
+  const socket = FakeWebSocket.instances.at(-1);
+  const dispatches = Array.from(new Map(
+    socket.sentMessages
+      .map((entry) => JSON.parse(entry))
+      .filter((entry) => entry.tag === "orchestration.dispatchCommand")
+      .map((entry) => [entry.id, entry])
+  ).values());
+  assert.equal(dispatches.length, 2);
+  assert.equal(dispatches[0].payload.type, "project.create");
+  assert.equal(dispatches[0].payload.workspaceRoot, "/Users/robert/Documents/Projects/androdex");
+  assert.equal(dispatches[0].payload.defaultModelSelection?.provider, "codex");
+  assert.equal(dispatches[1].payload.type, "thread.create");
+  assert.equal(dispatches[1].payload.projectId, dispatches[0].payload.projectId);
+  assert.equal(dispatches[1].payload.modelSelection?.provider, "codex");
 });
 test("T3 runtime adapter rejects turn/interrupt when the synchronized thread is no longer interruptible", async () => {
   const adapter = createRuntimeAdapter({

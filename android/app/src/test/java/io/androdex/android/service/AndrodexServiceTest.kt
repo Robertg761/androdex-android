@@ -1095,6 +1095,124 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun openThread_preservesDistinctHistoryItemsWithSharedTurnIdWhenItemIdsAreMissing() = runTest {
+        val now = System.currentTimeMillis()
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "First reply",
+                        createdAtEpochMs = now + 1_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                    ),
+                    ConversationMessage(
+                        id = "history-assistant-2",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Second reply",
+                        createdAtEpochMs = now + 2_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                    ),
+                    ConversationMessage(
+                        id = "history-assistant-3",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Third reply",
+                        createdAtEpochMs = now + 3_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val messages = service.state.value.timelineByThread["thread-1"].orEmpty()
+        assertEquals(
+            listOf("First reply", "Second reply", "Third reply"),
+            messages.map { it.text },
+        )
+    }
+
+    @Test
+    fun openThread_whileRunning_mergesStreamingAssistantRowsWithoutItemIdsUsingPrefixOnly() = runTest {
+        val now = System.currentTimeMillis()
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, null, null, null),
+                messages = listOf(
+                    ConversationMessage(
+                        id = "history-assistant-1",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "First reply",
+                        createdAtEpochMs = now + 1_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                    ),
+                    ConversationMessage(
+                        id = "history-assistant-2",
+                        threadId = "thread-1",
+                        role = ConversationRole.ASSISTANT,
+                        kind = ConversationKind.CHAT,
+                        text = "Second reply",
+                        createdAtEpochMs = now + 2_000L,
+                        turnId = "turn-1",
+                        itemId = null,
+                    ),
+                ),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = "turn-1",
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = "turn-1",
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = true,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-1"))
+        service.processClientUpdate(
+            ClientUpdate.AssistantDelta(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                itemId = null,
+                delta = "First",
+            )
+        )
+
+        service.openThread("thread-1")
+        advanceUntilIdle()
+
+        val assistantMessages = service.state.value.timelineByThread["thread-1"].orEmpty()
+            .filter { it.role == ConversationRole.ASSISTANT && it.kind == ConversationKind.CHAT }
+        assertEquals(listOf("First reply", "Second reply"), assistantMessages.map { it.text })
+    }
+
+    @Test
     fun openThread_whileRunning_deduplicatesMirroredAssistantHistoryAgainstLiveReply() = runTest {
         val now = System.currentTimeMillis()
         val repository = FakeRepository().apply {
@@ -6114,6 +6232,123 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun selectedThreadTerminalUpdate_doesNotLetImmediateStaleRefreshRestoreRunningState() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-live"))
+        advanceUntilIdle()
+
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+            messages = emptyList(),
+            runSnapshot = ThreadRunSnapshot(
+                interruptibleTurnId = "turn-live",
+                hasInterruptibleTurnWithoutId = false,
+                latestTurnId = "turn-live",
+                latestTurnTerminalState = null,
+                shouldAssumeRunningFromLatestTurn = false,
+            ),
+        )
+
+        service.processClientUpdate(
+            ClientUpdate.TurnCompleted(
+                threadId = "thread-1",
+                turnId = "turn-live",
+                terminalState = TurnTerminalState.FAILED,
+                errorMessage = "Usage limit exceeded",
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1", forceRefresh = true)
+        advanceUntilIdle()
+
+        assertEquals("thread-1", service.state.value.selectedThreadId)
+        assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
+        assertEquals(
+            TurnTerminalState.FAILED,
+            service.state.value.latestTurnTerminalStateByThread["thread-1"],
+        )
+        assertEquals("Usage limit exceeded", service.state.value.errorMessage)
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun runningThreadRecoveryPoll_rehydratesSelectedThreadWhenLiveTerminalUpdateIsMissed() = runTest {
+        val repository = FakeRepository().apply {
+            loadThreadResult = ThreadLoadResult(
+                thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+                messages = emptyList(),
+                runSnapshot = ThreadRunSnapshot(
+                    interruptibleTurnId = null,
+                    hasInterruptibleTurnWithoutId = false,
+                    latestTurnId = null,
+                    latestTurnTerminalState = null,
+                    shouldAssumeRunningFromLatestTurn = false,
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            )
+        )
+        advanceUntilIdle()
+        service.openThread("thread-1")
+        advanceUntilIdle()
+        service.processClientUpdate(ClientUpdate.TurnStarted("thread-1", "turn-live"))
+        advanceUntilIdle()
+
+        repository.runSnapshot = ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = "turn-live",
+            latestTurnTerminalState = TurnTerminalState.FAILED,
+            shouldAssumeRunningFromLatestTurn = false,
+        )
+        repository.loadThreadResult = ThreadLoadResult(
+            thread = ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null),
+            messages = emptyList(),
+            runSnapshot = repository.runSnapshot,
+        )
+
+        advanceTimeBy(4_100L)
+        advanceUntilIdle()
+
+        assertFalse(service.state.value.runningThreadIds.contains("thread-1"))
+        assertEquals(
+            TurnTerminalState.FAILED,
+            service.state.value.latestTurnTerminalStateByThread["thread-1"],
+        )
+        assertEquals(listOf("thread-1"), repository.readThreadRunSnapshotIds)
+        assertEquals(listOf("thread-1", "thread-1"), repository.loadedThreadIds)
+    }
+
+    @Test
     fun sendMessage_steersActiveRunWhenTurnIdIsKnown() = runTest {
         val repository = FakeRepository().apply {
             loadThreadResult = ThreadLoadResult(
@@ -6748,6 +6983,73 @@ class AndrodexServiceTest {
         runCurrent()
 
         assertEquals(1, reconnectCalls)
+    }
+
+    @Test
+    fun transientTransportError_clearsWhenConnectionRecovers() = runTest {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.reportError("Disconnected")
+        advanceUntilIdle()
+        assertEquals("Disconnected", service.state.value.errorMessage)
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTING,
+                detail = "Connecting to relay...",
+            )
+        )
+        advanceUntilIdle()
+
+        assertNull(service.state.value.errorMessage)
+
+        service.reportError("Socket closed")
+        advanceUntilIdle()
+        assertEquals("Socket closed", service.state.value.errorMessage)
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+            )
+        )
+        advanceUntilIdle()
+
+        assertNull(service.state.value.errorMessage)
+    }
+
+    fun nonTransportError_survivesReconnectFriendlyConnectionUpdates() = runTest {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.reportError("Usage limit exceeded")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTING,
+                detail = "Connecting to relay...",
+            )
+        )
+        advanceUntilIdle()
+        assertEquals("Usage limit exceeded", service.state.value.errorMessage)
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("Usage limit exceeded", service.state.value.errorMessage)
     }
 
     @Test

@@ -7,6 +7,7 @@ const {
   buildLaunchAgentPlist,
   getMacOSBridgeServiceStatus,
   printMacOSBridgeServiceStatus,
+  readForegroundBridgeConfig,
   resetMacOSBridgePairing,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,
@@ -17,6 +18,7 @@ const {
 const {
   readBridgeStatus,
   readPairingSession,
+  writeDaemonConfig,
   writeBridgeStatus,
   writePairingSession,
 } = require("../src/daemon-state");
@@ -150,7 +152,7 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
           cliPath: "/opt/homebrew/bin/t3",
           desktopSession: {
             runtimeSessionPath: path.join(rootDir, ".t3", "userdata", "runtime-session.json"),
-            endpoint: "ws://127.0.0.1:57816",
+            endpoint: "ws://127.0.0.1:57816/ws",
             authEnabled: true,
             authToken: "secret-token",
             source: "runtime-session-file",
@@ -181,7 +183,7 @@ test("getMacOSBridgeServiceStatus reports launchd and runtime metadata together"
     assert.equal(status.t3Availability.reasonCode, "attach-ready");
     assert.equal(status.t3Availability.endpointHost, "127.0.0.1");
     assert.equal(status.t3Runtime.desktopAppInstalled, true);
-    assert.equal(status.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816");
+    assert.equal(status.t3Runtime.desktopSession.endpoint, "ws://127.0.0.1:57816/ws");
     assert.equal(status.t3Runtime.desktopSession.descriptorStatus, "trusted");
   });
 });
@@ -231,7 +233,7 @@ test("getMacOSBridgeServiceStatus surfaces expired pairing payloads and duplicat
   });
 });
 
-test("getMacOSBridgeServiceStatus explains missing T3 endpoint configuration", () => {
+test("getMacOSBridgeServiceStatus falls back to the default loopback T3 endpoint when no explicit endpoint is stored", () => {
   withTempDaemonEnv(({ rootDir }) => {
     writeBridgeStatus({
       state: "error",
@@ -283,8 +285,8 @@ test("getMacOSBridgeServiceStatus explains missing T3 endpoint configuration", (
     });
 
     assert.equal(status.runtimeConfig.runtimeTarget, "t3-server");
-    assert.equal(status.runtimeConfig.runtimeEndpoint, "");
-    assert.equal(status.t3Availability.reasonCode, "missing-endpoint");
+    assert.equal(status.runtimeConfig.runtimeEndpoint, "ws://127.0.0.1:3773/ws");
+    assert.equal(status.t3Availability.reasonCode, "attach-ready");
     assert.equal(status.t3Availability.runtimeAttachFailure, "missing T3 websocket endpoint");
   });
 });
@@ -331,7 +333,7 @@ test("printMacOSBridgeServiceStatus includes installed T3 desktop session detail
             cliPath: "",
             desktopSession: {
               runtimeSessionPath: path.join(rootDir, ".t3", "userdata", "runtime-session.json"),
-              endpoint: "ws://127.0.0.1:57816",
+              endpoint: "ws://127.0.0.1:57816/ws",
               authEnabled: true,
               authToken: "secret-token",
               source: "runtime-session-file",
@@ -355,7 +357,7 @@ test("printMacOSBridgeServiceStatus includes installed T3 desktop session detail
     }
 
     assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
-    assert.ok(messages.some((message) => message.includes("T3 desktop session: ws://127.0.0.1:57816 (auth enabled)")));
+    assert.ok(messages.some((message) => message.includes("T3 desktop session: ws://127.0.0.1:57816/ws (auth enabled)")));
     assert.ok(messages.some((message) => message.includes("T3 desktop descriptor: trusted descriptor")));
   });
 });
@@ -486,6 +488,35 @@ test("waitForPairingReadiness times out when the relay never reaches connected",
       }),
       /Timed out waiting for the macOS bridge service to publish a ready pairing QR\..*Last relay note: Host relay registration failed\./
     );
+  });
+});
+
+test("readForegroundBridgeConfig prefers daemon T3 endpoint state for foreground runs", async () => {
+  await withTempDaemonEnv(async () => {
+    writeDaemonConfig({
+      relayUrl: "wss://relay.example/relay",
+      runtimeTarget: "t3-server",
+      runtimeProvider: "t3code",
+      runtimeEndpoint: "ws://127.0.0.1:3783/ws",
+      runtimeEndpointAuthToken: "test-token",
+      activeCwd: "/tmp/workspace",
+      recentWorkspaces: ["/tmp/workspace"],
+    });
+
+    const config = readForegroundBridgeConfig({
+      env: {
+        ...process.env,
+        ANDRODEX_RUNTIME_TARGET: "codex-native",
+      },
+      fsImpl: fs,
+    });
+
+    assert.equal(config.runtimeTarget, "t3-server");
+    assert.equal(config.runtimeProvider, "t3code");
+    assert.equal(config.runtimeEndpoint, "ws://127.0.0.1:3783/ws");
+    assert.equal(config.runtimeEndpointAuthToken, "test-token");
+    assert.equal(config.activeCwd, "/tmp/workspace");
+    assert.deepEqual(config.recentWorkspaces, ["/tmp/workspace"]);
   });
 });
 

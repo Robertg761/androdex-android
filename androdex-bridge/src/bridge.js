@@ -825,8 +825,11 @@ function startBridge({
     }
 
     workspaceRuntime.updateRuntimeConfig({
-      runtimeTarget: resolvedTargetConfig.kind,
-      runtimeProvider: resolvedTargetConfig.legacyProviderKind,
+      ...buildBridgeManagedRuntimeTargetUpdate({
+        targetKind: resolvedTargetConfig.kind,
+        codexEndpoint: config.codexEndpoint,
+        currentConfig: config,
+      }),
     })
       .then(() => {
         sendResponse(JSON.stringify({
@@ -1735,8 +1738,30 @@ function buildMacRegistration(deviceState) {
   };
 }
 
+function buildBridgeManagedRuntimeTargetUpdate({
+  targetKind = "",
+  codexEndpoint = "",
+  currentConfig = null,
+} = {}) {
+  const resolvedTargetConfig = resolveRuntimeTargetConfig({ kind: targetKind });
+  const runtimeTarget = resolvedTargetConfig.kind;
+  const currentRuntimeEndpoint = normalizeNonEmptyString(currentConfig?.runtimeEndpoint);
+  const currentRuntimeEndpointAuthToken = normalizeNonEmptyString(currentConfig?.runtimeEndpointAuthToken);
+  return {
+    runtimeTarget,
+    runtimeProvider: resolvedTargetConfig.legacyProviderKind,
+    runtimeEndpoint: runtimeTarget === "t3-server"
+      ? currentRuntimeEndpoint
+      : normalizeNonEmptyString(codexEndpoint),
+    runtimeEndpointAuthToken: runtimeTarget === "t3-server"
+      ? currentRuntimeEndpointAuthToken
+      : "",
+  };
+}
+
 module.exports = {
   buildUnavailableHostAccountStatus,
+  buildBridgeManagedRuntimeTargetUpdate,
   createBridgeManagedInitializeSuccessResponse,
   buildBridgeManagedRuntimeTargetResult,
   getRelayWatchdogAction,

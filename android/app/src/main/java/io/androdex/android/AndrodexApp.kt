@@ -398,6 +398,7 @@ fun AndrodexApp(viewModel: MainViewModel) {
                                         state = connectedState.state,
                                         onOpenSidebar = { scope.launch { drawerState.open() } },
                                         onOpenSettings = { settingsOpen = true },
+                                        onSelectHostRuntimeTarget = viewModel::selectHostRuntimeTarget,
                                         onCreateThread = viewModel::createThread,
                                         onOpenThread = viewModel::openThread,
                                         onOpenProjects = viewModel::openProjectPicker,

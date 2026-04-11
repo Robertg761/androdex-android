@@ -127,6 +127,7 @@ internal data class HomeScreenUiState(
     val trustedPair: TrustedPairUiState?,
     val hostAccount: HostAccountUiState?,
     val bridgeStatus: BridgeStatusUiState,
+    val hostRuntimeTargetOptions: List<RuntimeSettingsOptionUiState>,
     val activeWorkspacePath: String?,
     val createThreadSupported: Boolean = true,
     val createThreadBlockedReason: String? = null,
@@ -494,12 +495,14 @@ private fun AndrodexUiState.toFirstPairingOnboardingUiState(): FirstPairingOnboa
 
 internal fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long = System.currentTimeMillis()): HomeScreenUiState {
     val threadList = toThreadListPaneUiState(nowEpochMs)
+    val currentRuntimeTarget = currentHostRuntimeTarget()
     return HomeScreenUiState(
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),
         trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
         hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         bridgeStatus = toBridgeStatusUiState(),
+        hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeTarget),
         activeWorkspacePath = activeWorkspacePath,
         createThreadSupported = threadList.createThreadSupported,
         createThreadBlockedReason = threadList.createThreadBlockedReason,
@@ -966,22 +969,8 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
 private fun AndrodexUiState.toRuntimeSettingsUiState(
     isVisible: Boolean,
 ): RuntimeSettingsUiState {
-    val currentRuntimeTarget = hostRuntimeMetadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() }
-        ?: "codex-native"
-    val hostRuntimeTargetOptions = listOf(
-        RuntimeSettingsOptionUiState(
-            value = "codex-native",
-            title = "Codex",
-            subtitle = "Use the normal host-local Codex runtime.",
-            selected = currentRuntimeTarget == "codex-native",
-        ),
-        RuntimeSettingsOptionUiState(
-            value = "t3-server",
-            title = "T3 Code",
-            subtitle = "Attach the host bridge to a local T3 server.",
-            selected = currentRuntimeTarget == "t3-server",
-        ),
-    )
+    val currentRuntimeTarget = currentHostRuntimeTarget()
+    val hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeTarget)
     val selectedModel = resolveSelectedModel(availableModels, selectedModelId)
     val modelOptions = buildList {
         add(
@@ -1080,6 +1069,25 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
         serviceTierSupported = supportsServiceTier,
     )
 }
+
+private fun AndrodexUiState.currentHostRuntimeTarget(): String =
+    hostRuntimeMetadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() } ?: "codex-native"
+
+private fun buildHostRuntimeTargetOptions(currentRuntimeTarget: String): List<RuntimeSettingsOptionUiState> =
+    listOf(
+        RuntimeSettingsOptionUiState(
+            value = "codex-native",
+            title = "Codex",
+            subtitle = "Use the normal host-local Codex runtime.",
+            selected = currentRuntimeTarget == "codex-native",
+        ),
+        RuntimeSettingsOptionUiState(
+            value = "t3-server",
+            title = "T3 Code",
+            subtitle = "Attach the host bridge to a local T3 server.",
+            selected = currentRuntimeTarget == "t3-server",
+        ),
+    )
 
 private fun AndrodexUiState.toConnectionBannerUiState(): ConnectionBannerUiState {
     return ConnectionBannerUiState(

@@ -8,6 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const WebSocket = require("ws");
 const {
+  buildBridgeManagedRuntimeTargetUpdate,
   buildBridgeManagedRuntimeTargetResult,
   buildUnavailableHostAccountStatus,
   createBridgeManagedInitializeSuccessResponse,
@@ -25,6 +26,70 @@ const {
   shouldServeBridgeManagedReadOnlySnapshot,
   shouldQueueMessageUntilCodexWarm,
 } = require("../src/bridge");
+
+test("buildBridgeManagedRuntimeTargetUpdate clears T3 endpoint state when switching back to Codex", () => {
+  assert.deepEqual(
+    buildBridgeManagedRuntimeTargetUpdate({
+      targetKind: "codex-native",
+      codexEndpoint: "",
+    }),
+    {
+      runtimeTarget: "codex-native",
+      runtimeProvider: "codex",
+      runtimeEndpoint: "",
+      runtimeEndpointAuthToken: "",
+    }
+  );
+});
+
+test("buildBridgeManagedRuntimeTargetUpdate preserves a codex endpoint and clears auth tokens", () => {
+  assert.deepEqual(
+    buildBridgeManagedRuntimeTargetUpdate({
+      targetKind: "codex-native",
+      codexEndpoint: "ws://127.0.0.1:8080",
+    }),
+    {
+      runtimeTarget: "codex-native",
+      runtimeProvider: "codex",
+      runtimeEndpoint: "ws://127.0.0.1:8080",
+      runtimeEndpointAuthToken: "",
+    }
+  );
+});
+
+test("buildBridgeManagedRuntimeTargetUpdate preserves the saved T3 endpoint and auth token", () => {
+  assert.deepEqual(
+    buildBridgeManagedRuntimeTargetUpdate({
+      targetKind: "t3-server",
+      codexEndpoint: "ws://127.0.0.1:8080",
+      currentConfig: {
+        runtimeEndpoint: "ws://127.0.0.1:3783/ws",
+        runtimeEndpointAuthToken: "test-token",
+      },
+    }),
+    {
+      runtimeTarget: "t3-server",
+      runtimeProvider: "t3code",
+      runtimeEndpoint: "ws://127.0.0.1:3783/ws",
+      runtimeEndpointAuthToken: "test-token",
+    }
+  );
+});
+
+test("buildBridgeManagedRuntimeTargetUpdate falls back to discovery when no T3 endpoint is saved", () => {
+  assert.deepEqual(
+    buildBridgeManagedRuntimeTargetUpdate({
+      targetKind: "t3-server",
+      codexEndpoint: "ws://127.0.0.1:8080",
+    }),
+    {
+      runtimeTarget: "t3-server",
+      runtimeProvider: "t3code",
+      runtimeEndpoint: "",
+      runtimeEndpointAuthToken: "",
+    }
+  );
+});
 
 test("buildBridgeManagedRuntimeTargetResult returns host runtime selection metadata", () => {
   const result = buildBridgeManagedRuntimeTargetResult({

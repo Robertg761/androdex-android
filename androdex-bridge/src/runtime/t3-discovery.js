@@ -90,7 +90,7 @@ function readDesktopT3Session({
   const desktopLog = safeReadUtf8(fsImpl, desktopLogPath);
   const serverLog = safeReadUtf8(fsImpl, serverLogPath);
   const trustedRuntimeSession = runtimeSession?.descriptor || null;
-  const endpoint = normalizeNonEmptyString(trustedRuntimeSession?.baseUrl) || extractLatestDesktopBaseUrl(desktopLog);
+  const endpoint = trustedRuntimeSession?.endpoint || extractLatestDesktopWebSocketEndpoint(desktopLog);
   const authEnabled = extractLatestAuthEnabled(serverLog);
   return {
     runtimeSessionPath,
@@ -218,6 +218,7 @@ function readRuntimeSessionDescriptor({
     return {
       descriptor: {
         baseUrl,
+        endpoint: normalizeDesktopT3WebSocketEndpoint(baseUrl),
         authToken,
       },
       problem: null,
@@ -263,14 +264,34 @@ function isProcessAlive(pid) {
   }
 }
 
-function extractLatestDesktopBaseUrl(logText) {
+function extractLatestDesktopWebSocketEndpoint(logText) {
   const pattern = /bootstrap resolved websocket endpoint baseUrl=(ws:\/\/127\.0\.0\.1:\d+)/g;
   let match = null;
   let latest = "";
   while ((match = pattern.exec(logText)) !== null) {
-    latest = normalizeNonEmptyString(match[1]);
+    latest = normalizeDesktopT3WebSocketEndpoint(match[1]);
   }
   return latest;
+}
+
+function normalizeDesktopT3WebSocketEndpoint(value) {
+  const normalizedUrl = normalizeLoopbackWebSocketUrl(value);
+  if (!normalizedUrl) {
+    return "";
+  }
+  try {
+    const parsed = new URL(normalizedUrl);
+    const pathname = normalizeNonEmptyString(parsed.pathname);
+    if (pathname && pathname !== "/" && pathname !== "/ws" && pathname !== "/ws/") {
+      return "";
+    }
+    parsed.pathname = "/ws";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
 }
 
 function extractLatestAuthEnabled(logText) {
@@ -287,7 +308,9 @@ module.exports = {
   DEFAULT_T3_LOOPBACK_ENDPOINT,
   KNOWN_T3_DESKTOP_APP_PATHS,
   detectInstalledT3Runtime,
+  extractLatestDesktopWebSocketEndpoint,
   isProcessAlive,
+  normalizeDesktopT3WebSocketEndpoint,
   normalizeLoopbackWebSocketUrl,
   readDesktopT3Session,
   resolveHomeDir,

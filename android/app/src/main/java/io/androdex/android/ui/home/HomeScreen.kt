@@ -46,6 +46,7 @@ import io.androdex.android.ui.shared.StatusCapsule
 import io.androdex.android.ui.shared.TrustedPairCard
 import io.androdex.android.ui.shared.remodexBottomSafeAreaInsets
 import io.androdex.android.ui.state.HomeScreenUiState
+import io.androdex.android.ui.state.RuntimeSettingsOptionUiState
 import io.androdex.android.ui.state.ThreadListPaneUiState
 import io.androdex.android.ui.state.ThreadListEmptyStateUiState
 import io.androdex.android.ui.state.ThreadListItemUiState
@@ -57,6 +58,7 @@ internal fun HomeScreen(
     state: HomeScreenUiState,
     onOpenSidebar: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSelectHostRuntimeTarget: (String) -> Unit,
     onCreateThread: () -> Unit,
     onOpenThread: (String) -> Unit,
     onOpenProjects: () -> Unit,
@@ -109,6 +111,7 @@ internal fun HomeScreen(
                     HomeNarrowSection {
                         HomeHeroSection(
                             state = state,
+                            onSelectHostRuntimeTarget = onSelectHostRuntimeTarget,
                             onCreateThread = onCreateThread,
                             onOpenProjects = onOpenProjects,
                         )
@@ -227,6 +230,7 @@ private fun HomeWideSection(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun HomeHeroSection(
     state: HomeScreenUiState,
+    onSelectHostRuntimeTarget: (String) -> Unit,
     onCreateThread: () -> Unit,
     onOpenProjects: () -> Unit,
 ) {
@@ -297,6 +301,11 @@ private fun HomeHeroSection(
                 color = RemodexTheme.colors.textSecondary,
             )
         }
+        QuickRuntimeSwitchCard(
+            options = state.hostRuntimeTargetOptions,
+            enabled = !state.busy.isVisible,
+            onSelect = onSelectHostRuntimeTarget,
+        )
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
@@ -337,6 +346,86 @@ private fun HomeHeroSection(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickRuntimeSwitchCard(
+    options: List<RuntimeSettingsOptionUiState>,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+
+    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            Text(
+                text = "Host runtime",
+                style = MaterialTheme.typography.labelLarge,
+                color = RemodexTheme.colors.textSecondary,
+            )
+            Text(
+                text = "Swap between Codex and T3 Code right from home.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = RemodexTheme.colors.textPrimary,
+            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+            ) {
+                options.forEachIndexed { index, option ->
+                    RemodexSelectionRow(
+                        selected = option.selected,
+                        onClick = if (enabled && !option.selected) {
+                            { option.value?.let(onSelect) }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+                        ) {
+                            Text(
+                                text = option.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (enabled) {
+                                    RemodexTheme.colors.textPrimary
+                                } else {
+                                    RemodexTheme.colors.disabledForeground
+                                },
+                            )
+                            option.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
+                                Text(
+                                    text = subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (enabled) {
+                                        RemodexTheme.colors.textSecondary
+                                    } else {
+                                        RemodexTheme.colors.disabledForeground
+                                    },
+                                )
+                            }
+                        }
+                        RemodexPill(
+                            label = if (option.selected) "Active" else "Switch",
+                            style = if (option.selected) {
+                                RemodexPillStyle.Accent
+                            } else {
+                                RemodexPillStyle.Neutral
+                            },
+                        )
+                    }
+                    if (index != options.lastIndex) {
+                        RemodexDivider()
+                    }
+                }
             }
         }
     }

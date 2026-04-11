@@ -93,6 +93,40 @@ test("androdex up waits for pairing and binds the current cwd", async () => {
   ]);
 });
 
+test("androdex run uses the saved foreground bridge config when available", async () => {
+  const calls = [];
+
+  await main({
+    argv: ["node", "androdex", "run"],
+    platform: "darwin",
+    exitImpl(code) {
+      throw new Error(`unexpected exit ${code}`);
+    },
+    deps: {
+      readForegroundBridgeConfig() {
+        calls.push("read-foreground-config");
+        return {
+          runtimeTarget: "t3-server",
+          runtimeEndpoint: "ws://127.0.0.1:3783/ws",
+        };
+      },
+      startBridge(options) {
+        calls.push(["start-bridge", options]);
+      },
+    },
+  });
+
+  assert.deepEqual(calls, [
+    "read-foreground-config",
+    ["start-bridge", {
+      config: {
+        runtimeTarget: "t3-server",
+        runtimeEndpoint: "ws://127.0.0.1:3783/ws",
+      },
+    }],
+  ]);
+});
+
 test("androdex doctor runs the diagnostic helper", async () => {
   const calls = [];
 
