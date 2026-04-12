@@ -187,10 +187,7 @@ private fun mapMacNativeThreadSummary(
             approvalResponses = ThreadCapabilityFlag(supported = true),
             userInputResponses = ThreadCapabilityFlag(supported = true),
             toolInputResponses = ThreadCapabilityFlag(supported = true),
-            backgroundTerminalCleanup = ThreadCapabilityFlag(
-                supported = false,
-                reason = "Background terminal cleanup is not available on the Mac-native path yet.",
-            ),
+            backgroundTerminalCleanup = ThreadCapabilityFlag(supported = true),
             checkpointRollback = ThreadCapabilityFlag(supported = true),
         ),
     )

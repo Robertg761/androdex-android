@@ -51,9 +51,13 @@ import io.androdex.android.reviewRequestText
 import io.androdex.android.transport.macnative.MacNativeBearerSession
 import io.androdex.android.transport.macnative.MacNativeHttpException
 import io.androdex.android.transport.macnative.MacNativePersistedSession
+import io.androdex.android.transport.macnative.MacNativeRecoveryCoordinator
+import io.androdex.android.transport.macnative.MacNativeReplayRetryTracker
 import io.androdex.android.transport.macnative.MacNativeServerTarget
+import io.androdex.android.transport.macnative.MacNativeSequencedValue
 import io.androdex.android.transport.macnative.MacNativeTransportStack
 import io.androdex.android.transport.macnative.createMacNativeServerTarget
+import io.androdex.android.transport.macnative.deriveMacNativeReplayRetryDecision
 import io.androdex.android.transport.macnative.deriveMacNativePendingState
 import io.androdex.android.transport.macnative.mapMacNativeSnapshotToThreadLoad
 import io.androdex.android.transport.macnative.mapMacNativeSnapshotToThreadSummaries
@@ -61,6 +65,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -96,6 +101,8 @@ internal class MacNativeAndrodexBackendClient(
     private var knownApprovalRequestId: String? = null
     private var knownToolInputsByThread: Map<String, Set<String>> = emptyMap()
     private var knownRunSnapshotsByThread: Map<String, ThreadRunSnapshot> = emptyMap()
+    private var recovery = MacNativeRecoveryCoordinator()
+    private var replayRetryTracker: MacNativeReplayRetryTracker? = null
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow.asSharedFlow()
 
@@ -184,6 +191,8 @@ internal class MacNativeAndrodexBackendClient(
         knownApprovalRequestId = null
         knownToolInputsByThread = emptyMap()
         knownRunSnapshotsByThread = emptyMap()
+        replayRetryTracker = null
+        recovery.reset()
         if (clearSavedPairing) {
             transportStack.sessionStore.clearBearerSession()
             transportStack.sessionStore.clearSnapshotSequence()
@@ -279,7 +288,7 @@ internal class MacNativeAndrodexBackendClient(
                 .put("createdAt", isoNow()),
         )
         updatesFlow.emit(ClientUpdate.TurnStarted(threadId = threadId, turnId = null))
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
     }
 
     override suspend fun startReview(
@@ -325,7 +334,7 @@ internal class MacNativeAndrodexBackendClient(
                 .put("turnId", turnId)
                 .put("createdAt", isoNow()),
         )
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
     }
 
     override suspend fun registerPushNotifications(
@@ -346,7 +355,7 @@ internal class MacNativeAndrodexBackendClient(
                 supportsServiceTier = false,
                 supportsThreadCompaction = false,
                 supportsThreadRollback = true,
-                supportsBackgroundTerminalCleanup = false,
+                supportsBackgroundTerminalCleanup = true,
                 supportsThreadFork = false,
                 collaborationModes = setOf(CollaborationModeKind.PLAN),
                 threadRuntimeOverridesByThread = threadRuntimeOverridesByThread,
@@ -417,12 +426,19 @@ internal class MacNativeAndrodexBackendClient(
                 .put("turnCount", numTurns.coerceAtLeast(1))
                 .put("createdAt", isoNow()),
         )
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
         return mapMacNativeSnapshotToThreadLoad(ensureSnapshot(forceRefresh = true), threadId)
     }
 
     override suspend fun cleanBackgroundTerminals(threadId: String) {
-        throw UnsupportedOperationException("Background terminal cleanup is not available on the Mac-native backend yet.")
+        dispatchCommand(
+            JSONObject()
+                .put("type", "thread.session.stop")
+                .put("commandId", UUID.randomUUID().toString())
+                .put("threadId", threadId)
+                .put("createdAt", isoNow()),
+        )
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
     }
 
     override suspend fun forkThread(
@@ -443,7 +459,7 @@ internal class MacNativeAndrodexBackendClient(
                 .put("decision", if (accept) "accept" else "decline")
                 .put("createdAt", isoNow()),
         )
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
     }
 
     override suspend fun respondToToolUserInput(
@@ -459,7 +475,7 @@ internal class MacNativeAndrodexBackendClient(
                 .put("answers", response.toJson().optJSONObject("answers"))
                 .put("createdAt", isoNow()),
         )
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
     }
 
     override suspend fun rejectToolUserInput(request: ToolUserInputRequest, message: String) {
@@ -635,7 +651,7 @@ internal class MacNativeAndrodexBackendClient(
             )
         )
         emitConnection(ConnectionStatus.CONNECTED, "Connected to the Mac server.", subscriptionState = "connecting")
-        refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
         establishLiveSubscription(session)
         loadRuntimeConfig()
     }
@@ -658,8 +674,24 @@ internal class MacNativeAndrodexBackendClient(
         }
     }
 
-    private suspend fun refreshSnapshotAndEmitUpdates(forceRefresh: Boolean) {
-        val snapshot = ensureSnapshot(forceRefresh)
+    private suspend fun refreshSnapshotAndEmitUpdates(
+        forceRefresh: Boolean,
+        trackSnapshotRecovery: Boolean = false,
+    ) {
+        val startedSnapshotRecovery = trackSnapshotRecovery && recovery.beginSnapshotRecovery("snapshot-refresh")
+        val snapshot = try {
+            ensureSnapshot(forceRefresh)
+        } catch (error: Throwable) {
+            if (startedSnapshotRecovery) {
+                recovery.failSnapshotRecovery()
+            }
+            throw error
+        }
+        val shouldReplayAfterSnapshot = if (startedSnapshotRecovery) {
+            recovery.completeSnapshotRecovery(snapshot.optLong("snapshotSequence").coerceAtLeast(0L))
+        } else {
+            false
+        }
         val threads = mapMacNativeSnapshotToThreadSummaries(snapshot)
         updatesFlow.emit(ClientUpdate.ThreadsLoaded(threads))
         val nextRunSnapshots = threads.associate { thread ->
@@ -690,6 +722,12 @@ internal class MacNativeAndrodexBackendClient(
         }
         emitPendingStateUpdates(snapshot)
         emitConnection(ConnectionStatus.CONNECTED, "Connected to the Mac server.", subscriptionState = if (currentSocket == null) "disconnected" else "subscribed")
+        if (shouldReplayAfterSnapshot) {
+            val session = currentSession ?: loadPersistedBearerSession()
+            if (session != null) {
+                runReplayRecovery(session, "snapshot-refresh")
+            }
+        }
     }
 
     private suspend fun emitPendingStateUpdates(snapshot: JSONObject) {
@@ -738,20 +776,7 @@ internal class MacNativeAndrodexBackendClient(
                     token = wsToken,
                     eventListener = io.androdex.android.transport.macnative.MacNativeOrchestrationEventListener { event ->
                         scope.launch {
-                            val latestSequence = transportStack.sessionStore.loadSnapshotSequence() ?: 0L
-                            val eventSequence = event.optLong("sequence", latestSequence)
-                            if (eventSequence > latestSequence + 1) {
-                                val replayToken = transportStack.authHttp.issueWebSocketToken(session)
-                                transportStack.orchestrationWs.replayEvents(
-                                    session = session,
-                                    token = replayToken,
-                                    fromSequenceExclusive = latestSequence,
-                                )
-                            }
-                            if (eventSequence > latestSequence) {
-                                transportStack.sessionStore.saveSnapshotSequence(eventSequence)
-                            }
-                            refreshSnapshotAndEmitUpdates(forceRefresh = true)
+                            handleLiveDomainEvent(session, event)
                         }
                     },
                 )
@@ -763,6 +788,65 @@ internal class MacNativeAndrodexBackendClient(
                     subscriptionState = "error",
                 )
             }
+        }
+    }
+
+    private suspend fun handleLiveDomainEvent(
+        session: MacNativeBearerSession,
+        event: JSONObject,
+    ) {
+        val sequence = event.optLong("sequence", 0L)
+        when (recovery.classifyDomainEvent(sequence)) {
+            MacNativeRecoveryCoordinator.Action.IGNORE -> return
+            MacNativeRecoveryCoordinator.Action.DEFER -> return
+            MacNativeRecoveryCoordinator.Action.APPLY -> {
+                recovery.markEventBatchApplied(listOf(MacNativeSequencedValue(sequence)))
+                transportStack.sessionStore.saveSnapshotSequence(sequence)
+                refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
+            }
+            MacNativeRecoveryCoordinator.Action.RECOVER -> runReplayRecovery(session, "sequence-gap")
+        }
+    }
+
+    private suspend fun runReplayRecovery(
+        session: MacNativeBearerSession,
+        reason: String,
+    ) {
+        if (!recovery.beginReplayRecovery(reason)) {
+            return
+        }
+        try {
+            val replayToken = transportStack.authHttp.issueWebSocketToken(session)
+            val replayedEvents = transportStack.orchestrationWs.replayEvents(
+                session = session,
+                token = replayToken,
+                fromSequenceExclusive = recovery.getState().latestSequence,
+            ).map { event ->
+                MacNativeSequencedValue(event.optLong("sequence", 0L))
+            }
+            recovery.markEventBatchApplied(replayedEvents)
+            replayedEvents.lastOrNull()?.sequence?.let(transportStack.sessionStore::saveSnapshotSequence)
+            refreshSnapshotAndEmitUpdates(forceRefresh = true)
+        } catch (_: Throwable) {
+            replayRetryTracker = null
+            recovery.failReplayRecovery()
+            refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
+            return
+        }
+
+        val retryDecision = deriveMacNativeReplayRetryDecision(
+            previousTracker = replayRetryTracker,
+            completion = recovery.completeReplayRecovery(),
+            recoveryState = recovery.getState(),
+            baseDelayMs = 100L,
+            maxNoProgressRetries = 3,
+        )
+        replayRetryTracker = retryDecision.tracker
+        if (retryDecision.shouldRetry) {
+            if (retryDecision.delayMs > 0L) {
+                delay(retryDecision.delayMs)
+            }
+            runReplayRecovery(session, reason)
         }
     }
 
