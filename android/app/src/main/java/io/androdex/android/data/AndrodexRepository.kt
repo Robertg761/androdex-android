@@ -37,6 +37,19 @@ import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
 import kotlinx.coroutines.flow.SharedFlow
 
+internal data class AndrodexRepositoryDependencies(
+    val persistence: AndrodexPersistence,
+    val client: AndrodexBackendClient,
+)
+
+private fun createAndrodexRepositoryDependencies(context: Context): AndrodexRepositoryDependencies {
+    val persistence = AndrodexPersistence(context.applicationContext)
+    return AndrodexRepositoryDependencies(
+        persistence = persistence,
+        client = BridgeAndrodexBackendClient(AndrodexClient(persistence)),
+    )
+}
+
 interface AndrodexRepositoryContract {
     val updates: SharedFlow<ClientUpdate>
     fun hasSavedPairing(): Boolean
@@ -148,9 +161,18 @@ interface AndrodexRepositoryContract {
     ): GitRemoveWorktreeResult
 }
 
-class AndrodexRepository(context: Context) : AndrodexRepositoryContract {
-    private val persistence = AndrodexPersistence(context.applicationContext)
-    private val client = AndrodexClient(persistence)
+class AndrodexRepository private constructor(
+    private val persistence: AndrodexPersistence,
+    private val client: AndrodexBackendClient,
+) : AndrodexRepositoryContract {
+    constructor(context: Context) : this(createAndrodexRepositoryDependencies(context))
+
+    internal constructor(
+        dependencies: AndrodexRepositoryDependencies,
+    ) : this(
+        persistence = dependencies.persistence,
+        client = dependencies.client,
+    )
 
     override val updates: SharedFlow<ClientUpdate> = client.updates
 
