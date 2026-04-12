@@ -1,5 +1,9 @@
 # T3 Code Support Plan
 
+Superseded direction note:
+
+This document captures an earlier bridge-first integration plan. The active migration direction now treats `Androdex - Mac` as the canonical backend for auth, orchestration state, replay, and thread actions, with Android converging toward that native contract instead of extending a bridge-owned shadow protocol. Use [Android Sync Convergence](./android-sync-convergence.md) as the current architectural direction when these documents disagree.
+
 This document lays out the lowest-risk path for adding host-local T3 Code companion support to Androdex without destabilizing the current Codex bridge workflow.
 
 The key correction after reviewing the cloned T3 Code repo is this:

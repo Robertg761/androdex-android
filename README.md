@@ -14,6 +14,8 @@ Androdex is a fork of [relaydex](https://github.com/Ranats/relaydex), which is i
 
 Androdex keeps Codex running on your host computer, while the phone connects as a paired remote control client over a secure session that can work across networks through a relay.
 
+The long-term convergence direction is now different from some older bridge-first planning docs: `Androdex - Mac` is becoming the canonical backend for auth, orchestration state, replay, and thread actions, while `Androdex - Android` remains the native mobile client. See [Docs/android-sync-convergence.md](Docs/android-sync-convergence.md).
+
 ## Contents
 
 - [What It Is](#what-it-is)
@@ -73,6 +75,7 @@ Androdex does **not** run Codex on the phone itself.
 - `npm install -g androdex@latest` now installs the macOS host-service CLI with `up`, `start`, `restart`, `stop`, and `status`
 - the Android app source lives in `android/`
 - the repository is built around a host-local Codex runtime plus relay-backed remote access
+- active convergence work is moving Android toward the Mac server's canonical auth/orchestration protocol, with any remaining relay or helper layer reduced toward transport-only responsibilities
 
 If you want to work from this repo today, use the bridge from npm or source, then build the Android client from source.
 

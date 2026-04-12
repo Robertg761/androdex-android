@@ -11,6 +11,7 @@ This folder is the navigation hub for repo documentation.
 
 ## Architecture
 
+- [Android Sync Convergence](./android-sync-convergence.md): migration direction for making the Mac repo authoritative and Android a true remote client
 - [Android Compose Structure](./android-compose-structure.md): current Android UI/package split
 - [Remodex Port Architecture](./remodex-port-architecture.md): target architecture and incremental refactor direction
 - [Remodex Parity Checklist](./remodex-parity-checklist.md): parity tracking against the Remodex reference
