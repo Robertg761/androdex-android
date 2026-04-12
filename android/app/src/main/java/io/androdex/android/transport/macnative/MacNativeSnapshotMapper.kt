@@ -175,20 +175,87 @@ private fun mapMacNativeThreadSummary(
         updatedAtEpochMs = parseTimestamp(thread.opt("updatedAt")),
         model = model,
         backendProvider = provider,
-        threadCapabilities = ThreadCapabilities(
-            backendProvider = provider,
+        threadCapabilities = describeMacNativeThreadCapabilities(
+            thread = thread,
+            provider = provider,
             workspacePath = cwd,
-            workspaceResolved = cwd != null,
-            workspaceAvailable = cwd != null,
-            read = ThreadCapabilityFlag(supported = true),
-            liveUpdates = ThreadCapabilityFlag(supported = true),
-            turnStart = ThreadCapabilityFlag(supported = true),
-            turnInterrupt = ThreadCapabilityFlag(supported = true),
-            approvalResponses = ThreadCapabilityFlag(supported = true),
-            userInputResponses = ThreadCapabilityFlag(supported = true),
-            toolInputResponses = ThreadCapabilityFlag(supported = true),
-            backgroundTerminalCleanup = ThreadCapabilityFlag(supported = true),
-            checkpointRollback = ThreadCapabilityFlag(supported = true),
+        ),
+    )
+}
+
+private fun describeMacNativeThreadCapabilities(
+    thread: JSONObject,
+    provider: String?,
+    workspacePath: String?,
+): ThreadCapabilities {
+    val archivedAt = thread.optString("archivedAt").trim().ifEmpty { null }
+    val deletedAt = thread.optString("deletedAt").trim().ifEmpty { null }
+    val latestTurnState = thread.optJSONObject("latestTurn")?.optString("state")?.trim()?.ifEmpty { null }
+    val session = thread.optJSONObject("session")
+    val sessionStatus = session?.optString("status")?.trim()?.ifEmpty { null }
+    val activeTurnId = session?.optString("activeTurnId")?.trim()?.ifEmpty { null }
+    val hasInterruptibleTurn = activeTurnId != null || latestTurnState == "running"
+    val checkpointCount = thread.optJSONArray("checkpoints")?.length() ?: 0
+
+    val threadUnavailableReason = when {
+        deletedAt != null -> "This thread was deleted on the Mac server."
+        archivedAt != null -> "This thread is archived on the Mac server."
+        else -> null
+    }
+    val interruptReason = when {
+        threadUnavailableReason != null -> threadUnavailableReason
+        !hasInterruptibleTurn -> "No active turn is currently running on the Mac server."
+        else -> null
+    }
+    val sessionStopReason = when {
+        threadUnavailableReason != null -> threadUnavailableReason
+        sessionStatus == null || sessionStatus == "stopped" -> "No active Mac session is currently running for this thread."
+        else -> null
+    }
+    val checkpointRollbackReason = when {
+        threadUnavailableReason != null -> threadUnavailableReason
+        checkpointCount <= 0 -> "This thread has no checkpoints available to roll back yet."
+        else -> null
+    }
+
+    return ThreadCapabilities(
+        readOnly = false,
+        backendProvider = provider,
+        companionSupported = true,
+        companionSupportState = "supported",
+        companionSupportReason = null,
+        workspacePath = workspacePath,
+        workspaceResolved = workspacePath != null,
+        workspaceAvailable = workspacePath != null,
+        read = ThreadCapabilityFlag(supported = deletedAt == null),
+        liveUpdates = ThreadCapabilityFlag(supported = deletedAt == null),
+        turnStart = ThreadCapabilityFlag(
+            supported = threadUnavailableReason == null,
+            reason = threadUnavailableReason,
+        ),
+        turnInterrupt = ThreadCapabilityFlag(
+            supported = interruptReason == null,
+            reason = interruptReason,
+        ),
+        approvalResponses = ThreadCapabilityFlag(
+            supported = threadUnavailableReason == null,
+            reason = threadUnavailableReason,
+        ),
+        userInputResponses = ThreadCapabilityFlag(
+            supported = threadUnavailableReason == null,
+            reason = threadUnavailableReason,
+        ),
+        toolInputResponses = ThreadCapabilityFlag(
+            supported = threadUnavailableReason == null,
+            reason = threadUnavailableReason,
+        ),
+        backgroundTerminalCleanup = ThreadCapabilityFlag(
+            supported = sessionStopReason == null,
+            reason = sessionStopReason,
+        ),
+        checkpointRollback = ThreadCapabilityFlag(
+            supported = checkpointRollbackReason == null,
+            reason = checkpointRollbackReason,
         ),
     )
 }

@@ -17,6 +17,12 @@ class MacNativeSnapshotMapperTest {
         assertEquals("Conversation", threads.first().title)
         assertEquals("/workspace/demo", threads.first().cwd)
         assertTrue(threads.first().threadCapabilities?.backgroundTerminalCleanup?.supported == true)
+        assertTrue(threads.first().threadCapabilities?.turnInterrupt?.supported == true)
+        assertTrue(threads.first().threadCapabilities?.checkpointRollback?.supported == false)
+        assertEquals(
+            "This thread has no checkpoints available to roll back yet.",
+            threads.first().threadCapabilities?.checkpointRollback?.reason,
+        )
         assertEquals(2, loadResult.messages.size)
         assertEquals("turn-1", loadResult.runSnapshot.interruptibleTurnId)
         assertTrue(loadResult.messages.last().isStreaming)
@@ -35,7 +41,51 @@ class MacNativeSnapshotMapperTest {
         )
     }
 
-    private fun sampleSnapshot(): JSONObject {
+    @Test
+    fun snapshotMapping_blocksMutationsForArchivedStoppedThreads() {
+        val snapshot = sampleSnapshot(
+            threadOverrides = """
+                {
+                  "archivedAt": "2026-04-12T10:00:02Z",
+                  "latestTurn": {
+                    "turnId": "turn-2",
+                    "state": "completed"
+                  },
+                  "session": {
+                    "threadId": "thread-1",
+                    "status": "stopped",
+                    "activeTurnId": null
+                  },
+                  "checkpoints": [
+                    {
+                      "turnId": "turn-1",
+                      "checkpointTurnCount": 1,
+                      "checkpointRef": "checkpoint-1",
+                      "status": "ready",
+                      "files": [],
+                      "assistantMessageId": "msg-2",
+                      "completedAt": "2026-04-12T10:00:01Z"
+                    }
+                  ]
+                }
+            """.trimIndent()
+        )
+
+        val thread = mapMacNativeSnapshotToThreadSummaries(snapshot).first()
+
+        assertTrue(thread.threadCapabilities?.turnStart?.supported == false)
+        assertEquals(
+            "This thread is archived on the Mac server.",
+            thread.threadCapabilities?.turnStart?.reason,
+        )
+        assertTrue(thread.threadCapabilities?.turnInterrupt?.supported == false)
+        assertTrue(thread.threadCapabilities?.backgroundTerminalCleanup?.supported == false)
+        assertTrue(thread.threadCapabilities?.checkpointRollback?.supported == false)
+    }
+
+    private fun sampleSnapshot(
+        threadOverrides: String? = null,
+    ): JSONObject {
         return JSONObject(
             """
                 {
@@ -65,6 +115,9 @@ class MacNativeSnapshotMapperTest {
                         "status": "running",
                         "activeTurnId": "turn-1"
                       },
+                      "archivedAt": null,
+                      "deletedAt": null,
+                      "checkpoints": [],
                       "messages": [
                         {
                           "id": "msg-1",
@@ -122,6 +175,17 @@ class MacNativeSnapshotMapperTest {
                   ]
                 }
             """.trimIndent()
-        )
+        ).also { snapshot ->
+            val overrides = threadOverrides?.let(::JSONObject) ?: return@also
+            val thread = snapshot
+                .optJSONArray("threads")
+                ?.optJSONObject(0)
+                ?: return@also
+            val keys = overrides.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                thread.put(key, overrides.get(key))
+            }
+        }
     }
 }
