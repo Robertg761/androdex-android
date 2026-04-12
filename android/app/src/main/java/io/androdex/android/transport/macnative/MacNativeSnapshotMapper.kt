@@ -126,10 +126,10 @@ internal fun deriveMacNativePendingState(snapshot: JSONObject): MacNativePending
 
 internal fun mapMacNativeThreadRunSnapshot(thread: JSONObject): ThreadRunSnapshot {
     val latestTurn = thread.optJSONObject("latestTurn")
-    val latestTurnId = latestTurn?.optString("turnId")?.trim()?.ifEmpty { null }
-    val latestTurnState = latestTurn?.optString("state")?.trim()
+    val latestTurnId = latestTurn?.optionalServerString("turnId")
+    val latestTurnState = latestTurn?.optionalServerString("state")
     val session = thread.optJSONObject("session")
-    val activeTurnId = session?.optString("activeTurnId")?.trim()?.ifEmpty { null }
+    val activeTurnId = session?.optionalServerString("activeTurnId")
     return ThreadRunSnapshot(
         interruptibleTurnId = activeTurnId ?: latestTurnId?.takeIf { latestTurnState == "running" },
         hasInterruptibleTurnWithoutId = false,
@@ -194,10 +194,10 @@ private fun describeMacNativeThreadCapabilities(
 ): ThreadCapabilities {
     val archivedAt = thread.optionalServerString("archivedAt")
     val deletedAt = thread.optionalServerString("deletedAt")
-    val latestTurnState = thread.optJSONObject("latestTurn")?.optString("state")?.trim()?.ifEmpty { null }
+    val latestTurnState = thread.optJSONObject("latestTurn")?.optionalServerString("state")
     val session = thread.optJSONObject("session")
-    val sessionStatus = session?.optString("status")?.trim()?.ifEmpty { null }
-    val activeTurnId = session?.optString("activeTurnId")?.trim()?.ifEmpty { null }
+    val sessionStatus = session?.optionalServerString("status")
+    val activeTurnId = session?.optionalServerString("activeTurnId")
     val hasInterruptibleTurn = activeTurnId != null || latestTurnState == "running"
     val checkpointCount = thread.optJSONArray("checkpoints")?.length() ?: 0
 

@@ -1,5 +1,4 @@
 package io.androdex.android.data
-
 import io.androdex.android.ComposerReviewTarget
 import io.androdex.android.attachment.decodeDataUrlImageData
 import io.androdex.android.model.AccessMode
@@ -65,8 +64,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -80,8 +81,9 @@ import java.util.UUID
 internal class MacNativeAndrodexBackendClient(
     private val preferences: MacNativeClientPreferences,
     private val transportStack: MacNativeTransportStack,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val startedTurnRefreshPollMs: Long = 2_000L,
 ) : AndrodexBackendClient {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val updatesFlow = MutableSharedFlow<ClientUpdate>(extraBufferCapacity = 128)
     private val snapshotMutex = Mutex()
     private val commandMutex = Mutex()
@@ -99,9 +101,11 @@ internal class MacNativeAndrodexBackendClient(
     private var selectedServiceTier: ServiceTier? = preferences.loadSelectedServiceTier()
     private var threadRuntimeOverridesByThread = preferences.loadThreadRuntimeOverrides(currentThreadTimelineScopeKey())
     private val observedThreadIds = linkedSetOf<String>()
+    private val optimisticTurnStartThreadIds = linkedSetOf<String>()
     private var knownApprovalRequestId: String? = null
     private var knownToolInputsByThread: Map<String, Set<String>> = emptyMap()
     private var knownRunSnapshotsByThread: Map<String, ThreadRunSnapshot> = emptyMap()
+    private val startedTurnRefreshJobs = linkedMapOf<String, Job>()
     private var recovery = MacNativeRecoveryCoordinator()
     private var replayRetryTracker: MacNativeReplayRetryTracker? = null
 
@@ -193,6 +197,9 @@ internal class MacNativeAndrodexBackendClient(
         knownApprovalRequestId = null
         knownToolInputsByThread = emptyMap()
         knownRunSnapshotsByThread = emptyMap()
+        optimisticTurnStartThreadIds.clear()
+        startedTurnRefreshJobs.values.forEach { it.cancel() }
+        startedTurnRefreshJobs.clear()
         replayRetryTracker = null
         recovery.reset()
         if (clearSavedPairing) {
@@ -275,6 +282,7 @@ internal class MacNativeAndrodexBackendClient(
         collaborationMode: CollaborationModeKind?,
     ) {
         observedThreadIds += threadId
+        optimisticTurnStartThreadIds += threadId
         dispatchCommand(
             JSONObject()
                 .put("type", "thread.turn.start")
@@ -294,6 +302,7 @@ internal class MacNativeAndrodexBackendClient(
         )
         updatesFlow.emit(ClientUpdate.TurnStarted(threadId = threadId, turnId = null))
         refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
+        scheduleStartedTurnRefresh(threadId)
     }
 
     override suspend fun startReview(
@@ -707,16 +716,19 @@ internal class MacNativeAndrodexBackendClient(
         nextRunSnapshots.forEach { (threadId, nextRunSnapshot) ->
             val previous = knownRunSnapshotsByThread[threadId]
             val nextInterruptibleTurnId = nextRunSnapshot.interruptibleTurnId
+            val hadOptimisticTurnStart = threadId in optimisticTurnStartThreadIds
             if (nextInterruptibleTurnId != null && previous?.interruptibleTurnId != nextInterruptibleTurnId) {
+                optimisticTurnStartThreadIds -= threadId
                 updatesFlow.emit(ClientUpdate.TurnStarted(threadId = threadId, turnId = nextInterruptibleTurnId))
             }
-            val previousTurnId = previous?.interruptibleTurnId ?: previous?.latestTurnId
-            if (previousTurnId != null && previous?.latestTurnTerminalState == null && nextRunSnapshot.latestTurnTerminalState != null) {
+            if (shouldEmitMacNativeTurnCompletion(previous, nextRunSnapshot, hadOptimisticTurnStart)) {
+                optimisticTurnStartThreadIds -= threadId
+                val terminalState = requireNotNull(nextRunSnapshot.latestTurnTerminalState)
                 updatesFlow.emit(
                     ClientUpdate.TurnCompleted(
                         threadId = threadId,
-                        turnId = nextRunSnapshot.latestTurnId ?: previousTurnId,
-                        terminalState = nextRunSnapshot.latestTurnTerminalState,
+                        turnId = nextRunSnapshot.latestTurnId ?: previous?.interruptibleTurnId ?: previous?.latestTurnId,
+                        terminalState = terminalState,
                     )
                 )
             }
@@ -734,6 +746,48 @@ internal class MacNativeAndrodexBackendClient(
                 runReplayRecovery(session, "snapshot-refresh")
             }
         }
+    }
+
+    private fun scheduleStartedTurnRefresh(threadId: String) {
+        startedTurnRefreshJobs.remove(threadId)?.cancel()
+        startedTurnRefreshJobs[threadId] = scope.launch {
+            while (isActive) {
+                delay(startedTurnRefreshPollMs)
+                val refreshed = runCatching {
+                    refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
+                }.isSuccess
+                if (!refreshed) {
+                    continue
+                }
+                if (!shouldKeepStartedTurnRefreshPolling(threadId)) {
+                    break
+                }
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (startedTurnRefreshJobs[threadId] == job) {
+                    startedTurnRefreshJobs.remove(threadId)
+                }
+            }
+        }
+    }
+
+    private fun shouldKeepStartedTurnRefreshPolling(threadId: String): Boolean {
+        if (threadId in optimisticTurnStartThreadIds) {
+            return true
+        }
+        val runSnapshot = knownRunSnapshotsByThread[threadId]
+        if (runSnapshot?.interruptibleTurnId != null || runSnapshot?.shouldAssumeRunningFromLatestTurn == true) {
+            return true
+        }
+        if (runSnapshot?.latestTurnTerminalState != null) {
+            return false
+        }
+        val turnInterrupt = mapMacNativeSnapshotToThreadLoad(
+            snapshot = currentSnapshot ?: return false,
+            threadId = threadId,
+        ).thread?.threadCapabilities?.turnInterrupt
+        return turnInterrupt?.supported == true
     }
 
     private suspend fun emitPendingStateUpdates(snapshot: JSONObject) {
@@ -1106,6 +1160,20 @@ internal class MacNativeAndrodexBackendClient(
             ?: persisted.hostLabel
             ?: persisted.httpBaseUrl
     }
+}
+
+internal fun shouldEmitMacNativeTurnCompletion(
+    previous: ThreadRunSnapshot?,
+    next: ThreadRunSnapshot,
+    hadOptimisticTurnStart: Boolean,
+): Boolean {
+    if (next.latestTurnTerminalState == null) {
+        return false
+    }
+    val previousTurnId = previous?.interruptibleTurnId ?: previous?.latestTurnId
+    val shouldEmitFastFinishCompletion =
+        hadOptimisticTurnStart && next.latestTurnId != null
+    return (previousTurnId != null && previous?.latestTurnTerminalState == null) || shouldEmitFastFinishCompletion
 }
 
 private fun runtimeModeWireValue(accessMode: AccessMode): String {

@@ -3,11 +3,14 @@ package io.androdex.android.data
 import io.androdex.android.model.AccessMode
 import io.androdex.android.model.ApprovalRequest
 import io.androdex.android.model.BackendKind
+import io.androdex.android.model.ClientUpdate
 import io.androdex.android.model.ServiceTier
 import io.androdex.android.model.ThreadRuntimeOverride
+import io.androdex.android.model.ThreadRunSnapshot
 import io.androdex.android.model.ToolUserInputAnswer
 import io.androdex.android.model.ToolUserInputRequest
 import io.androdex.android.model.ToolUserInputResponse
+import io.androdex.android.model.TurnTerminalState
 import io.androdex.android.transport.macnative.MacNativeAuthHttpTransport
 import io.androdex.android.transport.macnative.MacNativeBearerSession
 import io.androdex.android.transport.macnative.MacNativeHttpException
@@ -22,6 +25,10 @@ import io.androdex.android.transport.macnative.MacNativeTransportStack
 import io.androdex.android.transport.macnative.MacNativeWebSocketConnection
 import io.androdex.android.transport.macnative.MacNativeWebSocketToken
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -32,6 +39,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MacNativeAndrodexBackendClientTest {
     @Test
     fun connectWithPairingPayload_bootstrapsSnapshotAndSubscribes() = runTest {
@@ -322,6 +330,133 @@ class MacNativeAndrodexBackendClientTest {
     }
 
     @Test
+    fun shouldEmitMacNativeTurnCompletion_handlesFastFinishedOptimisticTurn() = runTest {
+        val previous = ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = null,
+            latestTurnTerminalState = null,
+            shouldAssumeRunningFromLatestTurn = false,
+        )
+        val nextCompleted = ThreadRunSnapshot(
+            interruptibleTurnId = null,
+            hasInterruptibleTurnWithoutId = false,
+            latestTurnId = "turn-1",
+            latestTurnTerminalState = TurnTerminalState.COMPLETED,
+            shouldAssumeRunningFromLatestTurn = false,
+        )
+
+        assertTrue(shouldEmitMacNativeTurnCompletion(previous, nextCompleted, hadOptimisticTurnStart = true))
+        assertFalse(shouldEmitMacNativeTurnCompletion(previous, nextCompleted, hadOptimisticTurnStart = false))
+    }
+
+    @Test
+    fun startTurn_pollsForCompletionWhenLiveUpdateIsMissed() = runTest {
+        val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
+            snapshots = ArrayDeque(
+                listOf(
+                    sampleSnapshot(snapshotSequence = 1L),
+                    sampleSnapshot(
+                        snapshotSequence = 2L,
+                        threads = listOf(
+                            sampleThread(
+                                assistantText = "",
+                                latestTurnState = null,
+                                sessionStatus = "running",
+                                activeTurnId = null,
+                                assistantStreaming = false,
+                            )
+                        ),
+                    ),
+                    sampleSnapshot(
+                        snapshotSequence = 3L,
+                        threads = listOf(
+                            sampleThread(
+                                assistantText = "OK",
+                                latestTurnState = "completed",
+                                latestTurnCompletedAt = "2026-04-12T10:00:05Z",
+                                latestTurnAssistantMessageId = "msg-2",
+                                sessionStatus = "ready",
+                                activeTurnId = null,
+                                assistantStreaming = false,
+                            )
+                        ),
+                    ),
+                )
+            ),
+        )
+        val updates = mutableListOf<ClientUpdate>()
+        val client = MacNativeAndrodexBackendClient(
+            preferences = FakeMacNativeClientPreferences(),
+            transportStack = MacNativeTransportStack(
+                authHttp = FakeMacNativeAuthHttpTransport(),
+                orchestrationHttp = orchestrationHttp,
+                orchestrationWs = FakeMacNativeOrchestrationWsTransport(),
+                sessionStore = FakeMacNativeSessionStore(),
+            ),
+            scope = backgroundScope,
+            startedTurnRefreshPollMs = 100L,
+        )
+        backgroundScope.launch {
+            client.updates.collect { updates += it }
+        }
+
+        client.connectWithPairingPayload(samplePairingPayload())
+        advanceUntilIdle()
+
+        client.startTurn(
+            threadId = "thread-1",
+            userInput = "Hello",
+            attachments = emptyList(),
+            fileMentions = emptyList(),
+            skillMentions = emptyList(),
+            collaborationMode = null,
+        )
+        advanceUntilIdle()
+        advanceTimeBy(150L)
+        advanceUntilIdle()
+
+        assertTrue(
+            updates.any {
+                it is ClientUpdate.TurnCompleted
+                    && it.threadId == "thread-1"
+                    && it.terminalState == TurnTerminalState.COMPLETED
+            }
+        )
+        assertTrue(
+            updates.any {
+                it is ClientUpdate.ThreadLoaded
+                    && it.thread?.id == "thread-1"
+                    && it.messages.any { message -> message.text == "OK" }
+            }
+        )
+    }
+
+    @Test
+    fun completedSnapshotWithNullActiveTurnDoesNotReportInterruptibleTurn() = runTest {
+        val completedThread = sampleThread(
+            assistantText = "OK",
+            latestTurnState = "completed",
+            latestTurnCompletedAt = "2026-04-12T10:00:05Z",
+            latestTurnAssistantMessageId = "msg-2",
+            sessionStatus = "ready",
+            activeTurnId = "turn-1",
+            assistantStreaming = false,
+        ).apply {
+            optJSONObject("session")?.put("activeTurnId", JSONObject.NULL)
+        }
+        val runSnapshot = io.androdex.android.transport.macnative.mapMacNativeThreadRunSnapshot(completedThread)
+        val threadLoad = io.androdex.android.transport.macnative.mapMacNativeSnapshotToThreadLoad(
+            snapshot = sampleSnapshot(snapshotSequence = 3L, threads = listOf(completedThread)),
+            threadId = "thread-1",
+        )
+
+        assertNull(runSnapshot.interruptibleTurnId)
+        assertEquals(TurnTerminalState.COMPLETED, runSnapshot.latestTurnTerminalState)
+        assertFalse(threadLoad.thread?.threadCapabilities?.turnInterrupt?.supported ?: true)
+    }
+
+    @Test
     fun listRecentWorkspaces_dropsDeletedActiveWorkspace() = runTest {
         val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
             snapshots = ArrayDeque(
@@ -419,6 +554,12 @@ class MacNativeAndrodexBackendClientTest {
         title: String = "Conversation",
         workspacePath: String = "/workspace/demo",
         assistantText: String = "Hi there",
+        latestTurnState: String? = "running",
+        latestTurnCompletedAt: String? = null,
+        latestTurnAssistantMessageId: String? = null,
+        sessionStatus: String = "running",
+        activeTurnId: String? = "turn-1",
+        assistantStreaming: Boolean = true,
     ): JSONObject {
         return JSONObject()
             .put("id", threadId)
@@ -440,22 +581,24 @@ class MacNativeAndrodexBackendClientTest {
             .put("deletedAt", JSONObject.NULL)
             .put(
                 "latestTurn",
-                JSONObject()
-                    .put("turnId", "turn-1")
-                    .put("state", "running")
-                    .put("requestedAt", "2026-04-12T10:00:00Z")
-                    .put("startedAt", "2026-04-12T10:00:00Z")
-                    .put("completedAt", JSONObject.NULL)
-                    .put("assistantMessageId", JSONObject.NULL)
+                latestTurnState?.let {
+                    JSONObject()
+                        .put("turnId", "turn-1")
+                        .put("state", it)
+                        .put("requestedAt", "2026-04-12T10:00:00Z")
+                        .put("startedAt", "2026-04-12T10:00:00Z")
+                        .put("completedAt", latestTurnCompletedAt)
+                        .put("assistantMessageId", latestTurnAssistantMessageId)
+                } ?: JSONObject.NULL
             )
             .put(
                 "session",
                 JSONObject()
                     .put("threadId", threadId)
-                    .put("status", "running")
+                    .put("status", sessionStatus)
                     .put("providerName", "codex")
                     .put("runtimeMode", "full-access")
-                    .put("activeTurnId", "turn-1")
+                    .put("activeTurnId", activeTurnId)
                     .put("lastError", JSONObject.NULL)
                     .put("updatedAt", "2026-04-12T10:00:01Z")
             )
@@ -475,7 +618,7 @@ class MacNativeAndrodexBackendClientTest {
                             .put("role", "assistant")
                             .put("text", assistantText)
                             .put("turnId", "turn-1")
-                            .put("streaming", true)
+                            .put("streaming", assistantStreaming)
                             .put("createdAt", "2026-04-12T10:00:01Z"),
                     )
                 )

@@ -1487,6 +1487,9 @@ class AndrodexService(
                 extra = "incoming=${result.messages.size} merged=$mergedMessageCount",
             )
             syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
+            if (result.thread?.signalsNoInterruptibleTurnOnBackend() == true && isThreadConsideredRunning(threadId)) {
+                clearThreadRunningState(threadId)
+            }
         } finally {
             if (trackedSelectedThreadLoad) {
                 markSelectedThreadLoadFinished(threadId)
@@ -1822,6 +1825,20 @@ class AndrodexService(
                             )
                         ),
                     )
+                }
+                if (
+                    update.thread?.signalsNoInterruptibleTurnOnBackend() == true
+                    && isThreadConsideredRunning(threadId)
+                ) {
+                    clearThreadRunningState(threadId)
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching {
+                            loadThreadIntoState(
+                                threadId = threadId,
+                                expectedContextRevision = threadSessionContextRevision.get(),
+                            )
+                        }
+                    }
                 }
                 refreshSubagentMessages()
             }
@@ -2444,6 +2461,21 @@ class AndrodexService(
                 delay(runningThreadRecoveryPollMs)
                 if (!isThreadConsideredRunning(threadId)) {
                     break
+                }
+                val expectedContextRevision = threadSessionContextRevision.get()
+                if (stateFlow.value.selectedThreadId == threadId) {
+                    val reloadedSelectedThread = runCatching {
+                        loadThreadIntoState(
+                            threadId = threadId,
+                            expectedContextRevision = expectedContextRevision,
+                        )
+                    }.isSuccess
+                    if (!isThreadConsideredRunning(threadId)) {
+                        break
+                    }
+                    if (reloadedSelectedThread) {
+                        continue
+                    }
                 }
                 val snapshot = runCatching { repository.readThreadRunSnapshot(threadId) }.getOrNull() ?: continue
                 syncThreadRunStateFromSnapshot(threadId, snapshot)
@@ -4106,6 +4138,15 @@ private fun mergeThreadMessages(
         }
         merged.sortedBy { it.createdAtEpochMs }
     }
+}
+
+private fun ThreadSummary.signalsNoInterruptibleTurnOnBackend(): Boolean {
+    val turnInterrupt = threadCapabilities?.turnInterrupt ?: return false
+    if (turnInterrupt.supported) {
+        return false
+    }
+    val reason = turnInterrupt.reason?.trim().orEmpty()
+    return reason.contains("No active turn", ignoreCase = true)
 }
 
 private data class MirroredHistoryChatKey(
