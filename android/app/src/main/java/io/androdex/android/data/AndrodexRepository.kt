@@ -52,7 +52,7 @@ private fun createAndrodexRepositoryDependencies(context: Context): AndrodexRepo
     val persistence = AndrodexPersistence(context.applicationContext)
     val macNativeOkHttpClient = OkHttpClient.Builder().build()
     val macNativeClient = MacNativeAndrodexBackendClient(
-        persistence = persistence,
+        preferences = PersistenceMacNativeClientPreferences(persistence),
         transportStack = MacNativeTransportStack(
             authHttp = OkHttpMacNativeAuthHttpTransport(macNativeOkHttpClient),
             orchestrationHttp = OkHttpMacNativeOrchestrationHttpTransport(macNativeOkHttpClient),

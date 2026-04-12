@@ -16,6 +16,8 @@ Androdex keeps Codex running on your host computer, while the phone connects as 
 
 The long-term convergence direction is now different from some older bridge-first planning docs: `Androdex - Mac` is becoming the canonical backend for auth, orchestration state, replay, and thread actions, while `Androdex - Android` remains the native mobile client. See [Docs/android-sync-convergence.md](Docs/android-sync-convergence.md).
 
+The current rollout gate for that converged path is runtime backend selection: new Mac-native pairing payloads and saved Mac-native sessions route through the canonical Mac client stack, while the older bridge remains available as a compatibility fallback during cutover.
+
 ## Contents
 
 - [What It Is](#what-it-is)
@@ -76,6 +78,7 @@ Androdex does **not** run Codex on the phone itself.
 - the Android app source lives in `android/`
 - the repository is built around a host-local Codex runtime plus relay-backed remote access
 - active convergence work is moving Android toward the Mac server's canonical auth/orchestration protocol, with any remaining relay or helper layer reduced toward transport-only responsibilities
+- focused automated convergence coverage lives in [Docs/android-mac-native-test-matrix.md](Docs/android-mac-native-test-matrix.md)
 
 If you want to work from this repo today, use the bridge from npm or source, then build the Android client from source.
 

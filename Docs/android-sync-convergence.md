@@ -21,6 +21,7 @@ This note records the current migration direction for converging Androdex with t
 - Android should stop adding long-term bridge-only thread hydration, replay, approval, or checkpoint semantics.
 - If a relay or helper remains during migration, it should be transport-only and must not own thread lists, replay cursors, or pairing/session semantics.
 - The converged pairing payload should describe how to reach the Mac server directly, with any future remote tunnel forwarding the same HTTP and WebSocket protocol unchanged.
+- The rollout gate is now runtime-level backend selection: mac-native pairing payloads and saved mac-native sessions route into the converged client, while the legacy bridge remains an explicit compatibility fallback for older pairings.
 
 ## First Milestone
 

@@ -77,7 +77,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 internal class MacNativeAndrodexBackendClient(
-    private val persistence: AndrodexPersistence,
+    private val preferences: MacNativeClientPreferences,
     private val transportStack: MacNativeTransportStack,
 ) : AndrodexBackendClient {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -92,11 +92,11 @@ internal class MacNativeAndrodexBackendClient(
     private var currentSnapshot: JSONObject? = null
     private var currentSocket = null as io.androdex.android.transport.macnative.MacNativeWebSocketConnection?
     private var activeWorkspacePath: String? = null
-    private var selectedModelId: String? = persistence.loadSelectedModelId()
-    private var selectedReasoningEffort: String? = persistence.loadSelectedReasoningEffort()
-    private var selectedAccessMode: AccessMode = persistence.loadSelectedAccessMode()
-    private var selectedServiceTier: ServiceTier? = persistence.loadSelectedServiceTier()
-    private var threadRuntimeOverridesByThread = persistence.loadThreadRuntimeOverrides(currentThreadTimelineScopeKey())
+    private var selectedModelId: String? = preferences.loadSelectedModelId()
+    private var selectedReasoningEffort: String? = preferences.loadSelectedReasoningEffort()
+    private var selectedAccessMode: AccessMode = preferences.loadSelectedAccessMode()
+    private var selectedServiceTier: ServiceTier? = preferences.loadSelectedServiceTier()
+    private var threadRuntimeOverridesByThread = preferences.loadThreadRuntimeOverrides(currentThreadTimelineScopeKey())
     private val observedThreadIds = linkedSetOf<String>()
     private var knownApprovalRequestId: String? = null
     private var knownToolInputsByThread: Map<String, Set<String>> = emptyMap()
@@ -196,7 +196,7 @@ internal class MacNativeAndrodexBackendClient(
         if (clearSavedPairing) {
             transportStack.sessionStore.clearBearerSession()
             transportStack.sessionStore.clearSnapshotSequence()
-            persistence.savePreferredBackendKind(null)
+            preferences.savePreferredBackendKind(null)
         }
         updatesFlow.emit(
             ClientUpdate.Connection(
@@ -366,13 +366,13 @@ internal class MacNativeAndrodexBackendClient(
 
     override suspend fun setSelectedModelId(modelId: String?) {
         selectedModelId = modelId?.trim()?.takeIf { it.isNotEmpty() }
-        persistence.saveSelectedModelId(selectedModelId)
+        preferences.saveSelectedModelId(selectedModelId)
         loadRuntimeConfig()
     }
 
     override suspend fun setSelectedReasoningEffort(effort: String?) {
         selectedReasoningEffort = effort?.trim()?.takeIf { it.isNotEmpty() }
-        persistence.saveSelectedReasoningEffort(selectedReasoningEffort)
+        preferences.saveSelectedReasoningEffort(selectedReasoningEffort)
         loadRuntimeConfig()
     }
 
@@ -380,13 +380,13 @@ internal class MacNativeAndrodexBackendClient(
 
     override suspend fun setSelectedAccessMode(accessMode: AccessMode) {
         selectedAccessMode = accessMode
-        persistence.saveSelectedAccessMode(accessMode)
+        preferences.saveSelectedAccessMode(accessMode)
         loadRuntimeConfig()
     }
 
     override suspend fun setSelectedServiceTier(serviceTier: ServiceTier?) {
         selectedServiceTier = serviceTier
-        persistence.saveSelectedServiceTier(serviceTier)
+        preferences.saveSelectedServiceTier(serviceTier)
         loadRuntimeConfig()
     }
 
@@ -403,7 +403,7 @@ internal class MacNativeAndrodexBackendClient(
                 put(normalizedThreadId, normalized)
             }
         }
-        persistence.saveThreadRuntimeOverrides(
+        preferences.saveThreadRuntimeOverrides(
             scopeKey = currentThreadTimelineScopeKey(),
             value = threadRuntimeOverridesByThread,
         )
@@ -632,7 +632,7 @@ internal class MacNativeAndrodexBackendClient(
                 hostFingerprint = hostFingerprint,
             )
         )
-        persistence.savePreferredBackendKind(BackendKind.MAC_NATIVE)
+        preferences.savePreferredBackendKind(BackendKind.MAC_NATIVE)
         updatesFlow.emit(
             ClientUpdate.PairingAvailability(
                 hasSavedPairing = true,
@@ -877,7 +877,7 @@ internal class MacNativeAndrodexBackendClient(
                 if (error.statusCode == 401 || error.statusCode == 403) {
                     transportStack.sessionStore.clearBearerSession()
                     transportStack.sessionStore.clearSnapshotSequence()
-                    persistence.savePreferredBackendKind(null)
+                    preferences.savePreferredBackendKind(null)
                     updatesFlow.emit(
                         ClientUpdate.PairingAvailability(
                             hasSavedPairing = false,
