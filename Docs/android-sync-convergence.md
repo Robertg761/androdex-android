@@ -20,6 +20,7 @@ This note records the current migration direction for converging Androdex with t
 - Android may keep native UI state, persistence, notifications, and device-specific caching.
 - Android should stop adding long-term bridge-only thread hydration, replay, approval, or checkpoint semantics.
 - If a relay or helper remains during migration, it should be transport-only and must not own thread lists, replay cursors, or pairing/session semantics.
+- The converged pairing payload should describe how to reach the Mac server directly, with any future remote tunnel forwarding the same HTTP and WebSocket protocol unchanged.
 
 ## First Milestone
 
