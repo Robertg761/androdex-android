@@ -35,7 +35,13 @@ import io.androdex.android.model.TurnSkillMention
 import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
+import io.androdex.android.transport.macnative.OkHttpMacNativeAuthHttpTransport
+import io.androdex.android.transport.macnative.OkHttpMacNativeOrchestrationHttpTransport
+import io.androdex.android.transport.macnative.OkHttpMacNativeOrchestrationWsTransport
+import io.androdex.android.transport.macnative.PersistenceMacNativeSessionStore
+import io.androdex.android.transport.macnative.MacNativeTransportStack
 import kotlinx.coroutines.flow.SharedFlow
+import okhttp3.OkHttpClient
 
 internal data class AndrodexRepositoryDependencies(
     val persistence: AndrodexPersistence,
@@ -44,9 +50,23 @@ internal data class AndrodexRepositoryDependencies(
 
 private fun createAndrodexRepositoryDependencies(context: Context): AndrodexRepositoryDependencies {
     val persistence = AndrodexPersistence(context.applicationContext)
+    val macNativeOkHttpClient = OkHttpClient.Builder().build()
+    val macNativeClient = MacNativeAndrodexBackendClient(
+        persistence = persistence,
+        transportStack = MacNativeTransportStack(
+            authHttp = OkHttpMacNativeAuthHttpTransport(macNativeOkHttpClient),
+            orchestrationHttp = OkHttpMacNativeOrchestrationHttpTransport(macNativeOkHttpClient),
+            orchestrationWs = OkHttpMacNativeOrchestrationWsTransport(macNativeOkHttpClient),
+            sessionStore = PersistenceMacNativeSessionStore(persistence),
+        ),
+    )
     return AndrodexRepositoryDependencies(
         persistence = persistence,
-        client = BridgeAndrodexBackendClient(AndrodexClient(persistence)),
+        client = RoutingAndrodexBackendClient(
+            persistence = persistence,
+            bridgeClient = BridgeAndrodexBackendClient(AndrodexClient(persistence)),
+            macNativeClient = macNativeClient,
+        ),
     )
 }
 

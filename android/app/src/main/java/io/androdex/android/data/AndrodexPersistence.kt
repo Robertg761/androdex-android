@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import io.androdex.android.crypto.SecureStore
 import io.androdex.android.model.AccessMode
+import io.androdex.android.model.BackendKind
 import io.androdex.android.model.ConversationKind
 import io.androdex.android.model.ConversationMessage
 import io.androdex.android.model.ConversationRole
@@ -22,6 +23,7 @@ import io.androdex.android.model.SubagentRef
 import io.androdex.android.model.SubagentState
 import io.androdex.android.model.ThreadRuntimeOverride
 import io.androdex.android.model.TrustedMacRegistry
+import io.androdex.android.transport.macnative.MacNativePersistedSession
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
@@ -100,6 +102,76 @@ open class AndrodexPersistence internal constructor(
         secureStore.remove(KEY_LAST_APPLIED_SEQ, synchronously = true)
     }
 
+    internal fun loadMacNativePersistedSession(): MacNativePersistedSession? {
+        val raw = secureStore.readString(KEY_MAC_NATIVE_SESSION)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val payload = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        val httpBaseUrl = payload.optString("httpBaseUrl").trim()
+        val wsBaseUrl = payload.optString("wsBaseUrl").trim()
+        val sessionToken = payload.optString("sessionToken").trim()
+        if (httpBaseUrl.isEmpty() || wsBaseUrl.isEmpty() || sessionToken.isEmpty()) {
+            return null
+        }
+        return MacNativePersistedSession(
+            httpBaseUrl = httpBaseUrl,
+            wsBaseUrl = wsBaseUrl,
+            sessionToken = sessionToken,
+            role = payload.optString("role").trim().ifEmpty { null },
+            expiresAtEpochMs = payload.optLong("expiresAtEpochMs").takeIf { it > 0L },
+            environmentId = payload.optString("environmentId").trim().ifEmpty { null },
+            hostLabel = payload.optString("hostLabel").trim().ifEmpty { null },
+            hostFingerprint = payload.optString("hostFingerprint").trim().ifEmpty { null },
+        )
+    }
+
+    internal fun saveMacNativePersistedSession(session: MacNativePersistedSession) {
+        secureStore.writeString(
+            KEY_MAC_NATIVE_SESSION,
+            JSONObject()
+                .put("httpBaseUrl", session.httpBaseUrl)
+                .put("wsBaseUrl", session.wsBaseUrl)
+                .put("sessionToken", session.sessionToken)
+                .put("role", session.role)
+                .put("expiresAtEpochMs", session.expiresAtEpochMs)
+                .put("environmentId", session.environmentId)
+                .put("hostLabel", session.hostLabel)
+                .put("hostFingerprint", session.hostFingerprint)
+                .toString(),
+            synchronously = true,
+        )
+    }
+
+    internal fun clearMacNativePersistedSession() {
+        secureStore.remove(KEY_MAC_NATIVE_SESSION, synchronously = true)
+    }
+
+    internal fun loadMacNativeSnapshotSequence(): Long? {
+        return secureStore.readString(KEY_MAC_NATIVE_SNAPSHOT_SEQUENCE)?.trim()?.toLongOrNull()
+    }
+
+    internal fun saveMacNativeSnapshotSequence(value: Long) {
+        secureStore.writeString(KEY_MAC_NATIVE_SNAPSHOT_SEQUENCE, value.coerceAtLeast(0L).toString())
+    }
+
+    internal fun clearMacNativeSnapshotSequence() {
+        secureStore.remove(KEY_MAC_NATIVE_SNAPSHOT_SEQUENCE, synchronously = true)
+    }
+
+    internal fun loadPreferredBackendKind(): BackendKind? {
+        return BackendKind.fromPersistenceValue(secureStore.readString(KEY_ACTIVE_BACKEND_KIND))
+    }
+
+    internal fun savePreferredBackendKind(kind: BackendKind?) {
+        val normalized = kind?.persistenceValue
+        if (normalized == null) {
+            secureStore.remove(KEY_ACTIVE_BACKEND_KIND, synchronously = true)
+        } else {
+            secureStore.writeString(KEY_ACTIVE_BACKEND_KIND, normalized, synchronously = true)
+        }
+    }
+
     fun loadPhoneIdentity(): PhoneIdentityState? {
         val raw = readDurableTrustString(KEY_PHONE_IDENTITY) ?: return null
         return runCatching { PhoneIdentityState.fromJson(JSONObject(raw)) }.getOrNull()
@@ -172,6 +244,9 @@ open class AndrodexPersistence internal constructor(
 
     fun clearAllPairingState() {
         clearSavedRelaySession()
+        clearMacNativePersistedSession()
+        clearMacNativeSnapshotSequence()
+        savePreferredBackendKind(null)
         clearPhoneIdentity()
         clearTrustedMacRegistry()
         saveRecoveryPayloadRegistry(emptyMap())
@@ -363,12 +438,15 @@ open class AndrodexPersistence internal constructor(
 
     private fun sanitizeUnreadableSecureState(): SecureStateStartupReport {
         val savedRelaySessionState = secureStore.readStringState(KEY_SAVED_RELAY_SESSION)
+        val macNativeSessionState = secureStore.readStringState(KEY_MAC_NATIVE_SESSION)
         val pairingState = secureStore.readStringState(KEY_PAIRING)
         val phoneIdentityState = secureStore.readStringState(KEY_PHONE_IDENTITY)
         val trustedMacState = secureStore.readStringState(KEY_TRUSTED_MACS)
         val trustedRecoveryPayloadsState = secureStore.readStringState(KEY_TRUSTED_RECOVERY_PAYLOADS)
         val lastTrustedMacDeviceIdState = secureStore.readStringState(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
         val lastAppliedSeqState = secureStore.readStringState(KEY_LAST_APPLIED_SEQ)
+        val macNativeSnapshotSequenceState = secureStore.readStringState(KEY_MAC_NATIVE_SNAPSHOT_SEQUENCE)
+        val activeBackendKindState = secureStore.readStringState(KEY_ACTIVE_BACKEND_KIND)
         val selectedModelState = secureStore.readStringState(KEY_SELECTED_MODEL_ID)
         val selectedReasoningState = secureStore.readStringState(KEY_SELECTED_REASONING_EFFORT)
         val selectedAccessModeState = secureStore.readStringState(KEY_SELECTED_ACCESS_MODE)
@@ -385,6 +463,8 @@ open class AndrodexPersistence internal constructor(
         val savedRelaySessionUnreadable = savedRelaySessionState.isUnreadable
             || (pairingState.isUnreadable && !savedRelaySessionState.wasPresent)
             || (lastAppliedSeqState.isUnreadable && (savedRelaySessionState.wasPresent || pairingState.wasPresent))
+        val macNativeSessionUnreadable = macNativeSessionState.isUnreadable
+        val macNativeSnapshotSequenceUnreadable = macNativeSnapshotSequenceState.isUnreadable
         val phoneIdentityUnreadable = phoneIdentityState.isUnreadable && !repairedPhoneIdentity
         val trustedMacUnreadable = (
             trustedMacState.isUnreadable && !repairedTrustedMacRegistry
@@ -396,8 +476,17 @@ open class AndrodexPersistence internal constructor(
         if (savedRelaySessionUnreadable) {
             clearSavedRelaySession()
         }
+        if (macNativeSessionUnreadable) {
+            clearMacNativePersistedSession()
+        }
+        if (macNativeSnapshotSequenceUnreadable) {
+            clearMacNativeSnapshotSequence()
+        }
         if (lastTrustedMacUnreadable) {
             secureStore.remove(KEY_LAST_TRUSTED_MAC_DEVICE_ID)
+        }
+        if (activeBackendKindState.isUnreadable) {
+            secureStore.remove(KEY_ACTIVE_BACKEND_KIND)
         }
 
         if (selectedModelState.isUnreadable) {
@@ -470,7 +559,7 @@ open class AndrodexPersistence internal constructor(
 
     private fun migrateLegacySavedPairingIfNeeded() {
         val currentSession = secureStore.readString(KEY_SAVED_RELAY_SESSION)
-        if (!currentSession.isNullOrBlank()) {
+        if (!currentSession.isNullOrBlank() || !secureStore.readString(KEY_MAC_NATIVE_SESSION).isNullOrBlank()) {
             return
         }
         val legacyPairing = secureStore.readString(KEY_PAIRING)
@@ -512,6 +601,9 @@ open class AndrodexPersistence internal constructor(
         const val KEY_THREAD_TIMELINE_CACHE_SCOPES = "thread_timeline_cache_scopes"
         const val KEY_PAIRING = "pairing_payload"
         const val KEY_SAVED_RELAY_SESSION = "saved_relay_session"
+        const val KEY_MAC_NATIVE_SESSION = "mac_native_session"
+        const val KEY_MAC_NATIVE_SNAPSHOT_SEQUENCE = "mac_native_snapshot_sequence"
+        const val KEY_ACTIVE_BACKEND_KIND = "active_backend_kind"
         const val KEY_PHONE_IDENTITY = "phone_identity"
         const val KEY_TRUSTED_MACS = "trusted_macs"
         const val KEY_TRUSTED_RECOVERY_PAYLOADS = "trusted_recovery_payloads"

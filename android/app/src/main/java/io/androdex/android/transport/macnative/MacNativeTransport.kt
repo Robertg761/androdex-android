@@ -47,6 +47,9 @@ internal data class MacNativePersistedSession(
     val sessionToken: String,
     val role: String?,
     val expiresAtEpochMs: Long?,
+    val environmentId: String? = null,
+    val hostLabel: String? = null,
+    val hostFingerprint: String? = null,
 )
 
 internal interface MacNativeSessionStore {
@@ -89,7 +92,7 @@ internal interface MacNativeOrchestrationHttpTransport {
 }
 
 internal fun interface MacNativeOrchestrationEventListener {
-    suspend fun onDomainEvent(event: JSONObject)
+    fun onDomainEvent(event: JSONObject)
 }
 
 internal interface MacNativeWebSocketConnection {
@@ -105,6 +108,7 @@ internal interface MacNativeOrchestrationWsTransport {
 
     suspend fun replayEvents(
         session: MacNativeBearerSession,
+        token: MacNativeWebSocketToken,
         fromSequenceExclusive: Long,
     ): List<JSONObject>
 }

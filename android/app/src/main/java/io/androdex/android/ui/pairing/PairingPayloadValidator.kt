@@ -3,12 +3,14 @@ package io.androdex.android.ui.pairing
 import io.androdex.android.AppEnvironment
 import io.androdex.android.crypto.pairingQrVersion
 import io.androdex.android.crypto.secureClockSkewToleranceSeconds
+import io.androdex.android.model.ConnectPayloadDescriptor
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.RecoveryPayload
-import org.json.JSONObject
+import io.androdex.android.model.macNativePairingPayloadVersion
+import io.androdex.android.model.parseConnectPayloadDescriptor
 
 internal sealed interface ConnectPayloadValidationResult {
-    data class Success(val payload: PairingPayload) : ConnectPayloadValidationResult
+    data class Success(val payload: Any) : ConnectPayloadValidationResult
 
     data class RecoverySuccess(val payload: RecoveryPayload) : ConnectPayloadValidationResult
 
@@ -21,14 +23,43 @@ internal fun validateConnectPayload(
     rawPayload: String,
     nowEpochMs: Long = System.currentTimeMillis(),
 ): ConnectPayloadValidationResult {
-    val json = runCatching { JSONObject(rawPayload) }.getOrNull()
-        ?: return ConnectPayloadValidationResult.Error("The payload is not valid JSON.")
-    val recoveryPayload = RecoveryPayload.fromJson(json)
-    if (recoveryPayload != null) {
-        return ConnectPayloadValidationResult.RecoverySuccess(recoveryPayload)
+    val payload = runCatching { parseConnectPayloadDescriptor(rawPayload) }.getOrElse { error ->
+        return if (error is IllegalArgumentException) {
+            ConnectPayloadValidationResult.Error(error.message ?: "The payload is not valid JSON.")
+        } else {
+            ConnectPayloadValidationResult.Error("The payload is not valid JSON.")
+        }
     }
-    val payload = PairingPayload.fromJson(json)
-        ?: return ConnectPayloadValidationResult.Error("The payload is missing required pairing or recovery fields.")
+
+    return when (payload) {
+        is ConnectPayloadDescriptor.Recovery -> ConnectPayloadValidationResult.RecoverySuccess(payload.payload)
+        is ConnectPayloadDescriptor.MacNative -> validateMacNativePairingPayload(payload.payload, nowEpochMs)
+        is ConnectPayloadDescriptor.Bridge -> validateBridgePairingPayload(payload.payload, nowEpochMs)
+    }
+}
+
+private fun validateMacNativePairingPayload(
+    payload: io.androdex.android.model.MacNativePairingPayload,
+    nowEpochMs: Long,
+): ConnectPayloadValidationResult {
+    if (payload.version != macNativePairingPayloadVersion) {
+        return ConnectPayloadValidationResult.UpdateRequired(
+            "This Mac pairing payload came from an unsupported Android convergence format. Update Androdex on both devices and scan a new QR code.",
+        )
+    }
+    val expiryWithSkew = payload.expiresAt + (secureClockSkewToleranceSeconds * 1000)
+    if (expiryWithSkew < nowEpochMs) {
+        return ConnectPayloadValidationResult.Error(
+            "The Mac pairing payload has expired. Generate a new QR code from the Mac app.",
+        )
+    }
+    return ConnectPayloadValidationResult.Success(payload)
+}
+
+private fun validateBridgePairingPayload(
+    payload: PairingPayload,
+    nowEpochMs: Long,
+): ConnectPayloadValidationResult {
     if (payload.version != 2 && payload.version != pairingQrVersion) {
         return ConnectPayloadValidationResult.UpdateRequired(
             "This pairing QR came from a different Androdex bridge format. Update the host package with `${AppEnvironment.bridgeUpdateCommand}` and scan a new QR code.",
