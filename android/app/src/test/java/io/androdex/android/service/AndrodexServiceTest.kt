@@ -387,6 +387,56 @@ class AndrodexServiceTest {
     }
 
     @Test
+    fun approvalOverlay_prefersSelectedThreadApproval() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ThreadsLoaded(
+                listOf(
+                    ThreadSummary("thread-old", "Old", null, "/workspace/old", null, null),
+                    ThreadSummary("thread-new", "New", null, "/workspace/new", null, null),
+                )
+            )
+        )
+        service.openThread("thread-new")
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ApprovalRequested(
+                ApprovalRequest(
+                    idValue = "approval-old",
+                    method = "item/commandExecution/requestApproval",
+                    command = "rm -rf /tmp/old",
+                    reason = "Old thread approval",
+                    threadId = "thread-old",
+                    turnId = "turn-old",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        assertNull(service.state.value.pendingApproval)
+
+        service.processClientUpdate(
+            ClientUpdate.ApprovalRequested(
+                ApprovalRequest(
+                    idValue = "approval-new",
+                    method = "item/commandExecution/requestApproval",
+                    command = "echo new",
+                    reason = "New thread approval",
+                    threadId = "thread-new",
+                    turnId = "turn-new",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("approval-new", service.state.value.pendingApproval?.idValue)
+    }
+
+    @Test
     fun persistedTimelineWrites_keepOriginalHostScopeWhenFlushRunsLater() = runTest {
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-a"
@@ -2842,6 +2892,35 @@ class AndrodexServiceTest {
         assertEquals("thread-pending", service.state.value.selectedThreadId)
         assertEquals("turn-7", service.state.value.focusedTurnId)
         assertEquals(listOf("thread-pending"), repository.loadedThreadIds)
+    }
+
+    @Test
+    fun connectWithPairingPayload_clearsPendingApprovalsFromPreviousSession() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.ApprovalRequested(
+                ApprovalRequest(
+                    idValue = "approval-stale",
+                    method = "item/commandExecution/requestApproval",
+                    command = "echo stale",
+                    reason = "Needs approval",
+                    threadId = "thread-stale",
+                    turnId = "turn-stale",
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("approval-stale", service.state.value.pendingApproval?.idValue)
+
+        service.connectWithPairingPayload("fresh-payload")
+        advanceUntilIdle()
+
+        assertTrue(service.state.value.pendingApprovalsByThread.isEmpty())
+        assertNull(service.state.value.pendingApproval)
     }
 
     @Test
@@ -7022,6 +7101,48 @@ class AndrodexServiceTest {
         assertNull(service.state.value.errorMessage)
     }
 
+    @Test
+    fun repeatedConnectedUpdate_doesNotResyncWhenAlreadyConnected() = runTest {
+        val repository = FakeRepository().apply {
+            hasSavedPairing = true
+            refreshedThreads = listOf(ThreadSummary("thread-1", "Conversation", null, "/workspace/app", null, null))
+            recentState = WorkspaceRecentState(
+                activeCwd = "/workspace/app",
+                recentWorkspaces = listOf(
+                    WorkspacePathSummary("/workspace/app", "app", isActive = true),
+                ),
+            )
+        }
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+                runtimeMetadata = HostRuntimeMetadata(runtimeTarget = "mac-native"),
+            )
+        )
+        advanceUntilIdle()
+
+        repository.refreshThreadsCalls = 0
+        repository.loadRuntimeConfigCalls = 0
+        repository.listRecentWorkspacesCalls = 0
+
+        service.processClientUpdate(
+            ClientUpdate.Connection(
+                status = ConnectionStatus.CONNECTED,
+                detail = "Connected",
+                runtimeMetadata = HostRuntimeMetadata(runtimeTarget = "mac-native"),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(0, repository.refreshThreadsCalls)
+        assertEquals(0, repository.loadRuntimeConfigCalls)
+        assertEquals(0, repository.listRecentWorkspacesCalls)
+    }
+
     fun nonTransportError_survivesReconnectFriendlyConnectionUpdates() = runTest {
         val repository = FakeRepository().apply {
             hasSavedPairing = true
@@ -7098,6 +7219,59 @@ class AndrodexServiceTest {
 
         assertEquals(1, reconnectCalls)
     }
+
+    @Test
+    fun selectHostRuntimeTarget_rejectsUnavailableTargetsBeforeRepositoryMutation() = runTest {
+        val repository = FakeRepository()
+        val service = AndrodexService(repository, backgroundScope)
+        advanceUntilIdle()
+
+        service.processClientUpdate(
+            ClientUpdate.RuntimeConfigLoaded(
+                models = emptyList(),
+                selectedModelId = null,
+                selectedReasoningEffort = null,
+                selectedAccessMode = AccessMode.ON_REQUEST,
+                selectedServiceTier = null,
+                supportsServiceTier = true,
+                supportsThreadCompaction = true,
+                supportsThreadRollback = true,
+                supportsBackgroundTerminalCleanup = true,
+                supportsThreadFork = true,
+                collaborationModes = emptySet(),
+                threadRuntimeOverridesByThread = emptyMap(),
+                runtimeMetadata = HostRuntimeMetadata(
+                    runtimeTarget = "codex-native",
+                    runtimeTargetDisplayName = "Codex Native",
+                    runtimeTargetOptions = listOf(
+                        io.androdex.android.model.HostRuntimeTargetOption(
+                            value = "codex-native",
+                            title = "Codex",
+                            selected = true,
+                            enabled = true,
+                        ),
+                        io.androdex.android.model.HostRuntimeTargetOption(
+                            value = "t3-server",
+                            title = "T3 Code",
+                            selected = false,
+                            enabled = false,
+                            availabilityMessage = "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        val error = runCatching {
+            service.selectHostRuntimeTarget("t3-server")
+        }.exceptionOrNull()
+
+        assertEquals(
+            "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+            error?.message,
+        )
+        assertTrue(repository.selectedHostRuntimeTargets.isEmpty())
+    }
 }
 
 private class FakeRepository : AndrodexRepositoryContract {
@@ -7125,10 +7299,14 @@ private class FakeRepository : AndrodexRepositoryContract {
     var connectWithRecoveryPayloadAction: ((String) -> Unit)? = null
     var reconnectSavedAction: (() -> Unit)? = null
     var refreshThreadsCalls = 0
+    var loadRuntimeConfigCalls = 0
     var listRecentWorkspacesCalls = 0
     var listRecentWorkspacesDelayMs: Long = 0L
     val queuedRecentStates = ArrayDeque<WorkspaceRecentState>()
     val queuedListRecentWorkspacesDelaysMs = ArrayDeque<Long>()
+    val selectedHostRuntimeTargets = mutableListOf<String>()
+    var setHostRuntimeTargetError: Throwable? = null
+    var setHostRuntimeTargetAction: ((String) -> Unit)? = null
 
     override val updates: SharedFlow<ClientUpdate> = updatesFlow
 
@@ -7372,11 +7550,19 @@ private class FakeRepository : AndrodexRepositoryContract {
         appEnvironment: String,
     ) = Unit
 
-    override suspend fun loadRuntimeConfig() = Unit
+    override suspend fun loadRuntimeConfig() {
+        loadRuntimeConfigCalls += 1
+    }
 
     override suspend fun setSelectedModelId(modelId: String?) = Unit
 
     override suspend fun setSelectedReasoningEffort(effort: String?) = Unit
+
+    override suspend fun setHostRuntimeTarget(targetKind: String) {
+        setHostRuntimeTargetError?.let { throw it }
+        selectedHostRuntimeTargets += targetKind
+        setHostRuntimeTargetAction?.invoke(targetKind)
+    }
 
     override suspend fun respondToApproval(request: ApprovalRequest, accept: Boolean) {
         respondToApprovalError?.let { throw it }

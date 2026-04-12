@@ -61,6 +61,7 @@ import io.androdex.android.transport.macnative.deriveMacNativeReplayRetryDecisio
 import io.androdex.android.transport.macnative.deriveMacNativePendingState
 import io.androdex.android.transport.macnative.mapMacNativeSnapshotToThreadLoad
 import io.androdex.android.transport.macnative.mapMacNativeSnapshotToThreadSummaries
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -174,6 +175,7 @@ internal class MacNativeAndrodexBackendClient(
             )
             true
         }.getOrElse { error ->
+            throwIfCancellation(error)
             handleReconnectFailure(error)
             false
         }
@@ -223,7 +225,7 @@ internal class MacNativeAndrodexBackendClient(
         val snapshot = ensureSnapshot(forceRefresh = true)
         val project = resolveProject(snapshot, preferredProjectPath)
         val threadId = UUID.randomUUID().toString()
-        dispatchCommand(
+        val dispatchSequence = dispatchCommand(
             JSONObject()
                 .put("type", "thread.create")
                 .put("commandId", UUID.randomUUID().toString())
@@ -237,8 +239,11 @@ internal class MacNativeAndrodexBackendClient(
                 .put("worktreePath", JSONObject.NULL)
                 .put("createdAt", isoNow()),
         )
-        val refreshed = ensureSnapshot(forceRefresh = true)
-        return mapMacNativeSnapshotToThreadLoad(refreshed, threadId).thread
+        val loaded = awaitThreadLoadAfterCommand(
+            threadId = threadId,
+            minimumSnapshotSequence = dispatchSequence,
+        )
+        return loaded.thread
             ?: throw IllegalStateException("The Mac server did not return the created thread.")
     }
 
@@ -484,21 +489,22 @@ internal class MacNativeAndrodexBackendClient(
 
     override suspend fun listRecentWorkspaces(): WorkspaceRecentState {
         val snapshot = ensureSnapshot(forceRefresh = false)
-        val projects = snapshot.optJSONArray("projects") ?: JSONArray()
+        val projects = activeProjects(snapshot)
         val recent = buildList {
             for (index in 0 until projects.length()) {
                 val project = projects.optJSONObject(index) ?: continue
-                val path = project.optString("workspaceRoot").trim().ifEmpty { continue }
+                val path = project.optionalServerString("workspaceRoot") ?: continue
                 add(
                     WorkspacePathSummary(
                         path = path,
-                        name = project.optString("title").trim().ifEmpty { path.substringAfterLast('/') },
+                        name = project.optionalServerString("title") ?: path.substringAfterLast('/'),
                         isActive = path == activeWorkspacePath,
                     )
                 )
             }
         }
-        val resolvedActive = activeWorkspacePath ?: recent.firstOrNull { it.isActive }?.path ?: recent.firstOrNull()?.path
+        val resolvedActive = recent.firstOrNull { it.isActive }?.path ?: recent.firstOrNull()?.path
+        activeWorkspacePath = resolvedActive
         return WorkspaceRecentState(
             activeCwd = resolvedActive,
             recentWorkspaces = recent,
@@ -827,7 +833,8 @@ internal class MacNativeAndrodexBackendClient(
             recovery.markEventBatchApplied(replayedEvents)
             replayedEvents.lastOrNull()?.sequence?.let(transportStack.sessionStore::saveSnapshotSequence)
             refreshSnapshotAndEmitUpdates(forceRefresh = true)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            throwIfCancellation(error)
             replayRetryTracker = null
             recovery.failReplayRecovery()
             refreshSnapshotAndEmitUpdates(forceRefresh = true, trackSnapshotRecovery = true)
@@ -850,11 +857,32 @@ internal class MacNativeAndrodexBackendClient(
         }
     }
 
-    private suspend fun dispatchCommand(command: JSONObject) {
+    private suspend fun awaitThreadLoadAfterCommand(
+        threadId: String,
+        minimumSnapshotSequence: Long?,
+    ): ThreadLoadResult {
+        repeat(20) { attempt ->
+            val snapshot = ensureSnapshot(forceRefresh = true)
+            val loaded = mapMacNativeSnapshotToThreadLoad(snapshot, threadId)
+            val snapshotSequence = snapshot.optLong("snapshotSequence", -1L)
+            if (loaded.thread != null && (minimumSnapshotSequence == null || snapshotSequence < 0L || snapshotSequence >= minimumSnapshotSequence)) {
+                return loaded
+            }
+            if (attempt < 19) {
+                delay(100L)
+            }
+        }
+        val expectedSequenceSuffix = minimumSnapshotSequence?.let { " at or after snapshot sequence $it" }.orEmpty()
+        throw IllegalStateException("The Mac server did not return the created thread$expectedSequenceSuffix.")
+    }
+
+    private suspend fun dispatchCommand(command: JSONObject): Long? {
         commandMutex.withLock {
             val session = currentSession ?: loadPersistedBearerSession()
             requireNotNull(session) { "No Mac-native session is available." }
-            transportStack.orchestrationHttp.dispatchCommand(session, command)
+            val response = transportStack.orchestrationHttp.dispatchCommand(session, command)
+            val sequence = response.optLong("sequence").takeIf { it >= 0L }
+            return sequence
         }
     }
 
@@ -896,6 +924,12 @@ internal class MacNativeAndrodexBackendClient(
         }
     }
 
+    private fun throwIfCancellation(error: Throwable) {
+        if (error is CancellationException) {
+            throw error
+        }
+    }
+
     private suspend fun emitConnection(
         status: ConnectionStatus,
         detail: String?,
@@ -934,11 +968,11 @@ internal class MacNativeAndrodexBackendClient(
     }
 
     private fun resolveProject(snapshot: JSONObject, preferredProjectPath: String?): JSONObject {
-        val projects = snapshot.optJSONArray("projects") ?: JSONArray()
+        val projects = activeProjects(snapshot)
         val normalizedPreferredPath = preferredProjectPath?.trim()?.takeIf { it.isNotEmpty() }
         for (index in 0 until projects.length()) {
             val project = projects.optJSONObject(index) ?: continue
-            val workspaceRoot = project.optString("workspaceRoot").trim().ifEmpty { null }
+            val workspaceRoot = project.optionalServerString("workspaceRoot")
             if (workspaceRoot != null && workspaceRoot == normalizedPreferredPath) {
                 activeWorkspacePath = workspaceRoot
                 return project
@@ -948,7 +982,7 @@ internal class MacNativeAndrodexBackendClient(
             (0 until projects.length())
                 .asSequence()
                 .mapNotNull(projects::optJSONObject)
-                .firstOrNull { it.optString("workspaceRoot").trim() == path }
+                .firstOrNull { it.optionalServerString("workspaceRoot") == path }
         }
         if (active != null) {
             return active
@@ -992,6 +1026,31 @@ internal class MacNativeAndrodexBackendClient(
             }
         }
         return knownModels.values.toList()
+    }
+
+    private fun activeProjects(snapshot: JSONObject): JSONArray {
+        val projects = snapshot.optJSONArray("projects") ?: return JSONArray()
+        return JSONArray().also { active ->
+            for (index in 0 until projects.length()) {
+                val project = projects.optJSONObject(index) ?: continue
+                if (project.optionalServerString("deletedAt") != null) {
+                    continue
+                }
+                active.put(project)
+            }
+        }
+    }
+
+    private fun JSONObject.optionalServerString(key: String): String? {
+        val raw = opt(key) ?: return null
+        if (raw === JSONObject.NULL) {
+            return null
+        }
+        return raw.toString()
+            .trim()
+            .takeUnless { value ->
+                value.isEmpty() || value.equals("null", ignoreCase = true)
+            }
     }
 
     private fun buildUserTurnText(

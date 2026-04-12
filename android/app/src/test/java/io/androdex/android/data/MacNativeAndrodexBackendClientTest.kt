@@ -21,6 +21,7 @@ import io.androdex.android.transport.macnative.MacNativeSessionStore
 import io.androdex.android.transport.macnative.MacNativeTransportStack
 import io.androdex.android.transport.macnative.MacNativeWebSocketConnection
 import io.androdex.android.transport.macnative.MacNativeWebSocketToken
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -111,6 +112,33 @@ class MacNativeAndrodexBackendClientTest {
     }
 
     @Test
+    fun reconnectSaved_propagatesCancellationWithoutReportingRetryFailure() = runTest {
+        val sessionStore = FakeMacNativeSessionStore(
+            persistedSession = samplePersistedSession(),
+            snapshotSequence = 2L,
+        )
+        val client = MacNativeAndrodexBackendClient(
+            preferences = FakeMacNativeClientPreferences(),
+            transportStack = MacNativeTransportStack(
+                authHttp = FakeMacNativeAuthHttpTransport(
+                    readSessionError = CancellationException("StandaloneCoroutine was cancelled"),
+                ),
+                orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(),
+                orchestrationWs = FakeMacNativeOrchestrationWsTransport(),
+                sessionStore = sessionStore,
+            ),
+        )
+
+        val failure = runCatching {
+            client.reconnectSaved()
+        }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertNotNull(sessionStore.loadBearerSession())
+        assertEquals(2L, sessionStore.loadSnapshotSequence())
+    }
+
+    @Test
     fun canonicalActions_dispatchExpectedCommands() = runTest {
         val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
             snapshots = ArrayDeque(listOf(sampleSnapshot(snapshotSequence = 1L))),
@@ -175,6 +203,166 @@ class MacNativeAndrodexBackendClientTest {
         )
     }
 
+    @Test
+    fun startThread_waitsForCreatedThreadToAppearInSnapshot() = runTest {
+        val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
+            snapshots = ArrayDeque(
+                listOf(
+                    sampleSnapshot(snapshotSequence = 1L),
+                    sampleSnapshot(snapshotSequence = 1L),
+                    sampleSnapshot(snapshotSequence = 1L),
+                )
+            ),
+            onDispatchCommand = { command, transport ->
+                if (command.optString("type") == "thread.create") {
+                    transport.enqueueSnapshot(
+                        sampleSnapshot(
+                            snapshotSequence = 2L,
+                            threads = listOf(
+                                sampleThread(
+                                    threadId = command.optString("threadId"),
+                                    projectId = command.optString("projectId"),
+                                    title = command.optString("title"),
+                                    workspacePath = "/workspace/demo",
+                                    assistantText = "Hi there",
+                                )
+                            ),
+                        )
+                    )
+                }
+            }
+        )
+        val client = MacNativeAndrodexBackendClient(
+            preferences = FakeMacNativeClientPreferences(),
+            transportStack = MacNativeTransportStack(
+                authHttp = FakeMacNativeAuthHttpTransport(),
+                orchestrationHttp = orchestrationHttp,
+                orchestrationWs = FakeMacNativeOrchestrationWsTransport(),
+                sessionStore = FakeMacNativeSessionStore(),
+            ),
+        )
+
+        client.connectWithPairingPayload(samplePairingPayload())
+        val thread = client.startThread("/workspace/demo")
+
+        assertEquals(orchestrationHttp.dispatchedCommands.last().optString("threadId"), thread.id)
+        assertEquals("New conversation", thread.title)
+        assertTrue(orchestrationHttp.fetchSnapshotCalls >= 4)
+    }
+
+    @Test
+    fun startThread_ignoresDeletedProjectsWhenChoosingCreationTarget() = runTest {
+        val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
+            snapshots = ArrayDeque(
+                listOf(
+                    sampleSnapshot(
+                        snapshotSequence = 1L,
+                        projects = listOf(
+                            sampleProject(
+                                projectId = "project-deleted",
+                                title = "Deleted",
+                                workspaceRoot = "/workspace/deleted",
+                                deletedAt = "2026-04-12T10:00:00Z",
+                            ),
+                            sampleProject(
+                                projectId = "project-live",
+                                title = "Live",
+                                workspaceRoot = "/workspace/live",
+                            ),
+                        ),
+                    )
+                )
+            ),
+            onDispatchCommand = { command, transport ->
+                if (command.optString("type") == "thread.create") {
+                    transport.enqueueSnapshot(
+                        sampleSnapshot(
+                            snapshotSequence = 2L,
+                            projects = listOf(
+                                sampleProject(
+                                    projectId = "project-deleted",
+                                    title = "Deleted",
+                                    workspaceRoot = "/workspace/deleted",
+                                    deletedAt = "2026-04-12T10:00:00Z",
+                                ),
+                                sampleProject(
+                                    projectId = "project-live",
+                                    title = "Live",
+                                    workspaceRoot = "/workspace/live",
+                                ),
+                            ),
+                            threads = listOf(
+                                sampleThread(
+                                    threadId = command.optString("threadId"),
+                                    projectId = command.optString("projectId"),
+                                    title = command.optString("title"),
+                                    workspacePath = JSONObject.NULL.toString(),
+                                    assistantText = "",
+                                )
+                            ),
+                        )
+                    )
+                }
+            },
+        )
+        val client = MacNativeAndrodexBackendClient(
+            preferences = FakeMacNativeClientPreferences(),
+            transportStack = MacNativeTransportStack(
+                authHttp = FakeMacNativeAuthHttpTransport(),
+                orchestrationHttp = orchestrationHttp,
+                orchestrationWs = FakeMacNativeOrchestrationWsTransport(),
+                sessionStore = FakeMacNativeSessionStore(),
+            ),
+        )
+
+        client.connectWithPairingPayload(samplePairingPayload())
+        client.startThread(null)
+
+        assertEquals("project-live", orchestrationHttp.dispatchedCommands.last().optString("projectId"))
+    }
+
+    @Test
+    fun listRecentWorkspaces_dropsDeletedActiveWorkspace() = runTest {
+        val orchestrationHttp = FakeMacNativeOrchestrationHttpTransport(
+            snapshots = ArrayDeque(
+                listOf(
+                    sampleSnapshot(
+                        snapshotSequence = 1L,
+                        projects = listOf(
+                            sampleProject(
+                                projectId = "project-deleted",
+                                title = "Deleted",
+                                workspaceRoot = "/workspace/deleted",
+                                deletedAt = "2026-04-12T10:00:00Z",
+                            ),
+                            sampleProject(
+                                projectId = "project-live",
+                                title = "Live",
+                                workspaceRoot = "/workspace/live",
+                            ),
+                        ),
+                    )
+                )
+            ),
+        )
+        val client = MacNativeAndrodexBackendClient(
+            preferences = FakeMacNativeClientPreferences(),
+            transportStack = MacNativeTransportStack(
+                authHttp = FakeMacNativeAuthHttpTransport(),
+                orchestrationHttp = orchestrationHttp,
+                orchestrationWs = FakeMacNativeOrchestrationWsTransport(),
+                sessionStore = FakeMacNativeSessionStore(),
+            ),
+        )
+
+        client.connectWithPairingPayload(samplePairingPayload())
+        client.activateWorkspace("/workspace/deleted")
+        val recent = client.listRecentWorkspaces()
+
+        assertEquals("/workspace/live", recent.activeCwd)
+        assertEquals(listOf("/workspace/live"), recent.recentWorkspaces.map { it.path })
+    }
+
     private fun samplePairingPayload(): String {
         return JSONObject()
             .put("v", 1)
@@ -202,80 +390,99 @@ class MacNativeAndrodexBackendClientTest {
 
     private fun sampleSnapshot(
         snapshotSequence: Long,
+        projects: List<JSONObject> = listOf(sampleProject()),
+        threads: List<JSONObject> = listOf(sampleThread()),
+    ): JSONObject {
+        return JSONObject()
+            .put("snapshotSequence", snapshotSequence)
+            .put("projects", org.json.JSONArray(projects))
+            .put("threads", org.json.JSONArray(threads))
+            .put("updatedAt", "2026-04-12T10:00:01Z")
+    }
+
+    private fun sampleProject(
+        projectId: String = "project-1",
+        title: String = "Demo",
+        workspaceRoot: String = "/workspace/demo",
+        deletedAt: String? = null,
+    ): JSONObject {
+        return JSONObject()
+            .put("id", projectId)
+            .put("title", title)
+            .put("workspaceRoot", workspaceRoot)
+            .put("deletedAt", deletedAt)
+    }
+
+    private fun sampleThread(
+        threadId: String = "thread-1",
+        projectId: String = "project-1",
+        title: String = "Conversation",
+        workspacePath: String = "/workspace/demo",
         assistantText: String = "Hi there",
     ): JSONObject {
-        return JSONObject(
-            """
-                {
-                  "snapshotSequence": $snapshotSequence,
-                  "projects": [
-                    {
-                      "id": "project-1",
-                      "title": "Demo",
-                      "workspaceRoot": "/workspace/demo"
-                    }
-                  ],
-                  "threads": [
-                    {
-                      "id": "thread-1",
-                      "projectId": "project-1",
-                      "title": "Conversation",
-                      "modelSelection": {
-                        "provider": "codex",
-                        "model": "gpt-5.4"
-                      },
-                      "runtimeMode": "full-access",
-                      "interactionMode": "default",
-                      "branch": null,
-                      "worktreePath": "/workspace/demo",
-                      "createdAt": "2026-04-12T10:00:00Z",
-                      "updatedAt": "2026-04-12T10:00:01Z",
-                      "archivedAt": null,
-                      "deletedAt": null,
-                      "latestTurn": {
-                        "turnId": "turn-1",
-                        "state": "running",
-                        "requestedAt": "2026-04-12T10:00:00Z",
-                        "startedAt": "2026-04-12T10:00:00Z",
-                        "completedAt": null,
-                        "assistantMessageId": null
-                      },
-                      "session": {
-                        "threadId": "thread-1",
-                        "status": "running",
-                        "providerName": "codex",
-                        "runtimeMode": "full-access",
-                        "activeTurnId": "turn-1",
-                        "lastError": null,
-                        "updatedAt": "2026-04-12T10:00:01Z"
-                      },
-                      "messages": [
-                        {
-                          "id": "msg-1",
-                          "role": "user",
-                          "text": "Hello",
-                          "turnId": "turn-1",
-                          "streaming": false,
-                          "createdAt": "2026-04-12T10:00:00Z"
-                        },
-                        {
-                          "id": "msg-2",
-                          "role": "assistant",
-                          "text": "$assistantText",
-                          "turnId": "turn-1",
-                          "streaming": true,
-                          "createdAt": "2026-04-12T10:00:01Z"
-                        }
-                      ],
-                      "proposedPlans": [],
-                      "activities": [],
-                      "checkpoints": []
-                    }
-                  ],
-                  "updatedAt": "2026-04-12T10:00:01Z"
-                }
-            """.trimIndent()
-        )
+        return JSONObject()
+            .put("id", threadId)
+            .put("projectId", projectId)
+            .put("title", title)
+            .put(
+                "modelSelection",
+                JSONObject()
+                    .put("provider", "codex")
+                    .put("model", "gpt-5.4")
+            )
+            .put("runtimeMode", "full-access")
+            .put("interactionMode", "default")
+            .put("branch", JSONObject.NULL)
+            .put("worktreePath", workspacePath)
+            .put("createdAt", "2026-04-12T10:00:00Z")
+            .put("updatedAt", "2026-04-12T10:00:01Z")
+            .put("archivedAt", JSONObject.NULL)
+            .put("deletedAt", JSONObject.NULL)
+            .put(
+                "latestTurn",
+                JSONObject()
+                    .put("turnId", "turn-1")
+                    .put("state", "running")
+                    .put("requestedAt", "2026-04-12T10:00:00Z")
+                    .put("startedAt", "2026-04-12T10:00:00Z")
+                    .put("completedAt", JSONObject.NULL)
+                    .put("assistantMessageId", JSONObject.NULL)
+            )
+            .put(
+                "session",
+                JSONObject()
+                    .put("threadId", threadId)
+                    .put("status", "running")
+                    .put("providerName", "codex")
+                    .put("runtimeMode", "full-access")
+                    .put("activeTurnId", "turn-1")
+                    .put("lastError", JSONObject.NULL)
+                    .put("updatedAt", "2026-04-12T10:00:01Z")
+            )
+            .put(
+                "messages",
+                org.json.JSONArray(
+                    listOf(
+                        JSONObject()
+                            .put("id", "msg-1")
+                            .put("role", "user")
+                            .put("text", "Hello")
+                            .put("turnId", "turn-1")
+                            .put("streaming", false)
+                            .put("createdAt", "2026-04-12T10:00:00Z"),
+                        JSONObject()
+                            .put("id", "msg-2")
+                            .put("role", "assistant")
+                            .put("text", assistantText)
+                            .put("turnId", "turn-1")
+                            .put("streaming", true)
+                            .put("createdAt", "2026-04-12T10:00:01Z"),
+                    )
+                )
+            )
+            .put("proposedPlans", org.json.JSONArray())
+            .put("activities", org.json.JSONArray())
+            .put("checkpoints", org.json.JSONArray())
     }
 }
 
@@ -397,25 +604,37 @@ private class FakeMacNativeAuthHttpTransport(
 
 private class FakeMacNativeOrchestrationHttpTransport(
     private val snapshots: ArrayDeque<JSONObject> = ArrayDeque(),
+    private val onDispatchCommand: ((JSONObject, FakeMacNativeOrchestrationHttpTransport) -> Unit)? = null,
 ) : MacNativeOrchestrationHttpTransport {
     var fetchSnapshotCalls = 0
     val dispatchedCommands = mutableListOf<JSONObject>()
+    private var nextSequence = 1L
+
+    fun enqueueSnapshot(snapshot: JSONObject) {
+        snapshots.addLast(JSONObject(snapshot.toString()))
+    }
 
     override suspend fun fetchSnapshot(session: MacNativeBearerSession): JSONObject {
         fetchSnapshotCalls += 1
-        return when {
+        val snapshot = when {
             snapshots.isEmpty() -> JSONObject().put("snapshotSequence", 0).put("projects", org.json.JSONArray()).put("threads", org.json.JSONArray()).put("updatedAt", "2026-04-12T10:00:01Z")
             snapshots.size == 1 -> JSONObject(snapshots.first().toString())
             else -> JSONObject(snapshots.removeFirst().toString())
         }
+        nextSequence = maxOf(nextSequence, snapshot.optLong("snapshotSequence", 0L) + 1L)
+        return snapshot
     }
 
     override suspend fun dispatchCommand(
         session: MacNativeBearerSession,
         command: JSONObject,
     ): JSONObject {
-        dispatchedCommands += JSONObject(command.toString())
-        return JSONObject().put("sequence", fetchSnapshotCalls + dispatchedCommands.size)
+        val copiedCommand = JSONObject(command.toString())
+        dispatchedCommands += copiedCommand
+        onDispatchCommand?.invoke(copiedCommand, this)
+        val sequence = nextSequence
+        nextSequence += 1L
+        return JSONObject().put("sequence", sequence)
     }
 }
 

@@ -1,6 +1,5 @@
 package io.androdex.android.service
 
-import android.util.Log
 import io.androdex.android.AppEnvironment
 import io.androdex.android.ThreadOpenPerfLogger
 import io.androdex.android.data.AndrodexRepositoryContract
@@ -158,9 +157,18 @@ data class AndrodexServiceState(
     val missingNotificationThreadPrompt: MissingNotificationThreadPrompt? = null,
     val skillInventoryVersion: Long = 0L,
     val errorMessage: String? = null,
-    val pendingApproval: ApprovalRequest? = null,
+    val pendingApprovalsByThread: Map<String, Map<String, ApprovalRequest>> = emptyMap(),
     val pendingToolInputsByThread: Map<String, Map<String, ToolUserInputRequest>> = emptyMap(),
 ) {
+    val pendingApproval: ApprovalRequest?
+        get() {
+            val selectedThreadKey = selectedThreadId?.let(::approvalThreadKey)
+            if (selectedThreadKey != null) {
+                return pendingApprovalsByThread[selectedThreadKey]?.values?.firstOrNull()
+            }
+            return pendingApprovalsByThread.values.asSequence().flatMap { it.values.asSequence() }.firstOrNull()
+        }
+
     val timelineByThread: Map<String, List<ConversationMessage>>
         get() = threadTimelineStateByThread.mapValues { (_, timelineState) -> timelineState.rawMessages }
 
@@ -340,6 +348,10 @@ class AndrodexService(
         } else {
             reportError("No QR code was captured.")
         }
+    }
+
+    fun clearFreshPairingAttempt() {
+        stateFlow.update { it.copy(freshPairingAttempt = null) }
     }
 
     fun failFreshPairingAttempt() {
@@ -887,9 +899,12 @@ class AndrodexService(
     }
 
     suspend fun selectHostRuntimeTarget(targetKind: String) {
+        val normalizedTargetKind = targetKind.trim().takeIf { it.isNotEmpty() }
+            ?: throw IllegalArgumentException("Runtime target is required.")
+        ensureHostRuntimeTargetSelectable(normalizedTargetKind)
         advanceRuntimeTargetScopedContext()
         try {
-            repository.setHostRuntimeTarget(targetKind)
+            repository.setHostRuntimeTarget(normalizedTargetKind)
         } catch (error: Throwable) {
             val expectedContextRevision = threadSessionContextRevision.get()
             runCatching { loadRuntimeConfig(expectedContextRevision = expectedContextRevision) }
@@ -1270,6 +1285,7 @@ class AndrodexService(
                 },
                 focusedTurnId = null,
                 missingNotificationThreadPrompt = null,
+                pendingApprovalsByThread = emptyMap(),
                 pendingToolInputsByThread = emptyMap(),
             )
         }
@@ -1470,12 +1486,6 @@ class AndrodexService(
                 durationMs = System.currentTimeMillis() - totalStartedAt,
                 extra = "incoming=${result.messages.size} merged=$mergedMessageCount",
             )
-            if (loadDurationMs >= slowThreadLoadLogThresholdMs || mergeDurationMs >= slowThreadLoadLogThresholdMs) {
-                Log.i(
-                    logTag,
-                    "loadThreadIntoState thread=$threadId hostLoadMs=$loadDurationMs mergeMs=$mergeDurationMs incoming=${result.messages.size} merged=$mergedMessageCount",
-                )
-            }
             syncThreadRunStateFromSnapshot(threadId, result.runSnapshot)
         } finally {
             if (trackedSelectedThreadLoad) {
@@ -1672,6 +1682,8 @@ class AndrodexService(
                     previous = previousState.hostRuntimeMetadata,
                     next = update.runtimeMetadata,
                 )
+                val shouldSyncConnectedSession =
+                    previousStatus != ConnectionStatus.CONNECTED || runtimeTargetChanged
                 val freshPairingAttempt = previousState.freshPairingAttempt
                 if (freshPairingAttempt != null) {
                     if (update.status == ConnectionStatus.RETRYING_SAVED_PAIRING) {
@@ -1695,7 +1707,11 @@ class AndrodexService(
                         connectionDetail = update.detail,
                         secureFingerprint = update.fingerprint ?: it.secureFingerprint,
                         hostRuntimeMetadata = resolveHostRuntimeMetadata(update.runtimeMetadata),
-                        pendingApproval = if (update.status == ConnectionStatus.CONNECTED) it.pendingApproval else null,
+                        pendingApprovalsByThread = if (update.status == ConnectionStatus.CONNECTED) {
+                            it.pendingApprovalsByThread
+                        } else {
+                            emptyMap()
+                        },
                         errorMessage = if (
                             shouldClearTransientTransportErrorOnConnectionUpdate(
                                 message = it.errorMessage,
@@ -1715,12 +1731,14 @@ class AndrodexService(
                         if (previousStatus != ConnectionStatus.CONNECTED && !runtimeTargetChanged) {
                             invalidateHydratedThreads()
                         }
-                        val expectedContextRevision = threadSessionContextRevision.get()
-                        scope.launch {
-                            syncConnectedSessionState(
-                                expectedContextRevision = expectedContextRevision,
-                                includeRuntimeConfig = true,
-                            )
+                        if (shouldSyncConnectedSession) {
+                            val expectedContextRevision = threadSessionContextRevision.get()
+                            scope.launch {
+                                syncConnectedSessionState(
+                                    expectedContextRevision = expectedContextRevision,
+                                    includeRuntimeConfig = true,
+                                )
+                            }
                         }
                     }
 
@@ -2082,7 +2100,15 @@ class AndrodexService(
             }
 
             is ClientUpdate.ApprovalRequested -> {
-                stateFlow.update { it.copy(pendingApproval = update.request) }
+                stateFlow.update { current ->
+                    val threadKey = approvalThreadKey(update.request.threadId)
+                    val existingForThread = current.pendingApprovalsByThread[threadKey].orEmpty()
+                    current.copy(
+                        pendingApprovalsByThread = current.pendingApprovalsByThread + (
+                            threadKey to (existingForThread + (update.request.idValue.toString() to update.request))
+                        )
+                    )
+                }
             }
 
             is ClientUpdate.ToolUserInputRequested -> {
@@ -2114,12 +2140,13 @@ class AndrodexService(
             is ClientUpdate.ApprovalCleared -> {
                 stateFlow.update { current ->
                     val clearedRequestId = update.requestId?.trim()?.takeIf { it.isNotEmpty() }
-                    if (clearedRequestId != null
-                        && current.pendingApproval?.idValue?.toString() != clearedRequestId
-                    ) {
-                        current
+                    if (clearedRequestId == null) {
+                        current.copy(pendingApprovalsByThread = emptyMap())
                     } else {
-                        current.copy(pendingApproval = null)
+                        current.copy(
+                            pendingApprovalsByThread = current.pendingApprovalsByThread
+                                .removePendingApprovalRequestAcrossThreads(clearedRequestId)
+                        )
                     }
                 }
             }
@@ -2811,7 +2838,7 @@ class AndrodexService(
             pendingNotificationOpenTurnId = null,
             focusedTurnId = null,
             missingNotificationThreadPrompt = null,
-            pendingApproval = null,
+            pendingApprovalsByThread = emptyMap(),
             pendingToolInputsByThread = emptyMap(),
         )
     }
@@ -2831,7 +2858,7 @@ class AndrodexService(
     private fun resolveHostRuntimeMetadata(metadata: HostRuntimeMetadata?): HostRuntimeMetadata {
         val runtimeTarget = metadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() }
         val backendProvider = metadata?.backendProvider?.trim()?.takeIf { it.isNotEmpty() }
-        if (runtimeTarget != null || backendProvider != null) {
+        if (runtimeTarget != null || backendProvider != null || metadata?.runtimeTargetOptions?.isNotEmpty() == true) {
             return metadata
         }
         return HostRuntimeMetadata(
@@ -2839,6 +2866,22 @@ class AndrodexService(
             runtimeTargetDisplayName = legacyDefaultRuntimeTargetDisplayName,
             backendProvider = legacyDefaultRuntimeTargetKey,
             backendProviderDisplayName = legacyDefaultRuntimeTargetDisplayName,
+        )
+    }
+
+    private fun ensureHostRuntimeTargetSelectable(targetKind: String) {
+        val option = stateFlow.value.hostRuntimeMetadata
+            ?.runtimeTargetOptions
+            ?.firstOrNull { candidate ->
+                candidate.value.trim().equals(targetKind, ignoreCase = true)
+            }
+            ?: return
+        if (option.selected || option.enabled) {
+            return
+        }
+        throw IllegalStateException(
+            option.availabilityMessage
+                ?: "${option.title} is not ready yet."
         )
     }
 
@@ -2919,11 +2962,12 @@ class AndrodexService(
 
     private suspend fun reconcileStaleApproval(request: ApprovalRequest): Boolean {
         stateFlow.update { current ->
-            if (current.pendingApproval?.idValue != request.idValue) {
-                current
-            } else {
-                current.copy(pendingApproval = null)
-            }
+            current.copy(
+                pendingApprovalsByThread = current.pendingApprovalsByThread.removePendingApprovalRequest(
+                    threadId = approvalThreadKey(request.threadId),
+                    requestId = request.idValue.toString(),
+                )
+            )
         }
         return refreshThreadAfterStaleAction(request.threadId)
     }
@@ -3701,6 +3745,32 @@ private fun ThreadTimelineState.withRawMessages(rawMessages: List<ConversationMe
         threadId = threadId,
         rawMessages = rawMessages,
     )
+}
+
+private fun approvalThreadKey(threadId: String?): String {
+    return threadId?.trim()?.takeIf { it.isNotEmpty() } ?: "__global__"
+}
+
+private fun Map<String, Map<String, ApprovalRequest>>.removePendingApprovalRequest(
+    threadId: String,
+    requestId: String,
+): Map<String, Map<String, ApprovalRequest>> {
+    val requestsForThread = this[threadId].orEmpty() - requestId
+    return if (requestsForThread.isEmpty()) {
+        this - threadId
+    } else {
+        this + (threadId to requestsForThread)
+    }
+}
+
+private fun Map<String, Map<String, ApprovalRequest>>.removePendingApprovalRequestAcrossThreads(
+    requestId: String,
+): Map<String, Map<String, ApprovalRequest>> {
+    var updated = this
+    for (threadId in keys) {
+        updated = updated.removePendingApprovalRequest(threadId, requestId)
+    }
+    return updated
 }
 
 private fun Map<String, Map<String, ToolUserInputRequest>>.removePendingToolInputRequest(

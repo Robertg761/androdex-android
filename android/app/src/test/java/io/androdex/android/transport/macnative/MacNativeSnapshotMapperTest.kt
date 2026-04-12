@@ -42,6 +42,22 @@ class MacNativeSnapshotMapperTest {
     }
 
     @Test
+    fun pendingState_ignoresDeletedThreads() {
+        val pending = deriveMacNativePendingState(
+            sampleSnapshot(
+                threadOverrides = """
+                    {
+                      "deletedAt": "2026-04-12T10:00:02Z"
+                    }
+                """.trimIndent()
+            )
+        )
+
+        assertTrue(pending.approvals.isEmpty())
+        assertTrue(pending.toolInputsByThread.isEmpty())
+    }
+
+    @Test
     fun snapshotMapping_blocksMutationsForArchivedStoppedThreads() {
         val snapshot = sampleSnapshot(
             threadOverrides = """
@@ -83,7 +99,63 @@ class MacNativeSnapshotMapperTest {
         assertTrue(thread.threadCapabilities?.checkpointRollback?.supported == false)
     }
 
+    @Test
+    fun snapshotMapping_treatsLiteralNullStringsAsAbsentThreadTombstones() {
+        val snapshot = sampleSnapshot(
+            threadOverrides = """
+                {
+                  "archivedAt": "null",
+                  "deletedAt": "null"
+                }
+            """.trimIndent()
+        )
+
+        val thread = mapMacNativeSnapshotToThreadSummaries(snapshot).first()
+        val pending = deriveMacNativePendingState(snapshot)
+
+        assertTrue(thread.threadCapabilities?.turnStart?.supported == true)
+        assertTrue(thread.threadCapabilities?.backgroundTerminalCleanup?.supported == true)
+        assertEquals(1, pending.approvals.size)
+        assertEquals(1, pending.toolInputsByThread["thread-1"]?.size)
+    }
+
+    @Test
+    fun snapshotMapping_treatsLiteralNullWorktreePathAsAbsent() {
+        val snapshot = sampleSnapshot(
+            threadOverrides = """
+                {
+                  "worktreePath": "null"
+                }
+            """.trimIndent()
+        )
+
+        val thread = mapMacNativeSnapshotToThreadSummaries(snapshot).first()
+
+        assertEquals("/workspace/demo", thread.cwd)
+    }
+
+    @Test
+    fun snapshotMapping_ignoresDeletedProjectWorkspaceRoots() {
+        val snapshot = sampleSnapshot(
+            projectOverrides = """
+                {
+                  "deletedAt": "2026-04-12T10:00:02Z"
+                }
+            """.trimIndent(),
+            threadOverrides = """
+                {
+                  "worktreePath": null
+                }
+            """.trimIndent()
+        )
+
+        val thread = mapMacNativeSnapshotToThreadSummaries(snapshot).first()
+
+        assertEquals(null, thread.cwd)
+    }
+
     private fun sampleSnapshot(
+        projectOverrides: String? = null,
         threadOverrides: String? = null,
     ): JSONObject {
         return JSONObject(
@@ -176,6 +248,17 @@ class MacNativeSnapshotMapperTest {
                 }
             """.trimIndent()
         ).also { snapshot ->
+            projectOverrides?.let(::JSONObject)?.let { overrides ->
+                val project = snapshot
+                    .optJSONArray("projects")
+                    ?.optJSONObject(0)
+                    ?: return@let
+                val keys = overrides.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    project.put(key, overrides.get(key))
+                }
+            }
             val overrides = threadOverrides?.let(::JSONObject) ?: return@also
             val thread = snapshot
                 .optJSONArray("threads")

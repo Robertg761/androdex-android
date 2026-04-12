@@ -60,6 +60,11 @@ internal fun deriveMacNativePendingState(snapshot: JSONObject): MacNativePending
     val toolInputsByThread = linkedMapOf<String, MutableList<ToolUserInputRequest>>()
     snapshot.threadsArray().forEach { thread ->
         val threadId = thread.optString("id").trim().ifEmpty { return@forEach }
+        val archivedAt = thread.optionalServerString("archivedAt")
+        val deletedAt = thread.optionalServerString("deletedAt")
+        if (archivedAt != null || deletedAt != null) {
+            return@forEach
+        }
         val activities = thread.optJSONArray("activities") ?: JSONArray()
         val pendingApprovalsByRequestId = linkedMapOf<String, ApprovalRequest>()
         val pendingInputsByRequestId = linkedMapOf<String, ToolUserInputRequest>()
@@ -163,9 +168,8 @@ private fun mapMacNativeThreadSummary(
                 .lastOrNull()
         }
     val preview = latestMessage?.optString("text")?.trim()?.ifEmpty { null }
-    val cwd = thread.optString("worktreePath").trim().ifEmpty {
-        project?.optString("workspaceRoot")?.trim().orEmpty()
-    }.ifEmpty { null }
+    val cwd = thread.optionalServerString("worktreePath")
+        ?: project?.optionalServerString("workspaceRoot")
     return ThreadSummary(
         id = id,
         title = thread.optString("title").trim().ifEmpty { "Conversation" },
@@ -188,8 +192,8 @@ private fun describeMacNativeThreadCapabilities(
     provider: String?,
     workspacePath: String?,
 ): ThreadCapabilities {
-    val archivedAt = thread.optString("archivedAt").trim().ifEmpty { null }
-    val deletedAt = thread.optString("deletedAt").trim().ifEmpty { null }
+    val archivedAt = thread.optionalServerString("archivedAt")
+    val deletedAt = thread.optionalServerString("deletedAt")
     val latestTurnState = thread.optJSONObject("latestTurn")?.optString("state")?.trim()?.ifEmpty { null }
     val session = thread.optJSONObject("session")
     val sessionStatus = session?.optString("status")?.trim()?.ifEmpty { null }
@@ -296,6 +300,9 @@ private fun JSONObject.projectsById(): Map<String, JSONObject> = (optJSONArray("
         buildMap {
             for (index in 0 until projects.length()) {
                 val project = projects.optJSONObject(index) ?: continue
+                if (project.isDeletedMacNativeProject()) {
+                    continue
+                }
                 val id = project.optString("id").trim().ifEmpty { continue }
                 put(id, project)
             }
@@ -311,6 +318,20 @@ private fun JSONObject.threadsArray(): List<JSONObject> {
         }
     }
 }
+
+private fun JSONObject.optionalServerString(key: String): String? {
+    val raw = opt(key) ?: return null
+    if (raw === JSONObject.NULL) {
+        return null
+    }
+    return raw.toString()
+        .trim()
+        .takeUnless { value ->
+            value.isEmpty() || value.equals("null", ignoreCase = true)
+        }
+}
+
+private fun JSONObject.isDeletedMacNativeProject(): Boolean = optionalServerString("deletedAt") != null
 
 private fun JSONArray.toToolUserInputQuestions(): List<ToolUserInputQuestion> {
     return buildList {
