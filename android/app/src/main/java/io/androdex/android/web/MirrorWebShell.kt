@@ -904,18 +904,26 @@ internal fun androidThreadTapBridgeScript(): String =
 
           const activateThread = (row) => {
             row.focus();
-            row.dispatchEvent(new KeyboardEvent("keydown", {
-              key: "Enter",
-              code: "Enter",
-              bubbles: true
-            }));
-            row.dispatchEvent(new KeyboardEvent("keyup", {
-              key: "Enter",
-              code: "Enter",
-              bubbles: true
-            }));
+            window.requestAnimationFrame(() => {
+              if (typeof row.click === "function") {
+                row.click();
+              }
 
-            closeSidebarAfterAction(180);
+              window.setTimeout(() => {
+                row.dispatchEvent(new KeyboardEvent("keydown", {
+                  key: "Enter",
+                  code: "Enter",
+                  bubbles: true
+                }));
+                row.dispatchEvent(new KeyboardEvent("keyup", {
+                  key: "Enter",
+                  code: "Enter",
+                  bubbles: true
+                }));
+              }, 40);
+            });
+
+            closeSidebarAfterAction(220);
           };
 
           const rows = Array.from(
@@ -933,6 +941,10 @@ internal fun androidThreadTapBridgeScript(): String =
             row.addEventListener(
               "click",
               (event) => {
+                if (!event.isTrusted) {
+                  return;
+                }
+
                 if (nowWithinDebounce(row, "androdexAndroidTapAt", 700)) {
                   event.preventDefault();
                   event.stopPropagation();

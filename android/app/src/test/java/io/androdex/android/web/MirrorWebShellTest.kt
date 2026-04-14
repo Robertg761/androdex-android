@@ -69,5 +69,7 @@ class MirrorWebShellTest {
         assertTrue(script.contains("position\", \"sticky\""))
         assertTrue(script.contains("scroll-padding-top"))
         assertTrue(script.contains("MutationObserver"))
+        assertTrue(script.contains("if (!event.isTrusted)"))
+        assertTrue(script.contains("if (typeof row.click === \"function\")"))
     }
 }
