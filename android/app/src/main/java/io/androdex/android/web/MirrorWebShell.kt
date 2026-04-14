@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Message
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -23,12 +25,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -58,8 +58,6 @@ import androidx.core.content.FileProvider
 import io.androdex.android.BuildConfig
 import io.androdex.android.MirrorShellUiState
 import io.androdex.android.pairing.isAllowedAppUrl
-import io.androdex.android.ui.shared.RemodexButton
-import io.androdex.android.ui.shared.RemodexButtonStyle
 import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.shared.RemodexPageHeader
 import io.androdex.android.ui.shared.remodexBottomSafeAreaInsets
@@ -93,6 +91,7 @@ fun MirrorWebShell(
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var webView by remember(pairedOrigin) { mutableStateOf<WebView?>(null) }
+    var popupWebView by remember(pairedOrigin) { mutableStateOf<WebView?>(null) }
     val openThreads: () -> Unit = {
         showHomeAssist = false
         webView?.openSidebarInPage()
@@ -183,6 +182,9 @@ fun MirrorWebShell(
 
     DisposableEffect(pairedOrigin) {
         onDispose {
+            popupWebView?.stopLoading()
+            popupWebView?.destroy()
+            popupWebView = null
             webView?.stopLoading()
             webView?.destroy()
             webView = null
@@ -204,13 +206,20 @@ fun MirrorWebShell(
         }
     }
 
+    val forwardPopupNavigation: (String, WebView?) -> Unit = { url, targetView ->
+        activeLoadUrl = url
+        isLoading = true
+        loadError = null
+        showHomeAssist = false
+        (targetView ?: webView)?.loadUrl(url)
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         contentWindowInsets = remodexBottomSafeAreaInsets(),
         topBar = {
             MirrorShellTopBar(
                 displayLabel = state.displayLabel ?: pairedOrigin,
-                onOpenThreads = openThreads,
                 onReload = webView?.let { currentWebView -> { currentWebView.reload() } },
                 onClearPairing = onClearPairing,
             )
@@ -230,6 +239,88 @@ fun MirrorWebShell(
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         webChromeClient = object : WebChromeClient() {
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?,
+                            ): Boolean {
+                                val openerView = view ?: return false
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+
+                                popupWebView?.stopLoading()
+                                popupWebView?.destroy()
+
+                                lateinit var proxyWebView: WebView
+                                proxyWebView = WebView(openerView.context).apply {
+                                    configureMirrorSettings()
+                                    webViewClient = object : WebViewClient() {
+                                        private var forwardedUrl: String? = null
+
+                                        private fun consume(url: String?): Boolean {
+                                            val targetUrl = normalizeMirrorNavigationUrl(url) ?: return false
+                                            if (targetUrl == forwardedUrl) {
+                                                return true
+                                            }
+                                            return when (classifyMirrorNavigation(targetUrl, pairedOrigin)) {
+                                                MirrorNavigationTarget.Ignore -> false
+                                                MirrorNavigationTarget.External -> {
+                                                    forwardedUrl = targetUrl
+                                                    context.openExternalUrl(targetUrl)
+                                                    proxyWebView.destroy()
+                                                    if (popupWebView === proxyWebView) {
+                                                        popupWebView = null
+                                                    }
+                                                    true
+                                                }
+                                                MirrorNavigationTarget.InApp -> {
+                                                    forwardedUrl = targetUrl
+                                                    openerView.post {
+                                                        forwardPopupNavigation(targetUrl, openerView)
+                                                    }
+                                                    proxyWebView.stopLoading()
+                                                    proxyWebView.destroy()
+                                                    if (popupWebView === proxyWebView) {
+                                                        popupWebView = null
+                                                    }
+                                                    true
+                                                }
+                                            }
+                                        }
+
+                                        override fun shouldOverrideUrlLoading(
+                                            view: WebView?,
+                                            request: WebResourceRequest?,
+                                        ): Boolean {
+                                            return consume(request?.url?.toString())
+                                        }
+
+                                        override fun onPageStarted(
+                                            view: WebView?,
+                                            url: String?,
+                                            favicon: Bitmap?,
+                                        ) {
+                                            if (!consume(url)) {
+                                                super.onPageStarted(view, url, favicon)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                popupWebView = proxyWebView
+                                transport.webView = proxyWebView
+                                resultMsg.sendToTarget()
+                                return true
+                            }
+
+                            override fun onCloseWindow(window: WebView?) {
+                                if (window === popupWebView) {
+                                    popupWebView?.stopLoading()
+                                    popupWebView?.destroy()
+                                    popupWebView = null
+                                }
+                            }
+
                             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                                 if (consoleMessage != null) {
                                     Log.d(
@@ -291,14 +382,17 @@ fun MirrorWebShell(
                                 if (!request.isForMainFrame) {
                                     return false
                                 }
-                                if (isAllowedAppUrl(url, pairedOrigin)) {
-                                    return false
+                                return when (classifyMirrorNavigation(url, pairedOrigin)) {
+                                    MirrorNavigationTarget.InApp,
+                                    MirrorNavigationTarget.Ignore -> false
+                                    MirrorNavigationTarget.External -> {
+                                        context.openExternalUrl(url)
+                                        true
+                                    }
                                 }
-                                context.openExternalUrl(url)
-                                return true
                             }
 
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 activeLoadUrl = url ?: activeLoadUrl
                                 isLoading = true
                                 loadError = null
@@ -452,7 +546,7 @@ fun MirrorWebShell(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            text = "No thread is open yet. Use Threads in the top bar to pick or create one.",
+                            text = "No thread is open yet. Use the thread list below to pick or create one.",
                             modifier = Modifier.padding(top = 8.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
@@ -480,7 +574,6 @@ fun MirrorWebShell(
 @Composable
 private fun MirrorShellTopBar(
     displayLabel: String,
-    onOpenThreads: () -> Unit,
     onReload: (() -> Unit)?,
     onClearPairing: () -> Unit,
 ) {
@@ -491,24 +584,6 @@ private fun MirrorShellTopBar(
     RemodexPageHeader(
         title = "Androdex",
         subtitle = displayLabel,
-        navigation = {
-            RemodexButton(
-                onClick = onOpenThreads,
-                style = RemodexButtonStyle.Secondary,
-                contentPadding = PaddingValues(horizontal = geometry.spacing14, vertical = 0.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Menu,
-                    contentDescription = null,
-                    tint = colors.textPrimary,
-                    modifier = Modifier.size(geometry.iconSize),
-                )
-                Text(
-                    text = "Threads",
-                    modifier = Modifier.padding(start = geometry.spacing8),
-                )
-            }
-        },
         actions = {
             RemodexIconButton(
                 onClick = { onReload?.invoke() },
@@ -598,8 +673,24 @@ private fun WebView.openSidebarInPage() {
 
 private fun WebView.installAndroidThreadTapBridge() {
     evaluateJavascript(
-        """
+        androidThreadTapBridgeScript(),
+        null,
+    )
+}
+
+internal fun androidThreadTapBridgeScript(): String =
+    """
         (function () {
+          const nowWithinDebounce = (node, key, thresholdMs) => {
+            const now = Date.now();
+            const lastValue = Number(node.dataset[key] || "0");
+            if (now - lastValue < thresholdMs) {
+              return true;
+            }
+            node.dataset[key] = String(now);
+            return false;
+          };
+
           const findToggleSidebarButton = () => {
             const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
               const text = [
@@ -612,6 +703,157 @@ private fun WebView.installAndroidThreadTapBridge() {
             return matches.find((button) => button.getBoundingClientRect().width > 0) || matches[0] || null;
           };
 
+          const getHeaderActionText = (node) => {
+            if (!(node instanceof HTMLElement)) {
+              return "";
+            }
+            return [
+              node.innerText || "",
+              node.getAttribute("aria-label") || "",
+              node.getAttribute("title") || "",
+              node.getAttribute("aria-description") || "",
+            ].join(" ");
+          };
+
+          const findViewportContentRoot = () => {
+            return Array.from(document.querySelectorAll("div")).find((node) => {
+              return typeof node.className === "string" &&
+                node.className.includes("flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background");
+            }) || null;
+          };
+
+          const scoreHeaderCandidate = (node, toggle) => {
+            if (!(node instanceof HTMLElement) || !(toggle instanceof HTMLElement) || !node.contains(toggle)) {
+              return Number.NEGATIVE_INFINITY;
+            }
+
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0 || rect.height > Math.max(window.innerHeight * 0.45, 220)) {
+              return Number.NEGATIVE_INFINITY;
+            }
+
+            let score = 0;
+            if (node.tagName === "HEADER") {
+              score += 8;
+            }
+            if (node.querySelector("h1, h2, h3, [role='heading']")) {
+              score += 6;
+            }
+
+            const buttonTexts = Array.from(node.querySelectorAll("button"))
+              .map((button) => getHeaderActionText(button))
+              .join(" ");
+            if (/git/i.test(buttonTexts)) {
+              score += 6;
+            }
+            if (/share|fork|review|stop|new thread/i.test(buttonTexts)) {
+              score += 3;
+            }
+
+            const buttonCount = node.querySelectorAll("button").length;
+            if (buttonCount >= 2) {
+              score += 3;
+            }
+            if (rect.top <= 32) {
+              score += 2;
+            }
+            if (rect.top >= -8) {
+              score += 1;
+            }
+
+            return score;
+          };
+
+          const findPrimaryThreadHeader = () => {
+            const toggle = findToggleSidebarButton();
+            if (!(toggle instanceof HTMLElement)) {
+              return null;
+            }
+
+            const candidates = [];
+            let current = toggle.parentElement;
+            while (current instanceof HTMLElement && candidates.length < 8) {
+              candidates.push(current);
+              if (current.tagName === "MAIN") {
+                break;
+              }
+              current = current.parentElement;
+            }
+
+            const ranked = candidates
+              .map((node) => ({ node, score: scoreHeaderCandidate(node, toggle) }))
+              .filter((entry) => Number.isFinite(entry.score))
+              .sort((left, right) => {
+                if (right.score !== left.score) {
+                  return right.score - left.score;
+                }
+                return left.node.getBoundingClientRect().top - right.node.getBoundingClientRect().top;
+              });
+
+            return ranked[0]?.node || toggle.closest("header") || toggle.parentElement;
+          };
+
+          const pinPrimaryHeader = () => {
+            const header = findPrimaryThreadHeader();
+            if (!(header instanceof HTMLElement)) {
+              return false;
+            }
+
+            const backgroundColor = window.getComputedStyle(header).backgroundColor;
+            const fallbackBackground = window.getComputedStyle(document.body).backgroundColor;
+            if (backgroundColor === "rgba(0, 0, 0, 0)" || backgroundColor === "transparent") {
+              header.style.setProperty(
+                "background",
+                fallbackBackground && fallbackBackground !== "rgba(0, 0, 0, 0)" ? fallbackBackground : "#0b0b0c",
+                "important",
+              );
+            }
+
+            header.style.setProperty("position", "sticky", "important");
+            header.style.setProperty("top", "0", "important");
+            header.style.setProperty("z-index", "80", "important");
+            header.style.setProperty("transform", "translateZ(0)", "important");
+            header.style.setProperty("overflow", "visible", "important");
+            header.style.setProperty("box-sizing", "border-box", "important");
+            header.style.setProperty("align-self", "stretch", "important");
+            header.style.setProperty("max-width", "100%", "important");
+            header.style.setProperty("backdrop-filter", "blur(18px)", "important");
+            header.style.setProperty("-webkit-backdrop-filter", "blur(18px)", "important");
+
+            const scrollRoot = findViewportContentRoot();
+            if (scrollRoot instanceof HTMLElement) {
+              scrollRoot.style.setProperty(
+                "scroll-padding-top",
+                Math.max(header.getBoundingClientRect().height, header.offsetHeight, 0) + "px",
+                "important",
+              );
+            }
+
+            let parent = header.parentElement;
+            let depth = 0;
+            while (parent instanceof HTMLElement && parent !== scrollRoot && depth < 5) {
+              parent.style.setProperty("overflow", "visible", "important");
+              parent = parent.parentElement;
+              depth += 1;
+            }
+
+            return true;
+          };
+
+          const scheduleLayoutRepair = (() => {
+            let frameHandle = 0;
+            return () => {
+              if (frameHandle !== 0) {
+                return;
+              }
+              frameHandle = window.requestAnimationFrame(() => {
+                frameHandle = 0;
+                restoreViewportLayout();
+                pinPrimaryHeader();
+              });
+            };
+          })();
+
           const restoreViewportLayout = () => {
             const px = window.innerHeight + "px";
             const nodes = [
@@ -620,10 +862,7 @@ private fun WebView.installAndroidThreadTapBridge() {
               document.getElementById("root"),
               document.querySelector('[data-slot="sidebar-wrapper"]'),
               document.querySelector("main"),
-              Array.from(document.querySelectorAll("div")).find((node) => {
-                return typeof node.className === "string" &&
-                  node.className.includes("flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background");
-              }),
+              findViewportContentRoot(),
             ];
 
             nodes.forEach((node) => {
@@ -646,7 +885,21 @@ private fun WebView.installAndroidThreadTapBridge() {
             }
             if (content instanceof HTMLElement) {
               content.style.setProperty("overflow-y", "auto", "important");
+              content.style.setProperty("overscroll-behavior", "contain", "important");
             }
+          };
+
+          const closeSidebarAfterAction = (delayMs) => {
+            window.setTimeout(() => {
+              const toggle = findToggleSidebarButton();
+              if (toggle instanceof HTMLElement) {
+                toggle.click();
+              }
+            }, delayMs);
+
+            window.setTimeout(() => {
+              restoreViewportLayout();
+            }, delayMs + 140);
           };
 
           const activateThread = (row) => {
@@ -662,16 +915,7 @@ private fun WebView.installAndroidThreadTapBridge() {
               bubbles: true
             }));
 
-            window.setTimeout(() => {
-              const toggle = findToggleSidebarButton();
-              if (toggle instanceof HTMLElement) {
-                toggle.click();
-              }
-            }, 180);
-
-            window.setTimeout(() => {
-              restoreViewportLayout();
-            }, 320);
+            closeSidebarAfterAction(180);
           };
 
           const rows = Array.from(
@@ -689,15 +933,12 @@ private fun WebView.installAndroidThreadTapBridge() {
             row.addEventListener(
               "click",
               (event) => {
-                const now = Date.now();
-                const lastActivatedAt = Number(row.dataset.androdexAndroidTapAt || "0");
-                if (now - lastActivatedAt < 700) {
+                if (nowWithinDebounce(row, "androdexAndroidTapAt", 700)) {
                   event.preventDefault();
                   event.stopPropagation();
                   return;
                 }
 
-                row.dataset.androdexAndroidTapAt = String(now);
                 event.preventDefault();
                 event.stopPropagation();
                 activateThread(row);
@@ -706,12 +947,60 @@ private fun WebView.installAndroidThreadTapBridge() {
             );
           });
 
-          return rows.length;
+          const createButtons = Array.from(document.querySelectorAll("button")).filter((button) => {
+            const text = [
+              button.innerText || "",
+              button.getAttribute("aria-label") || "",
+              button.getAttribute("title") || "",
+              button.getAttribute("aria-description") || "",
+            ].join(" ");
+            return /create new thread in/i.test(text);
+          });
+
+          createButtons.forEach((button) => {
+            if (!(button instanceof HTMLElement) || button.dataset.androdexAndroidCreateBound === "1") {
+              return;
+            }
+
+            button.dataset.androdexAndroidCreateBound = "1";
+            button.addEventListener(
+              "click",
+              (event) => {
+                if (nowWithinDebounce(button, "androdexAndroidCreateAt", 700)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+
+                closeSidebarAfterAction(260);
+              },
+              true,
+            );
+          });
+
+          if (document.body instanceof HTMLElement && document.body.dataset.androdexAndroidLayoutObserved !== "1") {
+            const observer = new MutationObserver(() => {
+              scheduleLayoutRepair();
+            });
+            observer.observe(document.body, {
+              childList: true,
+              subtree: true,
+            });
+            document.body.dataset.androdexAndroidLayoutObserved = "1";
+          }
+
+          if (window.__androdexAndroidLayoutResizeBound !== true) {
+            window.addEventListener("resize", scheduleLayoutRepair, { passive: true });
+            window.addEventListener("orientationchange", scheduleLayoutRepair, { passive: true });
+            window.__androdexAndroidLayoutResizeBound = true;
+          }
+
+          restoreViewportLayout();
+          pinPrimaryHeader();
+
+          return rows.length + createButtons.length;
         })();
-        """.trimIndent(),
-        null,
-    )
-}
+        """.trimIndent()
 
 private fun WebView.configureMirrorSettings() {
     val defaultUserAgent = settings.userAgentString.orEmpty()
@@ -719,14 +1008,42 @@ private fun WebView.configureMirrorSettings() {
         settings.userAgentString = "$defaultUserAgent AndrodexAndroidWebView/1.0".trim()
     }
     settings.javaScriptEnabled = true
+    settings.javaScriptCanOpenWindowsAutomatically = true
     settings.domStorageEnabled = true
     settings.mediaPlaybackRequiresUserGesture = false
     settings.allowFileAccess = false
     settings.allowContentAccess = true
     settings.cacheMode = WebSettings.LOAD_DEFAULT
+    settings.setSupportMultipleWindows(true)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         settings.safeBrowsingEnabled = true
     }
+}
+
+internal enum class MirrorNavigationTarget {
+    InApp,
+    External,
+    Ignore,
+}
+
+internal fun classifyMirrorNavigation(
+    url: String?,
+    pairedOrigin: String,
+): MirrorNavigationTarget {
+    val normalizedUrl = normalizeMirrorNavigationUrl(url) ?: return MirrorNavigationTarget.Ignore
+    return if (isAllowedAppUrl(normalizedUrl, pairedOrigin)) {
+        MirrorNavigationTarget.InApp
+    } else {
+        MirrorNavigationTarget.External
+    }
+}
+
+internal fun normalizeMirrorNavigationUrl(url: String?): String? {
+    val normalizedUrl = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (normalizedUrl == "about:blank") {
+        return null
+    }
+    return normalizedUrl
 }
 
 private fun acceptsImages(mimeTypes: Array<String>): Boolean {

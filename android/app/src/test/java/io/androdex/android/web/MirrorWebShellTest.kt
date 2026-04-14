@@ -1,6 +1,7 @@
 package io.androdex.android.web
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MirrorWebShellTest {
@@ -17,5 +18,56 @@ class MirrorWebShellTest {
     @Test
     fun parseBodyTextFromJsResultReturnsEmptyStringForNullLiteral() {
         assertEquals("", parseBodyTextFromJsResult("null"))
+    }
+
+    @Test
+    fun classifyMirrorNavigationTreatsSameOriginUrlsAsInApp() {
+        assertEquals(
+            MirrorNavigationTarget.InApp,
+            classifyMirrorNavigation(
+                url = "https://host.example/threads/thread-123",
+                pairedOrigin = "https://host.example",
+            ),
+        )
+    }
+
+    @Test
+    fun classifyMirrorNavigationTreatsExternalUrlsAsExternal() {
+        assertEquals(
+            MirrorNavigationTarget.External,
+            classifyMirrorNavigation(
+                url = "https://example.org/docs",
+                pairedOrigin = "https://host.example",
+            ),
+        )
+    }
+
+    @Test
+    fun classifyMirrorNavigationIgnoresPopupPlaceholderUrls() {
+        assertEquals(
+            MirrorNavigationTarget.Ignore,
+            classifyMirrorNavigation(
+                url = "about:blank",
+                pairedOrigin = "https://host.example",
+            ),
+        )
+    }
+
+    @Test
+    fun normalizeMirrorNavigationUrlTrimsUsableValues() {
+        assertEquals(
+            "https://host.example/thread/new",
+            normalizeMirrorNavigationUrl("  https://host.example/thread/new  "),
+        )
+    }
+
+    @Test
+    fun androidThreadTapBridgeScriptPinsHeaderAndRepairsLayout() {
+        val script = androidThreadTapBridgeScript()
+
+        assertTrue(script.contains("const pinPrimaryHeader = () => {"))
+        assertTrue(script.contains("position\", \"sticky\""))
+        assertTrue(script.contains("scroll-padding-top"))
+        assertTrue(script.contains("MutationObserver"))
     }
 }
