@@ -21,6 +21,25 @@ class MirrorWebShellTest {
     }
 
     @Test
+    fun parseJsBooleanResultRecognizesTrueLiteral() {
+        assertTrue(parseJsBooleanResult("true"))
+    }
+
+    @Test
+    fun parseJsBooleanResultRejectsNonTrueValues() {
+        assertEquals(false, parseJsBooleanResult("false"))
+        assertEquals(false, parseJsBooleanResult("\"true\""))
+        assertEquals(false, parseJsBooleanResult(null))
+    }
+
+    @Test
+    fun parseJsOptionalBooleanResultRecognizesBooleanLiterals() {
+        assertEquals(true, parseJsOptionalBooleanResult("true"))
+        assertEquals(false, parseJsOptionalBooleanResult("false"))
+        assertEquals(null, parseJsOptionalBooleanResult("null"))
+    }
+
+    @Test
     fun classifyMirrorNavigationTreatsSameOriginUrlsAsInApp() {
         assertEquals(
             MirrorNavigationTarget.InApp,
@@ -109,5 +128,10 @@ class MirrorWebShellTest {
         assertTrue(script.contains("const dispatchEscape = () => {"))
         assertTrue(script.contains("const pressOutsideSidebar = () => {"))
         assertTrue(script.contains("const requestSidebarClose = (delayMs, holdMs) => {"))
+        assertTrue(script.contains("window.__androdexAndroidRequestSidebarClose = () => {"))
+        assertTrue(script.contains("[data-androdex-role=\"thread-header\"]"))
+        assertTrue(script.contains("[data-androdex-role=\"thread-shell\"]"))
+        assertTrue(script.contains("[data-androdex-role=\"thread-row\"]"))
+        assertTrue(script.contains("[data-androdex-role=\"create-thread\"]"))
     }
 }

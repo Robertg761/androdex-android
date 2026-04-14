@@ -21,6 +21,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -99,10 +100,12 @@ fun MirrorWebShell(
     onClearPairing: () -> Unit,
 ) {
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val pairedOrigin = state.pairedOrigin ?: return
     var isLoading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
+    var handlingBackPress by remember { mutableStateOf(false) }
     var activeLoadUrl by remember(pairedOrigin) { mutableStateOf<String?>(state.initialUrl ?: pairedOrigin) }
     var showHomeAssist by remember { mutableStateOf(false) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -131,19 +134,30 @@ fun MirrorWebShell(
             return
         }
         fun evaluatePageState() {
-            candidateView.evaluateJavascript(
-                """
-                (function () {
-                  return document.body && document.body.innerText ? document.body.innerText : "";
-                })();
-                """.trimIndent(),
-            ) { rawResult ->
-                val bodyText = parseBodyTextFromJsResult(rawResult)
-                val isHomeEmptyState = bodyText.contains(noActiveThreadMarker, ignoreCase = true) ||
-                    bodyText.contains(pickThreadMarker, ignoreCase = true)
-                candidateView.post {
-                    if (candidateView.isAttachedToWindow) {
-                        showHomeAssist = isHomeEmptyState
+            candidateView.queryHasActiveThreadFromPage { hasActiveThread ->
+                if (hasActiveThread != null) {
+                    candidateView.post {
+                        if (candidateView.isAttachedToWindow) {
+                            showHomeAssist = !hasActiveThread
+                        }
+                    }
+                    return@queryHasActiveThreadFromPage
+                }
+
+                candidateView.evaluateJavascript(
+                    """
+                    (function () {
+                      return document.body && document.body.innerText ? document.body.innerText : "";
+                    })();
+                    """.trimIndent(),
+                ) { rawResult ->
+                    val bodyText = parseBodyTextFromJsResult(rawResult)
+                    val isHomeEmptyState = bodyText.contains(noActiveThreadMarker, ignoreCase = true) ||
+                        bodyText.contains(pickThreadMarker, ignoreCase = true)
+                    candidateView.post {
+                        if (candidateView.isAttachedToWindow) {
+                            showHomeAssist = isHomeEmptyState
+                        }
                     }
                 }
             }
@@ -208,8 +222,32 @@ fun MirrorWebShell(
         }
     }
 
-    BackHandler(enabled = canGoBack) {
-        webView?.goBack()
+    BackHandler(enabled = !handlingBackPress) {
+        if (showHomeAssist) {
+            showHomeAssist = false
+            return@BackHandler
+        }
+
+        val currentWebView = webView
+        if (currentWebView == null) {
+            activity?.finish()
+            return@BackHandler
+        }
+
+        handlingBackPress = true
+        currentWebView.requestSidebarCloseFromAndroid { sidebarClosed ->
+            if (sidebarClosed) {
+                handlingBackPress = false
+                return@requestSidebarCloseFromAndroid
+            }
+
+            if (canGoBack) {
+                currentWebView.goBack()
+            } else {
+                activity?.finish()
+            }
+            handlingBackPress = false
+        }
     }
 
     LaunchedEffect(activeLoadUrl, isLoading, loadError) {
@@ -659,11 +697,49 @@ internal fun parseBodyTextFromJsResult(rawResult: String?): String {
         .getOrElse { "" }
 }
 
+internal fun parseJsBooleanResult(rawResult: String?): Boolean {
+    return rawResult?.trim()?.equals("true", ignoreCase = true) ?: false
+}
+
+internal fun parseJsOptionalBooleanResult(rawResult: String?): Boolean? {
+    return when (rawResult?.trim()?.lowercase(Locale.US)) {
+        "true" -> true
+        "false" -> false
+        else -> null
+    }
+}
+
 private fun WebView.openSidebarInPage() {
     evaluateJavascript(
         """
         (function () {
+          try {
+            const bridge = window.__androdexAndroidBridge;
+            if (bridge && typeof bridge.openSidebar === "function") {
+              return bridge.openSidebar() === true;
+            }
+          } catch (_) {
+            return false;
+          }
+          return false;
+        })();
+        """.trimIndent(),
+    ) { rawResult ->
+        if (parseJsBooleanResult(rawResult)) {
+            return@evaluateJavascript
+        }
+
+        evaluateJavascript(
+        """
+        (function () {
           const getToggleSidebarButtons = () => {
+            const androidMatches = Array.from(
+              document.querySelectorAll('[data-androdex-role="sidebar-trigger"]'),
+            ).filter((button) => button instanceof HTMLElement);
+            if (androidMatches.length > 0) {
+              return androidMatches;
+            }
+
             const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
               const text = [
                 button.innerText || "",
@@ -710,8 +786,57 @@ private fun WebView.openSidebarInPage() {
           return false;
         })();
         """.trimIndent(),
-        null,
-    )
+            null,
+        )
+    }
+}
+
+private fun WebView.requestSidebarCloseFromAndroid(onResult: (Boolean) -> Unit) {
+    evaluateJavascript(
+        """
+        (function () {
+          try {
+            const bridge = window.__androdexAndroidBridge;
+            if (bridge && typeof bridge.closeSidebar === "function") {
+              return bridge.closeSidebar() === true;
+            }
+            if (typeof window.__androdexAndroidRequestSidebarClose === "function") {
+              return window.__androdexAndroidRequestSidebarClose() === true;
+            }
+          } catch (_) {
+            return false;
+          }
+          return false;
+        })();
+        """.trimIndent(),
+    ) { rawResult ->
+        onResult(parseJsBooleanResult(rawResult))
+    }
+}
+
+private fun WebView.queryHasActiveThreadFromPage(onResult: (Boolean?) -> Unit) {
+    evaluateJavascript(
+        """
+        (function () {
+          try {
+            const bridge = window.__androdexAndroidBridge;
+            if (bridge && typeof bridge.hasActiveThread === "function") {
+              return bridge.hasActiveThread() === true;
+            }
+
+            const marker = document.querySelector("[data-androdex-active-thread]");
+            if (marker instanceof HTMLElement) {
+              return marker.dataset.androdexActiveThread === "true";
+            }
+          } catch (_) {
+            return null;
+          }
+          return null;
+        })();
+        """.trimIndent(),
+    ) { rawResult ->
+        onResult(parseJsOptionalBooleanResult(rawResult))
+    }
 }
 
 private fun WebView.installAndroidThreadTapBridge() {
@@ -735,6 +860,19 @@ internal fun androidThreadTapBridgeScript(): String =
           };
 
           const getToggleSidebarButtons = () => {
+            const androidMatches = Array.from(
+              document.querySelectorAll('[data-androdex-role="sidebar-trigger"]'),
+            ).filter((button) => {
+              if (!(button instanceof HTMLElement)) {
+                return false;
+              }
+              const rect = button.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0;
+            });
+            if (androidMatches.length > 0) {
+              return androidMatches;
+            }
+
             const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
               const text = [
                 button.innerText || "",
@@ -797,6 +935,10 @@ internal fun androidThreadTapBridgeScript(): String =
           };
 
           const findViewportContentRoot = () => {
+            const explicitRoot = document.querySelector('[data-androdex-role="thread-shell"]');
+            if (explicitRoot instanceof HTMLElement) {
+              return explicitRoot;
+            }
             return Array.from(document.querySelectorAll("div")).find((node) => {
               return typeof node.className === "string" &&
                 node.className.includes("flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background");
@@ -846,6 +988,11 @@ internal fun androidThreadTapBridgeScript(): String =
           };
 
           const findPrimaryThreadHeader = () => {
+            const explicitHeader = document.querySelector('[data-androdex-role="thread-header"]');
+            if (explicitHeader instanceof HTMLElement) {
+              return explicitHeader;
+            }
+
             const toggle = findToggleSidebarButton();
             if (!(toggle instanceof HTMLElement)) {
               return null;
@@ -972,7 +1119,9 @@ internal fun androidThreadTapBridgeScript(): String =
 
           const findVisibleSidebarRows = () => {
             return Array.from(
-              document.querySelectorAll('[data-thread-item="true"] [role="button"][data-testid^="thread-row-"]'),
+              document.querySelectorAll(
+                '[data-androdex-role="thread-row"], [data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',
+              ),
             ).filter((row) => {
               if (!(row instanceof HTMLElement)) {
                 return false;
@@ -1075,6 +1224,15 @@ internal fun androidThreadTapBridgeScript(): String =
             );
           };
 
+          window.__androdexAndroidRequestSidebarClose = () => {
+            if (!isSidebarOpen()) {
+              scheduleLayoutRepair();
+              return false;
+            }
+            requestSidebarClose(0, 1600);
+            return true;
+          };
+
           const closeSidebarAfterAction = (delayMs) => {
             requestSidebarClose(delayMs, 2200);
 
@@ -1110,7 +1268,7 @@ internal fun androidThreadTapBridgeScript(): String =
           const bindSidebarInteractions = () => {
             const rows = Array.from(
               document.querySelectorAll(
-                '[data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',
+                '[data-androdex-role="thread-row"], [data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',
               ),
             );
 
@@ -1136,15 +1294,22 @@ internal fun androidThreadTapBridgeScript(): String =
               );
             });
 
-            const createButtons = Array.from(document.querySelectorAll("button")).filter((button) => {
-              const text = [
-                button.innerText || "",
-                button.getAttribute("aria-label") || "",
-                button.getAttribute("title") || "",
-                button.getAttribute("aria-description") || "",
-              ].join(" ");
-              return /create new thread in/i.test(text);
-            });
+            const explicitCreateButtons = Array.from(
+              document.querySelectorAll('[data-androdex-role="create-thread"]'),
+            );
+            const createButtons = (
+              explicitCreateButtons.length > 0
+                ? explicitCreateButtons
+                : Array.from(document.querySelectorAll("button")).filter((button) => {
+                    const text = [
+                      button.innerText || "",
+                      button.getAttribute("aria-label") || "",
+                      button.getAttribute("title") || "",
+                      button.getAttribute("aria-description") || "",
+                    ].join(" ");
+                    return /create new thread in/i.test(text);
+                  })
+            );
 
             createButtons.forEach((button) => {
               if (!(button instanceof HTMLElement) || button.dataset.androdexAndroidCreateBound === "1") {
