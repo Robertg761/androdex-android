@@ -98,6 +98,12 @@ fun AndrodexApp(viewModel: MainViewModel) {
         uiState.toHomeScreenUiState()
     }
 
+    LaunchedEffect(settingsOpen) {
+        if (settingsOpen) {
+            viewModel.loadRuntimeConfig()
+        }
+    }
+
     // Drawer state — persistent across Home and Thread screens
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 

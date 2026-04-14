@@ -155,6 +155,7 @@ test("buildUnavailableHostAccountStatus returns a neutral bridge-managed snapsho
     expiresAt: null,
     bridgeVersion: null,
     bridgeLatestVersion: null,
+    rateLimits: [],
   });
 });
 

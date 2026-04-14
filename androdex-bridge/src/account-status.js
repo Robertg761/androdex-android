@@ -43,6 +43,7 @@ function composeAccountStatus({
       normalizeString(bridgePackageVersion),
     ]) || null,
     bridgeLatestVersion: normalizeString(bridgeVersionInfo?.bridgeLatestVersion) || null,
+    rateLimits: extractRateLimits(accountRead),
   };
 }
 
@@ -65,6 +66,7 @@ function redactAuthStatus(authStatus = null, extras = {}) {
     expiresAt: composed.expiresAt,
     bridgeVersion: composed.bridgeVersion,
     bridgeLatestVersion: composed.bridgeLatestVersion,
+    rateLimits: composed.rateLimits,
   };
 }
 
@@ -118,6 +120,129 @@ function normalizeString(value) {
 
 function parseBoolean(value) {
   return value === true;
+}
+
+function extractRateLimits(accountRead = null) {
+  const candidates = [
+    accountRead?.rateLimits,
+    accountRead?.rate_limits,
+    accountRead?.limits,
+    accountRead?.buckets,
+    accountRead?.usage,
+    accountRead?.usage?.rateLimits,
+    accountRead?.usage?.rate_limits,
+    accountRead?.usage?.limits,
+    accountRead?.usage?.buckets,
+    accountRead?.account?.rateLimits,
+    accountRead?.account?.rate_limits,
+    accountRead?.account?.limits,
+    accountRead?.account?.buckets,
+    accountRead?.account?.usage,
+    accountRead?.account?.usage?.rateLimits,
+    accountRead?.account?.usage?.rate_limits,
+    accountRead?.account?.usage?.limits,
+    accountRead?.account?.usage?.buckets,
+  ];
+
+  for (const candidate of candidates) {
+    const decoded = decodeRateLimitCollection(candidate);
+    if (decoded.length > 0) {
+      return decoded;
+    }
+  }
+
+  return [];
+}
+
+function decodeRateLimitCollection(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => normalizeRateLimitBucket(item, `limit-${index + 1}`))
+      .filter(Boolean);
+  }
+
+  if (!isPlainObject(value)) {
+    return [];
+  }
+
+  for (const key of ["items", "buckets", "limits", "rateLimits", "rate_limits"]) {
+    const decoded = decodeRateLimitCollection(value[key]);
+    if (decoded.length > 0) {
+      return decoded;
+    }
+  }
+
+  return Object.entries(value)
+    .map(([key, item], index) => normalizeRateLimitBucket(item, normalizeString(key) || `limit-${index + 1}`))
+    .filter(Boolean);
+}
+
+function normalizeRateLimitBucket(value, fallbackName) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const remaining = readIntegerField(value, ["remaining", "remaining_tokens", "remainingRequests"]);
+  const limit = readIntegerField(value, ["limit", "max", "quota"]);
+  const used = readIntegerField(value, ["used", "consumed", "used_tokens"])
+    ?? (remaining != null && limit != null ? Math.max(0, limit - remaining) : null);
+  const resetsAt = readField(value, ["resetsAt", "resets_at", "resetAt", "reset_at"]);
+  const name = firstNonEmpty([
+    normalizeString(value.name),
+    normalizeString(value.id),
+    normalizeString(value.bucket),
+    normalizeString(value.scope),
+    normalizeString(value.label),
+    normalizeString(value.model),
+    normalizeString(value.title),
+    normalizeString(fallbackName),
+  ]) || null;
+
+  if (!name && remaining == null && limit == null && used == null && resetsAt == null) {
+    return null;
+  }
+
+  return {
+    name: name || fallbackName || "limit",
+    remaining,
+    limit,
+    used,
+    resetsAt,
+  };
+}
+
+function readIntegerField(value, names) {
+  const rawValue = readField(value, names);
+  if (rawValue == null) {
+    return null;
+  }
+
+  if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
+    return Math.trunc(rawValue);
+  }
+
+  if (typeof rawValue === "string" && rawValue.trim()) {
+    const parsed = Number(rawValue.trim());
+    if (Number.isFinite(parsed)) {
+      return Math.trunc(parsed);
+    }
+  }
+
+  return null;
+}
+
+function readField(value, names) {
+  for (const name of names) {
+    const candidate = value?.[name];
+    if (candidate !== undefined && candidate !== null) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 module.exports = {

@@ -1684,6 +1684,7 @@ function buildUnavailableHostAccountStatus() {
     expiresAt: null,
     bridgeVersion: null,
     bridgeLatestVersion: null,
+    rateLimits: [],
   };
 }
 
