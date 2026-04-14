@@ -641,27 +641,48 @@ private fun WebView.openSidebarInPage() {
     evaluateJavascript(
         """
         (function () {
-          const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
-            const text = [
-              button.innerText || "",
-              button.getAttribute("aria-label") || "",
-              button.getAttribute("title") || ""
-            ].join(" ");
-            return /toggle sidebar/i.test(text);
-          });
-          const visibleMatches = matches.filter((button) => {
-            const rect = button.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top >= 0;
-          });
-          const match = visibleMatches.sort((left, right) => {
-            const topDelta = left.getBoundingClientRect().top - right.getBoundingClientRect().top;
-            if (topDelta !== 0) {
-              return topDelta;
+          const getToggleSidebarButtons = () => {
+            const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
+              const text = [
+                button.innerText || "",
+                button.getAttribute("aria-label") || "",
+                button.getAttribute("title") || ""
+              ].join(" ");
+              return /toggle sidebar/i.test(text);
+            });
+            const visibleMatches = matches.filter((button) => {
+              const rect = button.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top >= 0;
+            });
+            return visibleMatches.sort((left, right) => {
+              const topDelta = left.getBoundingClientRect().top - right.getBoundingClientRect().top;
+              if (topDelta !== 0) {
+                return topDelta;
+              }
+              return left.getBoundingClientRect().left - right.getBoundingClientRect().left;
+            });
+          };
+
+          const pressElement = (element) => {
+            if (!(element instanceof HTMLElement)) {
+              return false;
             }
-            return left.getBoundingClientRect().left - right.getBoundingClientRect().left;
-          })[0] || matches[0];
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
+              element.dispatchEvent(new MouseEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+              }));
+            });
+            if (typeof element.click === "function") {
+              element.click();
+            }
+            return true;
+          };
+
+          const match = getToggleSidebarButtons()[0];
           if (match) {
-            match.click();
+            pressElement(match);
             return true;
           }
           return false;
@@ -691,7 +712,7 @@ internal fun androidThreadTapBridgeScript(): String =
             return false;
           };
 
-          const findToggleSidebarButton = () => {
+          const getToggleSidebarButtons = () => {
             const matches = Array.from(document.querySelectorAll("button")).filter((button) => {
               const text = [
                 button.innerText || "",
@@ -700,7 +721,45 @@ internal fun androidThreadTapBridgeScript(): String =
               ].join(" ");
               return /toggle sidebar/i.test(text);
             });
-            return matches.find((button) => button.getBoundingClientRect().width > 0) || matches[0] || null;
+            const visibleMatches = matches.filter((button) => {
+              const rect = button.getBoundingClientRect();
+              return rect.width > 0 &&
+                rect.height > 0 &&
+                rect.bottom > 0 &&
+                rect.top >= 0 &&
+                rect.left < window.innerWidth &&
+                rect.right > 0;
+            });
+            return (visibleMatches.length > 0 ? visibleMatches : matches).sort((left, right) => {
+              const topDelta = left.getBoundingClientRect().top - right.getBoundingClientRect().top;
+              if (topDelta !== 0) {
+                return topDelta;
+              }
+              return left.getBoundingClientRect().left - right.getBoundingClientRect().left;
+            });
+          };
+
+          const findToggleSidebarButton = () => {
+            const buttons = getToggleSidebarButtons();
+            return buttons[0] || null;
+          };
+
+          const pressElement = (element) => {
+            if (!(element instanceof HTMLElement)) {
+              return false;
+            }
+
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
+              element.dispatchEvent(new MouseEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+              }));
+            });
+            if (typeof element.click === "function") {
+              element.click();
+            }
+            return true;
           };
 
           const getHeaderActionText = (node) => {
@@ -889,110 +948,214 @@ internal fun androidThreadTapBridgeScript(): String =
             }
           };
 
-          const closeSidebarAfterAction = (delayMs) => {
-            window.setTimeout(() => {
-              const toggle = findToggleSidebarButton();
-              if (toggle instanceof HTMLElement) {
-                toggle.click();
+          const findVisibleSidebarRows = () => {
+            return Array.from(
+              document.querySelectorAll('[data-thread-item="true"] [role="button"][data-testid^="thread-row-"]'),
+            ).filter((row) => {
+              if (!(row instanceof HTMLElement)) {
+                return false;
               }
-            }, delayMs);
+              const rect = row.getBoundingClientRect();
+              return rect.width > 80 &&
+                rect.height > 24 &&
+                rect.bottom > 0 &&
+                rect.top < window.innerHeight &&
+                rect.left < window.innerWidth * 0.8 &&
+                rect.right > 16;
+            });
+          };
+
+          const isSidebarOpen = () => {
+            return findVisibleSidebarRows().length > 0;
+          };
+
+          let pendingSidebarCloseUntil = 0;
+          let closeSidebarTimer = 0;
+
+          const dispatchEscape = () => {
+            const escapeEvent = () => new KeyboardEvent("keydown", {
+              key: "Escape",
+              code: "Escape",
+              keyCode: 27,
+              which: 27,
+              bubbles: true,
+              cancelable: true,
+            });
+            [document.activeElement, document.body, document.documentElement].forEach((target) => {
+              if (target && typeof target.dispatchEvent === "function") {
+                target.dispatchEvent(escapeEvent());
+              }
+            });
+            window.dispatchEvent(escapeEvent());
+          };
+
+          const pressOutsideSidebar = () => {
+            const probePoints = [
+              [window.innerWidth - 24, 72],
+              [window.innerWidth - 24, Math.round(window.innerHeight * 0.5)],
+              [window.innerWidth - 24, Math.max(72, window.innerHeight - 96)],
+            ];
+
+            for (const [x, y] of probePoints) {
+              const target = document.elementFromPoint(x, y);
+              if (!(target instanceof HTMLElement)) {
+                continue;
+              }
+              if (target.closest('[data-thread-item="true"]')) {
+                continue;
+              }
+              if (pressElement(target)) {
+                return true;
+              }
+            }
+            return false;
+          };
+
+          const attemptSidebarClose = () => {
+            if (!isSidebarOpen()) {
+              pendingSidebarCloseUntil = 0;
+              scheduleLayoutRepair();
+              return;
+            }
+
+            const activeElement = document.activeElement;
+            if (activeElement instanceof HTMLElement && typeof activeElement.blur === "function") {
+              activeElement.blur();
+            }
+
+            let pressed = false;
+            const toggle = findToggleSidebarButton();
+            if (toggle instanceof HTMLElement) {
+              pressed = pressElement(toggle) || pressed;
+            }
+            dispatchEscape();
+            pressed = pressOutsideSidebar() || pressed;
+
+            if (Date.now() < pendingSidebarCloseUntil) {
+              closeSidebarTimer = window.setTimeout(
+                attemptSidebarClose,
+                pressed ? 180 : 260,
+              );
+            } else {
+              pendingSidebarCloseUntil = 0;
+              scheduleLayoutRepair();
+            }
+          };
+
+          const requestSidebarClose = (delayMs, holdMs) => {
+            pendingSidebarCloseUntil = Date.now() + holdMs;
+            if (closeSidebarTimer) {
+              window.clearTimeout(closeSidebarTimer);
+            }
+            closeSidebarTimer = window.setTimeout(
+              attemptSidebarClose,
+              delayMs,
+            );
+          };
+
+          const closeSidebarAfterAction = (delayMs) => {
+            requestSidebarClose(delayMs, 2200);
 
             window.setTimeout(() => {
-              restoreViewportLayout();
+              if (Date.now() < pendingSidebarCloseUntil && isSidebarOpen()) {
+                requestSidebarClose(0, 1600);
+              }
+            }, delayMs + 500);
+
+            window.setTimeout(() => {
+              if (Date.now() < pendingSidebarCloseUntil && isSidebarOpen()) {
+                requestSidebarClose(0, 1400);
+              }
+            }, delayMs + 1100);
+
+            window.setTimeout(() => {
+              if (Date.now() < pendingSidebarCloseUntil && isSidebarOpen()) {
+                requestSidebarClose(0, 900);
+              }
+            }, delayMs + 1700);
+
+            window.setTimeout(() => {
+              if (Date.now() < pendingSidebarCloseUntil && isSidebarOpen()) {
+                requestSidebarClose(0, 500);
+              }
+            }, delayMs + 2300);
+
+            window.setTimeout(() => {
+              scheduleLayoutRepair();
             }, delayMs + 140);
           };
 
-          const activateThread = (row) => {
-            row.focus();
-            window.requestAnimationFrame(() => {
-              if (typeof row.click === "function") {
-                row.click();
+          const bindSidebarInteractions = () => {
+            const rows = Array.from(
+              document.querySelectorAll(
+                '[data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',
+              ),
+            );
+
+            rows.forEach((row) => {
+              if (!(row instanceof HTMLElement) || row.dataset.androdexAndroidTapBound === "1") {
+                return;
               }
 
-              window.setTimeout(() => {
-                row.dispatchEvent(new KeyboardEvent("keydown", {
-                  key: "Enter",
-                  code: "Enter",
-                  bubbles: true
-                }));
-                row.dispatchEvent(new KeyboardEvent("keyup", {
-                  key: "Enter",
-                  code: "Enter",
-                  bubbles: true
-                }));
-              }, 40);
+              row.dataset.androdexAndroidTapBound = "1";
+              row.addEventListener(
+                "click",
+                (event) => {
+                  if (!event.isTrusted) {
+                    return;
+                  }
+
+                  if (nowWithinDebounce(row, "androdexAndroidTapAt", 700)) {
+                    return;
+                  }
+                  closeSidebarAfterAction(220);
+                },
+                true,
+              );
             });
 
-            closeSidebarAfterAction(220);
+            const createButtons = Array.from(document.querySelectorAll("button")).filter((button) => {
+              const text = [
+                button.innerText || "",
+                button.getAttribute("aria-label") || "",
+                button.getAttribute("title") || "",
+                button.getAttribute("aria-description") || "",
+              ].join(" ");
+              return /create new thread in/i.test(text);
+            });
+
+            createButtons.forEach((button) => {
+              if (!(button instanceof HTMLElement) || button.dataset.androdexAndroidCreateBound === "1") {
+                return;
+              }
+
+              button.dataset.androdexAndroidCreateBound = "1";
+              button.addEventListener(
+                "click",
+                (event) => {
+                  if (!event.isTrusted) {
+                    return;
+                  }
+
+                  if (nowWithinDebounce(button, "androdexAndroidCreateAt", 700)) {
+                    return;
+                  }
+                  closeSidebarAfterAction(260);
+                },
+                true,
+              );
+            });
+
+            return rows.length + createButtons.length;
           };
-
-          const rows = Array.from(
-            document.querySelectorAll(
-              '[data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',
-            ),
-          );
-
-          rows.forEach((row) => {
-            if (!(row instanceof HTMLElement) || row.dataset.androdexAndroidTapBound === "1") {
-              return;
-            }
-
-            row.dataset.androdexAndroidTapBound = "1";
-            row.addEventListener(
-              "click",
-              (event) => {
-                if (!event.isTrusted) {
-                  return;
-                }
-
-                if (nowWithinDebounce(row, "androdexAndroidTapAt", 700)) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-                activateThread(row);
-              },
-              true,
-            );
-          });
-
-          const createButtons = Array.from(document.querySelectorAll("button")).filter((button) => {
-            const text = [
-              button.innerText || "",
-              button.getAttribute("aria-label") || "",
-              button.getAttribute("title") || "",
-              button.getAttribute("aria-description") || "",
-            ].join(" ");
-            return /create new thread in/i.test(text);
-          });
-
-          createButtons.forEach((button) => {
-            if (!(button instanceof HTMLElement) || button.dataset.androdexAndroidCreateBound === "1") {
-              return;
-            }
-
-            button.dataset.androdexAndroidCreateBound = "1";
-            button.addEventListener(
-              "click",
-              (event) => {
-                if (nowWithinDebounce(button, "androdexAndroidCreateAt", 700)) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  return;
-                }
-
-                closeSidebarAfterAction(260);
-              },
-              true,
-            );
-          });
 
           if (document.body instanceof HTMLElement && document.body.dataset.androdexAndroidLayoutObserved !== "1") {
             const observer = new MutationObserver(() => {
+              bindSidebarInteractions();
               scheduleLayoutRepair();
+              if (Date.now() < pendingSidebarCloseUntil && isSidebarOpen()) {
+                requestSidebarClose(0, Math.max(300, pendingSidebarCloseUntil - Date.now()));
+              }
             });
             observer.observe(document.body, {
               childList: true,
@@ -1009,8 +1172,9 @@ internal fun androidThreadTapBridgeScript(): String =
 
           restoreViewportLayout();
           pinPrimaryHeader();
+          const boundCount = bindSidebarInteractions();
 
-          return rows.length + createButtons.length;
+          return boundCount;
         })();
         """.trimIndent()
 

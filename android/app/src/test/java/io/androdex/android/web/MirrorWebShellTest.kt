@@ -70,6 +70,14 @@ class MirrorWebShellTest {
         assertTrue(script.contains("scroll-padding-top"))
         assertTrue(script.contains("MutationObserver"))
         assertTrue(script.contains("if (!event.isTrusted)"))
-        assertTrue(script.contains("if (typeof row.click === \"function\")"))
+        assertTrue(script.contains("const bindSidebarInteractions = () => {"))
+        assertTrue(script.contains("closeSidebarAfterAction(220)"))
+        assertTrue(script.contains("const isSidebarOpen = () => {"))
+        assertTrue(script.contains("const attemptSidebarClose = () => {"))
+        assertTrue(script.contains("const getToggleSidebarButtons = () => {"))
+        assertTrue(script.contains("[\"pointerdown\", \"mousedown\", \"pointerup\", \"mouseup\", \"click\"]"))
+        assertTrue(script.contains("const dispatchEscape = () => {"))
+        assertTrue(script.contains("const pressOutsideSidebar = () => {"))
+        assertTrue(script.contains("const requestSidebarClose = (delayMs, holdMs) => {"))
     }
 }
