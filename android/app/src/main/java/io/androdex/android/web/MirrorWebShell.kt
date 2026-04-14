@@ -274,7 +274,6 @@ fun MirrorWebShell(
         contentWindowInsets = remodexBottomSafeAreaInsets(),
         topBar = {
             MirrorShellTopBar(
-                displayLabel = state.displayLabel ?: pairedOrigin,
                 onReload = webView?.let { currentWebView -> { currentWebView.reload() } },
                 onClearPairing = onClearPairing,
             )
@@ -633,7 +632,6 @@ fun MirrorWebShell(
 
 @Composable
 private fun MirrorShellTopBar(
-    displayLabel: String,
     onReload: (() -> Unit)?,
     onClearPairing: () -> Unit,
 ) {
@@ -643,7 +641,6 @@ private fun MirrorShellTopBar(
 
     RemodexPageHeader(
         title = "Androdex",
-        subtitle = displayLabel,
         actions = {
             RemodexIconButton(
                 onClick = { onReload?.invoke() },
