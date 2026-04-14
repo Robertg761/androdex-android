@@ -73,6 +73,23 @@ private const val pageLoadTimeoutMs = 12_000L
 private const val noActiveThreadMarker = "No active thread"
 private const val pickThreadMarker = "Pick a thread to continue"
 
+internal data class MirrorPageFinishedState(
+    val activeLoadUrl: String?,
+    val isLoading: Boolean,
+    val loadError: String?,
+)
+
+internal fun resolveMirrorPageFinishedState(
+    currentActiveLoadUrl: String?,
+    finishedUrl: String?,
+): MirrorPageFinishedState {
+    return MirrorPageFinishedState(
+        activeLoadUrl = finishedUrl ?: currentActiveLoadUrl,
+        isLoading = false,
+        loadError = null,
+    )
+}
+
 @Composable
 fun MirrorWebShell(
     state: MirrorShellUiState,
@@ -400,8 +417,13 @@ fun MirrorWebShell(
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
-                                activeLoadUrl = url ?: activeLoadUrl
-                                isLoading = false
+                                val finishedState = resolveMirrorPageFinishedState(
+                                    currentActiveLoadUrl = activeLoadUrl,
+                                    finishedUrl = url,
+                                )
+                                activeLoadUrl = finishedState.activeLoadUrl
+                                isLoading = finishedState.isLoading
+                                loadError = finishedState.loadError
                                 canGoBack = view?.canGoBack() == true
                                 view?.installAndroidThreadTapBridge()
                                 inspectForHomeAssist(view)

@@ -62,6 +62,36 @@ class MirrorWebShellTest {
     }
 
     @Test
+    fun resolveMirrorPageFinishedStateClearsStaleTimeoutError() {
+        assertEquals(
+            MirrorPageFinishedState(
+                activeLoadUrl = "https://host.example/threads/thread-123",
+                isLoading = false,
+                loadError = null,
+            ),
+            resolveMirrorPageFinishedState(
+                currentActiveLoadUrl = "https://host.example",
+                finishedUrl = "https://host.example/threads/thread-123",
+            ),
+        )
+    }
+
+    @Test
+    fun resolveMirrorPageFinishedStateKeepsPreviousUrlWhenFinishedUrlMissing() {
+        assertEquals(
+            MirrorPageFinishedState(
+                activeLoadUrl = "https://host.example/threads/thread-123",
+                isLoading = false,
+                loadError = null,
+            ),
+            resolveMirrorPageFinishedState(
+                currentActiveLoadUrl = "https://host.example/threads/thread-123",
+                finishedUrl = null,
+            ),
+        )
+    }
+
+    @Test
     fun androidThreadTapBridgeScriptPinsHeaderAndRepairsLayout() {
         val script = androidThreadTapBridgeScript()
 
