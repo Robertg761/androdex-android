@@ -2,31 +2,39 @@
 
 ## Reviewer summary
 
-Androdex does not use a traditional in-app account login. Full functionality requires access to:
+Androdex does not use a public shared in-app account. Full functionality requires:
 
-- a user-controlled Mac running the Androdex host bridge
-- a local Codex environment on that host
-- a successful phone-to-host pairing
+- a reachable Androdex desktop/server environment
+- a one-time pairing URL or QR code from that environment
+- pairing the Android app to that environment
+
+The Android app is a shell for the paired desktop-served Androdex web app.
 
 ## Suggested Play Console reviewer note
 
-Androdex is a remote control client for a user-owned host bridge and host-local Codex runtime. The Android app itself does not contain a demo backend or public shared account. To review the app properly, use the provided review host setup or review media showing:
+Androdex is an Android companion app for a user-controlled Androdex desktop/server environment. Reviewers should use the provided pairing URL or QR code, pair the app, and then confirm that the Android app opens the paired web app in-app. If a live review environment is not available, attached screenshots and video show the current pairing screen, thread view, and sidebar flow.
 
-1. host bridge started on macOS
-2. pairing from Android
-3. opening a thread
-4. sending a prompt
-5. switching projects or runtime settings
+## Suggested review steps
+
+1. Open the provided Androdex desktop/server environment.
+2. Generate the pairing URL or QR code from the environment.
+3. Open the Android app and scan or paste the pairing link.
+4. Confirm the Android app opens the paired Androdex UI.
+5. Open a thread and verify that sidebar navigation works on mobile.
 
 ## If you provide a live review environment
 
-Prepare and include:
+Include:
 
-- host machine availability window
-- pairing instructions
-- any temporary relay endpoint
-- any temporary review account needed on the host side only
+- host availability window
+- reachable host URL
+- pairing URL or QR instructions
+- any temporary account needed for the desktop/server environment only
 
 ## If you do not provide a live review environment
 
-At minimum, attach a short review video that demonstrates the full paired flow and explain that the app is intentionally host-dependent.
+Attach a short review video plus screenshots that demonstrate:
+
+1. the desktop pairing page
+2. the paired Android thread view
+3. the Android sidebar state

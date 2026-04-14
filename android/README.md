@@ -1,71 +1,61 @@
 # Android App Guide
 
-This directory contains the Android Studio project for the Androdex client.
+This directory contains the Android Studio project for the current Androdex Android app.
+
+## Active Runtime
+
+The shipped runtime is the mirror-shell flow:
+
+- Android accepts a desktop pairing URL or QR code
+- stores the paired origin and last opened route
+- opens the paired desktop-served web app inside an Android WebView
+
+See [Android Mirror-Shell Architecture](../Docs/android-mirror-shell-architecture.md) for the current end-to-end shape.
 
 ## Start Here
 
-- App module: [`android/app/`](/Users/robert/Documents/Projects/androdex/android/app)
-- Main source root: [`android/app/src/main/java/io/androdex/android/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android)
-- Unit tests: [`android/app/src/test/java/io/androdex/android/`](/Users/robert/Documents/Projects/androdex/android/app/src/test/java/io/androdex/android)
-- UI tests: [`android/app/src/androidTest/java/io/androdex/android/`](/Users/robert/Documents/Projects/androdex/android/app/src/androidTest/java/io/androdex/android)
+- Active activity entrypoint: [`MainActivity.kt`](./app/src/main/java/io/androdex/android/MainActivity.kt)
+- Active view-model entrypoint: [`MirrorShellViewModel.kt`](./app/src/main/java/io/androdex/android/MirrorShellViewModel.kt)
+- Active app router: [`MirrorShellApp.kt`](./app/src/main/java/io/androdex/android/MirrorShellApp.kt)
+- Pairing flow: [`pairing/`](./app/src/main/java/io/androdex/android/pairing)
+- Paired WebView shell: [`web/`](./app/src/main/java/io/androdex/android/web)
+- Persistence for paired origin and last-opened URL: [`persistence/MirrorShellStore.kt`](./app/src/main/java/io/androdex/android/persistence/MirrorShellStore.kt)
 
-## Where To Change Things
+## What To Change For The Current App
 
-- App entry and screen orchestration:
-  [`MainActivity.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/MainActivity.kt),
-  [`AndrodexApp.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/AndrodexApp.kt),
-  [`MainViewModel.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/MainViewModel.kt)
-- Long-lived connection/runtime state:
-  [`service/AndrodexService.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/service/AndrodexService.kt)
-- Relay/bridge protocol and request building:
-  [`data/AndrodexClient.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexClient.kt)
-- Persistence and saved pairing/runtime state:
-  [`data/AndrodexPersistence.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexPersistence.kt)
-- Repository abstraction:
-  [`data/AndrodexRepository.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexRepository.kt)
-- Timeline projection:
-  [`timeline/ThreadTimelineRender.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/timeline/ThreadTimelineRender.kt)
-- Pairing UI:
-  [`ui/pairing/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/pairing)
-- Home/sidebar UI:
-  [`ui/home/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/home),
-  [`ui/sidebar/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/sidebar)
-- Turn/timeline/composer UI:
-  [`ui/turn/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/turn)
-- Shared UI primitives and chrome:
-  [`ui/shared/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/shared)
-- Theme and feature-state adapters:
-  [`ui/theme/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/theme),
-  [`ui/state/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/ui/state)
-- Notifications:
-  [`notifications/`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/notifications)
+- Pairing link parsing and deep-link intake:
+  [`pairing/PairingLinkParser.kt`](./app/src/main/java/io/androdex/android/pairing/PairingLinkParser.kt)
+- Pairing screen copy and layout:
+  [`pairing/MirrorPairingScreen.kt`](./app/src/main/java/io/androdex/android/pairing/MirrorPairingScreen.kt)
+- Intent handling, reopen routing, and clear-pairing behavior:
+  [`MirrorShellViewModel.kt`](./app/src/main/java/io/androdex/android/MirrorShellViewModel.kt)
+- WebView configuration, same-origin navigation, file upload, and top-bar controls:
+  [`web/MirrorWebShell.kt`](./app/src/main/java/io/androdex/android/web/MirrorWebShell.kt)
+- Local persistence:
+  [`persistence/MirrorShellStore.kt`](./app/src/main/java/io/androdex/android/persistence/MirrorShellStore.kt)
 
-## Working Style
+## Legacy Native Stack
 
-- Prefer feature-local UI changes inside `ui/*` before adding more logic to the app root.
-- Prefer service/repository/client layers for protocol, connection, and persistence changes.
-- Treat [`MainViewModel.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/MainViewModel.kt),
-  [`AndrodexService.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/service/AndrodexService.kt),
-  and [`AndrodexClient.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexClient.kt)
-  as high-impact files: small edits there can affect many flows.
-- For user-visible Android UI work, check the parity/reference docs in
-  [`Docs/remodex-visual-reference/README.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-visual-reference/README.md).
+The older native Android client implementation is still in the tree, but it is no longer the active app entry:
 
-## Pairing And Reconnect Model
+- [`AndrodexApp.kt`](./app/src/main/java/io/androdex/android/AndrodexApp.kt)
+- [`MainViewModel.kt`](./app/src/main/java/io/androdex/android/MainViewModel.kt)
+- [`data/`](./app/src/main/java/io/androdex/android/data)
+- [`service/`](./app/src/main/java/io/androdex/android/service)
+- [`transport/macnative/`](./app/src/main/java/io/androdex/android/transport/macnative)
+- [`ui/`](./app/src/main/java/io/androdex/android/ui)
 
-- The Android app now treats the trusted host relationship as durable state, not as a disposable live relay session.
-- [`data/AndrodexPersistence.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexPersistence.kt)
-  stores the phone identity, trusted Mac registry, and recovery payloads separately from the throwaway saved relay session.
-- [`data/AndrodexClient.kt`](/Users/robert/Documents/Projects/androdex/android/app/src/main/java/io/androdex/android/data/AndrodexClient.kt)
-  owns three distinct paths:
-  fresh QR bootstrap, trusted reconnect to resolve a fresh live session, and trusted recovery/rekey after reinstall.
-- Recovery credentials are phone-owned from first pairing onward. The bridge and relay only receive the public trust material needed to verify reconnect or rekey requests.
-- Cold-start reconnect matters just as much as foreground/background reconnect. Force-stop, app-switcher removal, and process death should still come back through trusted reconnect rather than pushing the user into a fake “pair again” state.
-- Legacy reconnect compatibility checks must distinguish real `macDeviceId` values from older live-session identifiers. If you touch reconnect selection or repair heuristics, test force-stop plus relaunch on a real device.
+Keep those paths clearly labeled as legacy/reference unless the app is intentionally moving back toward a native-first runtime.
 
-## Related Docs
+## Build
 
-- [`Docs/repo-map.md`](/Users/robert/Documents/Projects/androdex/Docs/repo-map.md)
-- [`Docs/source-file-map.md`](/Users/robert/Documents/Projects/androdex/Docs/source-file-map.md)
-- [`Docs/android-compose-structure.md`](/Users/robert/Documents/Projects/androdex/Docs/android-compose-structure.md)
-- [`Docs/remodex-port-architecture.md`](/Users/robert/Documents/Projects/androdex/Docs/remodex-port-architecture.md)
+```sh
+cd android
+./gradlew assembleDebug
+```
+
+Current build metadata:
+
+- package name: `io.androdex.android`
+- version: `0.2.2`
+- version code: `14`

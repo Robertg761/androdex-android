@@ -2,6 +2,8 @@
 
 `androdex` is the macOS host bridge for the Androdex Android client.
 
+Note: this bridge package is now a legacy/compatibility path kept in-tree. The current Android runtime documented in the repository root pairs to the desktop/server `/pair` flow instead of booting through this bridge by default.
+
 It keeps Codex running locally on the Mac, exposes a relay-backed encrypted session for Android, and uses a launchd-managed background service so pairing and reconnect survive terminal closes.
 
 ## Install

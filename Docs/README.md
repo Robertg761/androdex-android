@@ -4,27 +4,26 @@ This folder is the navigation hub for repo documentation.
 
 ## Start Here
 
-- [Repo Map](./repo-map.md): top-level map of the repository and what each major area is for
-- [Source File Map](./source-file-map.md): code-focused catalog of the Android app, host bridge, and relay runtime files
-- [Android App Guide](/Users/robert/Documents/Projects/androdex/android/README.md): local guide for the Android project layout
-- [Bridge Source Guide](/Users/robert/Documents/Projects/androdex/androdex-bridge/src/README.md): local guide for the bridge runtime layout
+- [Top-Level README](../README.md): current product overview and setup notes
+- [Android App Guide](../android/README.md): active Android entrypoints and package map
+- [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md): current Android runtime shape
+- [Repo Map](./repo-map.md): high-signal repository map
+- [Source File Map](./source-file-map.md): code-focused file guide
 
-## Architecture
+## Current Product Docs
 
-- [Android Sync Convergence](./android-sync-convergence.md): migration direction for making the Mac repo authoritative and Android a true remote client
-- [Android Compose Structure](./android-compose-structure.md): current Android UI/package split
-- [Remodex Port Architecture](./remodex-port-architecture.md): target architecture and incremental refactor direction
-- [Remodex Parity Checklist](./remodex-parity-checklist.md): parity tracking against the Remodex reference
+- [Privacy Policy](./PRIVACY_POLICY.md)
+- [Play Store Release Pack](./play-store/README.md)
 
-## UI Parity And Reference Material
+## Legacy Or Historical Reference
 
-- [Remodex Visual Reference](./remodex-visual-reference/README.md): screenshots, parity board, audits, and captured reference states
+- [Android Sync Convergence](./android-sync-convergence.md)
+- [Android Compose Structure](./android-compose-structure.md)
+- [Android Mac-Native Test Matrix](./android-mac-native-test-matrix.md)
+- [Remodex Port Architecture](./remodex-port-architecture.md)
+- [Remodex Visual Reference](./remodex-visual-reference/README.md)
 
-## Release And Policy Docs
+## Notes
 
-- [Play Store Docs](./play-store/README.md): submission assets, policy notes, and review checklist
-- [Privacy Policy](./PRIVACY_POLICY.md): privacy copy and related notes
-
-## Local Working Notes
-
-- `local/`: local-only planning notes and scratch docs that should not be treated as core product documentation
+- The active Android runtime is the mirror-shell flow described in [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md).
+- Several older docs are intentionally kept for reference because the bridge/native-client work is still present in-tree, but they are no longer the primary shipped app path.

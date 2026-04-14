@@ -1,71 +1,63 @@
 # Privacy Policy for Androdex
 
-Last updated: 2026-03-24
+Last updated: 2026-04-14
 
-Androdex is an Android remote client and host bridge for controlling Codex running on the user's own computer.
+Androdex is an Android companion app for a user-controlled Androdex desktop/server environment.
 
 ## Who this policy applies to
 
-This policy applies to the Androdex Android app and the Androdex host bridge.
+This policy applies to the Android app in this repository.
 
-## What Androdex does
+The Android app pairs to a desktop/server environment that the user controls. That paired environment may have its own local data retention and operational settings.
 
-Androdex is a remote control system where:
+## What the Android app does
 
-- the Android app acts as a remote control client
-- the host bridge runs on the user's own computer
-- Codex runs locally on the user's own computer
-- the Android app can connect over local or internet-accessible relay paths
+The current Android app:
+
+- accepts a desktop pairing URL or QR code
+- stores the paired origin and last opened route locally on the device
+- opens the paired Androdex web app inside an Android WebView
+- provides Android-native helpers such as QR scanning, file picking, camera handoff, and reopen routing
 
 ## Data handled by the app
 
-Depending on how the app is used, Androdex may handle:
+Depending on how the app is used, the Android app may handle:
 
-- pairing information such as relay URL, session ID, device ID, and cryptographic public keys
-- trusted-host and reconnect state stored on the device for secure reconnect flows
-- user-provided content such as prompts and conversation messages
-- user-selected image attachments when the user chooses photos from the camera or gallery
-- thread and conversation metadata
-- Android push notification tokens and notification authorization state when notifications are enabled
-- approval actions and local workflow actions initiated by the user
+- pairing links and paired-origin metadata
+- a display label for the paired environment
+- the last opened in-app URL for that paired environment
+- WebView cookies and first-party web storage used by the paired Androdex environment
+- user-provided prompts, messages, and uploaded files that the paired environment processes
+- optional camera or gallery selections when the user chooses to upload an attachment
+- notification-open metadata when the paired environment is configured to reopen the app to a specific route
 
 ## How data is used
 
-Androdex uses data to:
+The Android app uses data to:
 
-- pair the Android client with the user's host bridge
-- route messages between the Android app and the host bridge
-- display threads, messages, and approval requests in the app
-- forward user-selected attachments to the paired host session when the user sends them
-- maintain secure encrypted sessions
-- store pairing and trusted-device information locally on the device
-- register the device for optional run-completion notifications when that feature is configured
-
-## Encryption and transport
-
-Androdex uses a secure pairing and encrypted transport design between the Android app and the host bridge.
-
-The relay may still observe limited connection metadata required to route traffic, such as session identifiers and connection timing, but application payloads are intended to be encrypted after the secure handshake completes.
+- establish or restore a trusted connection to the paired desktop/server environment
+- reopen the correct paired route after app restarts or notification opens
+- display the paired Androdex web app in-app
+- support first-party file upload and camera capture flows inside that paired web app
 
 ## Local storage
 
-The Android app may store limited data locally on the device, including:
+The Android app stores limited local data on the device, including:
 
-- pairing details
-- trusted-device records
-- encrypted local persistence required for reconnect and secure operation
-- selected runtime preferences and per-thread runtime overrides
-- notification token state needed for optional push registration
+- paired origin
+- optional display label
+- optional bootstrap pairing URL
+- last opened paired URL
+- WebView cookies and site data for the paired first-party environment
 
 ## Data sharing
 
 Androdex is not designed to sell user data.
 
-Data may be transmitted as part of core app functionality to:
+Data may be transmitted to:
 
-- the relay service used to connect the Android app and the host bridge
-- the host bridge running on the user's own computer
-- a push-notification provider or webhook chosen by the app operator if optional Android notifications are configured
+- the paired Androdex desktop/server environment the user chose
+- any infrastructure that environment uses, such as its own network host, reverse proxy, or notification backend
 
 ## Ads
 
@@ -73,7 +65,7 @@ Androdex does not display third-party advertising.
 
 ## Account requirement
 
-Androdex does not require an in-app account login to function, but it does require the user to operate a compatible host bridge and local Codex environment on their own computer.
+The Android app does not require a separate in-app Androdex account. Full functionality depends on access to a compatible Androdex desktop/server environment that the user controls or has been given access to.
 
 ## Children
 
@@ -81,13 +73,12 @@ Androdex is not directed to children.
 
 ## Data retention
 
-Data retention depends on:
+Retention depends on:
 
-- what is stored locally on the Android device
-- what is stored by the user on their own host computer
-- what relay infrastructure is used
+- what the Android app stores locally on the device
+- what the paired desktop/server environment stores
 
-Users can remove the app and clear locally stored app data from their Android device. Users can also remove or reset host-side bridge state on their own computer.
+Users can remove the app, clear Android app storage, or clear the current pairing from the app. Users can also remove or reset data in their own paired environment.
 
 ## Contact
 

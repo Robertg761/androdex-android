@@ -1,5 +1,7 @@
 # Remodex Port Architecture
 
+Historical note: this document describes the earlier native-client refactor plan. It is retained for reference, but the current shipped Android runtime is the mirror-shell flow described in [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md).
+
 Compared on 2026-03-25 using:
 
 - Androdex repo at `G:\Projects\Androdex`

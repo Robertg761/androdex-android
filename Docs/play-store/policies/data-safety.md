@@ -1,35 +1,32 @@
 # Data Safety Draft
 
-This is a working Play Console draft based on the current Android app behavior in this repo. Validate it against the final shipped build and your actual notification backend before submitting.
+This is a working Play Console draft based on the current Android app behavior in this repo. Validate it against the final shipped build before submitting.
 
 ## Core interpretation
 
-- App purpose: remote control for a user-owned host bridge and host-local Codex runtime
+- App purpose: Android shell for a paired Androdex desktop/server environment
 - No ads
 - No data selling
 - No third-party analytics SDKs are declared in the Android app
-- Transport may involve the paired host bridge, a relay, and an optional push-notification path chosen by the operator
+- The app primarily stores pairing metadata locally and loads the paired first-party web app in a WebView
 
 ## Likely Play Console answers
 
 ### Collected or transmitted by the app
 
 - `User content > Messages`
-  - Why: prompts, thread messages, approvals, and conversation content are transmitted to the paired host workflow
+  - Why: prompts and thread content displayed and processed by the paired environment
   - Required for app functionality: yes
   - User can choose to provide it: yes
-  - Processed in transit to host/relay: yes
 
-- `User content > Photos and videos`
-  - Why: optional image attachments from camera or gallery can be sent to the paired host workflow
+- `Photos and videos`
+  - Why: optional file or camera uploads chosen by the user inside the paired Androdex UI
   - Required for app functionality: no
   - User can choose to provide it: yes
-  - Only when attached by the user: yes
 
 - `Device or other IDs`
-  - Why: pairing/session identifiers and optional push token registration
-  - Required for core pairing/reconnect behavior: pairing/session identifiers yes
-  - Optional notifications path: push token only when notifications are configured
+  - Why: pairing-link metadata, paired-origin state, and first-party session/cookie state used by the paired environment
+  - Required for app functionality: yes
 
 ### Data not intentionally collected by this Android app
 
@@ -39,18 +36,17 @@ This is a working Play Console draft based on the current Android app behavior i
 - health and fitness
 - payment information
 - audio recordings
-- web browsing
 
 ## Handling notes
 
-- Encryption in transit: yes, application payloads are intended to be encrypted after secure pairing completes
+- Encryption in transit: depends on the paired environment URL the user chooses; encourage HTTPS for network-reachable environments
 - Data is not sold: yes
 - Data sharing for advertising or analytics: no
 - Data deletion request path: indirect
-  - users can clear Android app storage, remove the app, reset the pairing, and remove host-side data on their own machine
+  - users can clear Android app storage, remove the app, clear pairing from the app, and remove data from the paired environment they control
 
 ## Review before submission
 
-- Confirm whether your final notification backend introduces any extra SDK-level data collection
-- Confirm whether Play Console wants pairing identifiers represented only as `Device or other IDs` or also as a narrower internal-use note in reviewer comments
-- Re-check the final privacy policy URL used in the listing
+- Confirm whether your final build still uses only the current pairing-link and WebView flow
+- Confirm whether any optional notification path adds additional SDK-level data collection
+- Re-check the final privacy policy URL used in the Play listing

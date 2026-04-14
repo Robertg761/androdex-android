@@ -4,34 +4,42 @@ This folder collects the repo-managed assets and notes needed to submit Androdex
 
 ## What's here
 
-- `assets/`: curated Play listing artwork and phone screenshots
-- `listing/en-US/`: draft English store copy and first-release notes
-- `policies/`: privacy, data safety, and permission declaration drafts based on the current app behavior
-- `review/`: reviewer notes, app-access guidance, and a submission checklist
+- `assets/`: listing artwork and screenshots
+- `policies/`: privacy, data-safety, and permission drafts
+- `review/`: reviewer notes and submission checklist
 
 ## Current app build facts
 
 - package name: `io.androdex.android`
-- current version: `0.2.1` (`versionCode 13`)
+- current version: `0.2.2` (`versionCode 14`)
 - release artifact for Play: `android/app/build/outputs/bundle/release/app-release.aab`
 - target privacy policy URL: `https://androdex.xyz/privacy-policy/`
+
+## Current product framing
+
+The shipped Android app is a paired shell for an Androdex desktop/server environment:
+
+- the desktop/server issues the pairing URL
+- Android scans or pastes that URL
+- Android opens the paired Androdex web app inside a WebView
+
+Reviewer guidance and screenshots should describe that flow, not the older bridge-first/native-client architecture.
+
+Fresh phone captures for this flow now live at:
+
+- `assets/phone-screenshots/Current-Thread.png`
+- `assets/phone-screenshots/Current-Sidebar.png`
 
 ## Recommended submission flow
 
 1. Build a signed AAB with `cd android && ./gradlew bundleRelease`.
 2. Upload the AAB to an internal or closed test track first.
-3. Use the copy in `listing/en-US/` for the store listing.
-4. Upload the screenshots and graphics in `assets/`.
-5. Fill the Play Console policy forms using the drafts in `policies/` and `review/`.
-6. Confirm support contact details, privacy policy URL, and reviewer instructions before rollout.
+3. Use the copy in this folder for listing, review, and policy notes.
+4. Upload current screenshots that match the pairing-link plus paired-webview flow.
+5. Confirm support contact details, privacy policy URL, and reviewer instructions before rollout.
 
 ## Important manual review items
 
-- The app is only useful with a user-owned host bridge and local Codex runtime, so reviewer guidance matters.
-- The app currently keeps `android:usesCleartextTraffic="true"` to support local or self-hosted relay scenarios. Call this out in reviewer notes instead of surprising Play review.
-- If Play Console shows extra account-level testing or verification requirements for your developer account, complete those before production rollout.
-
-## Reference links
-
-- Android App Bundles for new apps: https://support.google.com/googleplay/android-developer/answer/2481797?hl=en
-- Play app review prep hub: https://support.google.com/googleplay/android-developer/
+- The app is only useful with a reachable paired Androdex desktop/server environment.
+- `android:usesCleartextTraffic="true"` is still enabled because developers may pair to local-network environments during testing.
+- Reviewer instructions should include either a live paired environment or current screenshots/video of the pairing flow.

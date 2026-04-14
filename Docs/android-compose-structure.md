@@ -1,5 +1,7 @@
 # Android Compose Structure
 
+Historical note: this documents the earlier native Compose client split. The active app entry now runs through `MainActivity` -> `MirrorShellViewModel` -> `MirrorShellApp`; see [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md).
+
 The Android app UI is now split so `AndrodexApp.kt` acts as a small router instead of a monolith.
 
 Key pieces:

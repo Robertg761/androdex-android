@@ -1,5 +1,7 @@
 # Android Mac-Native Test Matrix
 
+Historical note: this matrix covers the previous Mac-native/native-client transport work. It is no longer the active shipped Android runtime path; see [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md).
+
 This matrix records the automated coverage used to validate the converged Android Mac-native path.
 
 The goal is not to re-test the legacy bridge. It is to prove that Android can pair, authenticate, hydrate, recover, and dispatch canonical actions against the same Mac-native backend contract used by the web client.

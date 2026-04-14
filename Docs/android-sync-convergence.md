@@ -1,5 +1,7 @@
 # Android Sync Convergence
 
+Historical note: this document records the previous Mac-native/native-client convergence plan. The current shipped Android runtime is the mirror-shell flow described in [Android Mirror-Shell Architecture](./android-mirror-shell-architecture.md).
+
 This note records the current migration direction for converging Androdex with the canonical T3 Code backend.
 
 ## Decision
