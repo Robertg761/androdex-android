@@ -42,7 +42,7 @@ test("getBridgeDoctorReport diagnoses missing T3 endpoint configuration", async 
   assert.equal(report.runtimeEndpointSource, "default-loopback");
   assert.equal(report.t3Availability.reasonCode, "attach-ready");
   assert.equal(report.endpointProbe.reachable, false);
-  assert.match(report.recommendations[0], /No T3 listener answered/);
+  assert.match(report.recommendations[0], /No Androdex Server listener answered/);
 });
 
 test("getBridgeDoctorReport probes attach-ready T3 endpoints and suggests restarting onto T3", async () => {
@@ -128,9 +128,9 @@ test("runBridgeDoctor prints actionable diagnostics for T3 companion mode", asyn
   });
 
   assert.ok(messages.some((message) => message.includes("Doctor runtime target: t3-server")));
-  assert.ok(messages.some((message) => message.includes("T3 probe: unreachable (ECONNREFUSED)")));
+  assert.ok(messages.some((message) => message.includes("Androdex Server probe: unreachable (ECONNREFUSED)")));
   assert.ok(messages.some((message) => message.includes("Configured runtime endpoint: ws://127.0.0.1:3773/ws")));
-  assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
+  assert.ok(messages.some((message) => message.includes("Androdex Server install: desktop app at /Applications/T3 Code (Alpha).app")));
   assert.ok(messages.some((message) => message.includes("Open /Applications/T3 Code (Alpha).app")));
 });
 

@@ -1004,7 +1004,7 @@ internal class MacNativeAndrodexBackendClient(
             runtimeTarget = "mac-native",
             runtimeTargetDisplayName = "Mac Native",
             backendProvider = "t3code",
-            backendProviderDisplayName = "T3 Code",
+            backendProviderDisplayName = "Androdex",
             runtimeTargetOptions = listOf(
                 HostRuntimeTargetOption(
                     value = "mac-native",

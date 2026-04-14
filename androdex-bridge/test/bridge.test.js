@@ -110,7 +110,7 @@ test("buildBridgeManagedRuntimeTargetResult returns host runtime selection metad
     workspaceActive: true,
     currentCwd: "/tmp/workspace",
     runtimeTarget: "t3-server",
-    runtimeTargetDisplayName: "T3 Server",
+    runtimeTargetDisplayName: "Androdex Server",
     backendProvider: null,
     backendProviderDisplayName: null,
     runtimeTargetOptions: [],

@@ -69,7 +69,7 @@ function formatRuntimeLabel(snapshot) {
   const runtimeTarget = snapshot?.serviceStatus?.runtimeConfig?.runtimeTarget
     || snapshot?.serviceStatus?.bridgeStatus?.runtimeTarget
     || "unknown";
-  return runtimeTarget === "t3-server" ? "Runtime: T3 Server" : "Runtime: Codex Native";
+  return runtimeTarget === "t3-server" ? "Runtime: Androdex Server" : "Runtime: Codex Native";
 }
 
 function formatConnectionLabel(snapshot) {
@@ -203,7 +203,7 @@ function updateDoctorView() {
   const probeLabel = report.endpointProbe
     ? (report.endpointProbe.reachable ? "Endpoint reachable" : `Endpoint probe: ${report.endpointProbe.reasonCode}`)
     : "No probe run yet";
-  els.doctorSummary.textContent = `${report.t3Availability?.summary || "No T3 summary"} • ${probeLabel}`;
+  els.doctorSummary.textContent = `${report.t3Availability?.summary || "No server summary"} • ${probeLabel}`;
   els.doctorRecommendations.innerHTML = "";
   const recommendations = Array.isArray(report.recommendations) ? report.recommendations : [];
   if (recommendations.length === 0) {
@@ -246,12 +246,12 @@ function render(snapshot) {
         bridgeStatus.runtimeEndpointHost ? `Endpoint ${bridgeStatus.runtimeEndpointHost}` : "",
         Number.isFinite(bridgeStatus.runtimeSnapshotSequence) ? `Snapshot ${bridgeStatus.runtimeSnapshotSequence}` : "",
         Number.isFinite(bridgeStatus.runtimeReplaySequence) ? `Replay ${bridgeStatus.runtimeReplaySequence}` : "",
-      ].filter(Boolean).join(" • ") || "Waiting for T3 attach metadata"
-    : "Codex-native does not expose T3 replay metadata";
+      ].filter(Boolean).join(" • ") || "Waiting for Androdex Server attach metadata"
+    : "Codex-native does not expose Androdex Server replay metadata";
 
   els.t3DiscoveryState.textContent = installedT3Runtime.desktopAppInstalled || installedT3Runtime.cliInstalled
-    ? "T3 detected"
-    : "T3 not detected";
+    ? "Androdex Server detected"
+    : "Androdex Server not detected";
   els.t3DiscoveryFoot.textContent = t3Session.endpoint
     ? `${t3Session.source || "unknown"} • ${t3Session.descriptorStatus || "missing"}`
     : (installedT3Runtime.desktopAppInstalled ? "Desktop app present, no active session" : "No active desktop session");
@@ -279,8 +279,8 @@ function render(snapshot) {
   els.runtimeAuthTokenInput.value = daemonConfig.runtimeEndpointAuthToken || "";
   els.refreshEnabledInput.checked = Boolean(daemonConfig.refreshEnabled);
   els.runtimeConfigNote.textContent = runtimeTarget === "t3-server"
-    ? (serviceStatus.t3Availability?.summary || "T3 attach not selected.")
-    : "Codex-native is active. Switch to T3 when you want the bridge to attach to a local T3 runtime.";
+    ? (serviceStatus.t3Availability?.summary || "Androdex Server attach not selected.")
+    : "Codex-native is active. Switch to Androdex Server when you want the bridge to attach to the local server runtime.";
   syncRuntimeSelectionUi(snapshot);
 
   const descriptor = snapshot?.runtimeSessionDescriptor || null;
@@ -355,10 +355,10 @@ async function writeDescriptor() {
       backendPid: backendPidValue ? Number.parseInt(backendPidValue, 10) : null,
       baseUrl: els.descriptorBaseUrlInput.value.trim(),
     });
-    setToast("T3 runtime-session descriptor written.", "success");
+    setToast("Androdex Server runtime-session descriptor written.", "success");
     await refreshSnapshot({ quiet: true });
   } catch (error) {
-    setToast(error.message || "Failed to write the T3 descriptor.", "danger");
+    setToast(error.message || "Failed to write the server descriptor.", "danger");
   }
 }
 
@@ -420,7 +420,7 @@ async function handleAction(action) {
     }
     if (action === "remove-descriptor") {
       await window.androdexDesktop.removeT3Descriptor();
-      setToast("T3 runtime-session descriptor removed.", "success");
+      setToast("Androdex Server runtime-session descriptor removed.", "success");
       await refreshSnapshot({ quiet: true });
       return;
     }

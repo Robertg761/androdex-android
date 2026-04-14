@@ -23,7 +23,7 @@ const SUPPORTED_RUNTIME_TARGETS = Object.freeze({
   "t3-server": Object.freeze({
     kind: "t3-server",
     legacyProviderKind: "t3code",
-    displayName: "T3 Server",
+    displayName: "Androdex Server",
     backendProviderKind: null,
     endpointEnvVars: ["ANDRODEX_T3_ENDPOINT"],
     desktopBundleIdEnvVars: [],
@@ -31,7 +31,7 @@ const SUPPORTED_RUNTIME_TARGETS = Object.freeze({
     defaultAppPath: "",
     launchCommand: "",
     launchArgs: Object.freeze([]),
-    launchDescription: "an explicit host-local T3 endpoint",
+    launchDescription: "an explicit host-local Androdex Server endpoint",
   }),
 });
 

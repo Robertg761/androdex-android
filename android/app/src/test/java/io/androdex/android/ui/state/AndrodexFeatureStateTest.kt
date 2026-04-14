@@ -311,7 +311,7 @@ class AndrodexFeatureStateTest {
             connectionStatus = ConnectionStatus.CONNECTED,
             hostRuntimeMetadata = HostRuntimeMetadata(
                 runtimeTarget = "t3-server",
-                runtimeTargetDisplayName = "T3 Server",
+                runtimeTargetDisplayName = "Androdex Server",
                 runtimeAttachState = "attach_failed",
                 runtimeAttachFailure = "State root mismatch between host and bridge.",
             ),
@@ -334,7 +334,7 @@ class AndrodexFeatureStateTest {
             activeWorkspacePath = "/tmp/project-a",
             hostRuntimeMetadata = HostRuntimeMetadata(
                 runtimeTarget = "t3-server",
-                runtimeTargetDisplayName = "T3 Server",
+                runtimeTargetDisplayName = "Androdex Server",
             ),
         )
 
@@ -369,11 +369,11 @@ class AndrodexFeatureStateTest {
                     ),
                     HostRuntimeTargetOption(
                         value = "t3-server",
-                        title = "T3 Code",
-                        subtitle = "Attach the host bridge to a local T3 server.",
+                        title = "Androdex Server",
+                        subtitle = "Attach the host bridge to the local Androdex Server runtime.",
                         selected = false,
                         enabled = false,
-                        availabilityMessage = "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+                        availabilityMessage = "No Androdex Server listener answered on 127.0.0.1:3773. Start the local server and try again.",
                     ),
                 ),
             ),
@@ -389,10 +389,10 @@ class AndrodexFeatureStateTest {
         assertFalse(t3Option.selected)
         assertFalse(t3Option.enabled)
         assertEquals(
-            "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+            "No Androdex Server listener answered on 127.0.0.1:3773. Start the local server and try again.",
             t3Option.availabilityMessage,
         )
-        assertTrue(t3Option.subtitle.orEmpty().contains("Start T3 locally"))
+        assertTrue(t3Option.subtitle.orEmpty().contains("Start the local server"))
     }
 
     @Test

@@ -127,7 +127,7 @@ internal fun RuntimeSettingsSheet(
 
         SettingsSection(
             title = "Host runtime",
-            summary = "Choose whether this phone talks to Codex or a local T3 host runtime.",
+            summary = "Choose whether this phone talks to Codex or the local Androdex Server runtime.",
         ) {
             SettingsRuntimeOptionGroup(
                 options = state.hostRuntimeTargetOptions,

@@ -229,18 +229,18 @@ function printMacOSBridgeServiceStatus(options = {}) {
     console.log(`[androdex] Runtime endpoint: ${status.runtimeConfig.runtimeEndpoint}`);
   }
   if (status.t3Availability?.selected) {
-    console.log(`[androdex] T3 attach: ${status.t3Availability.summary}`);
+    console.log(`[androdex] Androdex Server attach: ${status.t3Availability.summary}`);
     if (status.t3Availability.endpoint) {
       console.log(
-        `[androdex] T3 endpoint host: ${status.t3Availability.endpointHost || "unknown"}:${status.t3Availability.endpointPort || "unknown"}`
+        `[androdex] Androdex Server endpoint host: ${status.t3Availability.endpointHost || "unknown"}:${status.t3Availability.endpointPort || "unknown"}`
       );
-      console.log(`[androdex] T3 endpoint path: ${status.t3Availability.endpointPath || "/"}`);
+      console.log(`[androdex] Androdex Server endpoint path: ${status.t3Availability.endpointPath || "/"}`);
     }
     if (status.t3Availability.detail) {
-      console.log(`[androdex] T3 note: ${status.t3Availability.detail}`);
+      console.log(`[androdex] Androdex Server note: ${status.t3Availability.detail}`);
     }
     if (status.t3Availability.runtimeAttachFailure) {
-      console.log(`[androdex] T3 attach failure: ${status.t3Availability.runtimeAttachFailure}`);
+      console.log(`[androdex] Androdex Server attach failure: ${status.t3Availability.runtimeAttachFailure}`);
     }
     if (status.t3Runtime) {
       const runtimeBits = [];
@@ -251,25 +251,25 @@ function printMacOSBridgeServiceStatus(options = {}) {
         runtimeBits.push(`CLI at ${status.t3Runtime.cliPath}`);
       }
       console.log(
-        `[androdex] T3 install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
+        `[androdex] Androdex Server install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
       );
       const desktopSessionEndpoint = normalizeNonEmptyString(status.t3Runtime.desktopSession?.endpoint);
       if (desktopSessionEndpoint) {
         const authSuffix = status.t3Runtime.desktopSession?.authEnabled === true
           ? " (auth enabled)"
           : (status.t3Runtime.desktopSession?.authEnabled === false ? " (auth disabled)" : "");
-        console.log(`[androdex] T3 desktop session: ${desktopSessionEndpoint}${authSuffix}`);
+        console.log(`[androdex] Androdex Server desktop session: ${desktopSessionEndpoint}${authSuffix}`);
       }
       const descriptorStatus = normalizeNonEmptyString(status.t3Runtime.desktopSession?.descriptorStatus);
       if (descriptorStatus && descriptorStatus !== "missing") {
         const descriptorLine = descriptorStatus === "trusted"
           ? `trusted descriptor at ${status.t3Runtime.desktopSession.runtimeSessionPath}`
           : `${descriptorStatus.replace(/-/g, " ")} descriptor at ${status.t3Runtime.desktopSession.runtimeSessionPath}`;
-        console.log(`[androdex] T3 desktop descriptor: ${descriptorLine}`);
+        console.log(`[androdex] Androdex Server desktop descriptor: ${descriptorLine}`);
       }
     }
   } else {
-    console.log(`[androdex] T3 attach: ${status.t3Availability?.summary || "T3 is optional and not selected."}`);
+    console.log(`[androdex] Androdex Server attach: ${status.t3Availability?.summary || "Androdex Server is optional and not selected."}`);
   }
   console.log(`[androdex] Trusted phone: ${status.hasTrustedPhone ? "yes" : "no"}`);
   console.log(`[androdex] Desktop refresh: ${status.refreshEnabled ? "enabled" : "disabled"}`);

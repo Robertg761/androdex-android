@@ -2,7 +2,7 @@
   "name": "androdex-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron control panel for the local Androdex bridge and T3 companion setup.",
+  "description": "Electron control panel for the local Androdex bridge and Androdex Server companion setup.",
   "main": "main.js",
   "scripts": {
     "start": "electron ."

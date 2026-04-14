@@ -42,7 +42,7 @@ async function buildRuntimeTargetOptions({
     if (!t3Enabled) {
       const targetHost = t3Availability.endpointHost || "127.0.0.1";
       const targetPort = t3Availability.endpointPort || "3773";
-      t3AvailabilityMessage = `No T3 listener answered on ${targetHost}:${targetPort}. Start T3 locally and try again.`;
+      t3AvailabilityMessage = `No Androdex Server listener answered on ${targetHost}:${targetPort}. Start the local server and try again.`;
     }
   }
 
@@ -57,11 +57,11 @@ async function buildRuntimeTargetOptions({
     },
     {
       value: "t3-server",
-      title: "T3 Code",
-      subtitle: "Attach to the host-local T3 websocket runtime when it is available.",
+      title: "Androdex Server",
+      subtitle: "Attach to the host-local Androdex Server runtime when it is available.",
       selected: resolvedCurrentTarget === "t3-server",
       enabled: t3Enabled,
-      availabilityMessage: t3Enabled ? null : (t3AvailabilityMessage || "T3 Code is not ready yet."),
+      availabilityMessage: t3Enabled ? null : (t3AvailabilityMessage || "Androdex Server is not ready yet."),
     },
   ];
 }

@@ -324,7 +324,7 @@ private fun QuickRuntimeSwitchCard(
                     )
                     Text(
                         text = activeOption?.title?.let { "Currently running on $it." }
-                            ?: "Swap between Codex and T3 Code right from home.",
+                            ?: "Swap between Codex and Androdex Server right from home.",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = colors.textPrimary,
                     )
@@ -528,7 +528,7 @@ private fun HomeLaunchCard(
                             if (createThreadSupported) {
                                 "Jump back into recent work in ${displayName(activeWorkspacePath)} or start a fresh thread without leaving the home view."
                             } else {
-                                "Jump back into recent work in ${displayName(activeWorkspacePath)} and keep browsing existing threads from Android while T3 write actions stay on the host."
+                                "Jump back into recent work in ${displayName(activeWorkspacePath)} and keep browsing existing threads from Android while Androdex Server write actions stay on the host."
                             }
                         } else {
                             "Choose a project once, then keep chats, file-aware actions, and recovery flows anchored to your host workspace."

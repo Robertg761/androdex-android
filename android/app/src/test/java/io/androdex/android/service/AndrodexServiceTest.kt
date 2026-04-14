@@ -3131,9 +3131,9 @@ class AndrodexServiceTest {
                 detail = "Switching to new runtime target",
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                     backendProvider = "t3-server",
-                    backendProviderDisplayName = "T3 Server",
+                    backendProviderDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -3204,9 +3204,9 @@ class AndrodexServiceTest {
                 threadRuntimeOverridesByThread = emptyMap(),
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                     backendProvider = "t3-server",
-                    backendProviderDisplayName = "T3 Server",
+                    backendProviderDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -3301,9 +3301,9 @@ class AndrodexServiceTest {
                 detail = "Connected to new runtime target",
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                     backendProvider = "t3-server",
-                    backendProviderDisplayName = "T3 Server",
+                    backendProviderDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -3468,9 +3468,9 @@ class AndrodexServiceTest {
                 threadRuntimeOverridesByThread = emptyMap(),
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                     backendProvider = "t3-server",
-                    backendProviderDisplayName = "T3 Server",
+                    backendProviderDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -3495,9 +3495,9 @@ class AndrodexServiceTest {
         )
         val t3RuntimeMetadata = HostRuntimeMetadata(
             runtimeTarget = "t3-server",
-            runtimeTargetDisplayName = "T3 Server",
+            runtimeTargetDisplayName = "Androdex Server",
             backendProvider = "t3-server",
-            backendProviderDisplayName = "T3 Server",
+            backendProviderDisplayName = "Androdex Server",
         )
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-1::codex-native"
@@ -3685,9 +3685,9 @@ class AndrodexServiceTest {
     fun runtimeConfigLoaded_missingRuntimeMetadataFallsBackToLegacyCodexScopeWithoutBleed() = runTest {
         val t3RuntimeMetadata = HostRuntimeMetadata(
             runtimeTarget = "t3-server",
-            runtimeTargetDisplayName = "T3 Server",
+            runtimeTargetDisplayName = "Androdex Server",
             backendProvider = "t3-server",
-            backendProviderDisplayName = "T3 Server",
+            backendProviderDisplayName = "Androdex Server",
         )
         val repository = FakeRepository().apply {
             currentThreadTimelineScopeKeyValue = "host-1::t3-server"
@@ -3852,9 +3852,9 @@ class AndrodexServiceTest {
                 detail = "Connected to T3 target",
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                     backendProvider = "t3-server",
-                    backendProviderDisplayName = "T3 Server",
+                    backendProviderDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -4438,7 +4438,7 @@ class AndrodexServiceTest {
                 threadRuntimeOverridesByThread = emptyMap(),
                 runtimeMetadata = HostRuntimeMetadata(
                     runtimeTarget = "t3-server",
-                    runtimeTargetDisplayName = "T3 Server",
+                    runtimeTargetDisplayName = "Androdex Server",
                 ),
             )
         )
@@ -7426,10 +7426,10 @@ class AndrodexServiceTest {
                         ),
                         io.androdex.android.model.HostRuntimeTargetOption(
                             value = "t3-server",
-                            title = "T3 Code",
+                            title = "Androdex Server",
                             selected = false,
                             enabled = false,
-                            availabilityMessage = "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+                            availabilityMessage = "No Androdex Server listener answered on 127.0.0.1:3773. Start the local server and try again.",
                         ),
                     ),
                 ),
@@ -7441,7 +7441,7 @@ class AndrodexServiceTest {
         }.exceptionOrNull()
 
         assertEquals(
-            "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+            "No Androdex Server listener answered on 127.0.0.1:3773. Start the local server and try again.",
             error?.message,
         )
         assertTrue(repository.selectedHostRuntimeTargets.isEmpty())

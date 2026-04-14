@@ -105,7 +105,7 @@ class AndrodexClientCapabilityBootstrapTest {
             """
             {
               "runtime_target": "t3-server",
-              "runtime_target_display_name": "T3 Server",
+              "runtime_target_display_name": "Androdex Server",
               "runtime_attach_state": "ready",
               "runtime_snapshot_sequence": "11",
               "runtime_replay_sequence": 13,
@@ -118,7 +118,7 @@ class AndrodexClientCapabilityBootstrapTest {
         val decoded = decodeHostRuntimeMetadata(result)
 
         assertEquals("t3-server", decoded?.runtimeTarget)
-        assertEquals("T3 Server", decoded?.runtimeTargetDisplayName)
+        assertEquals("Androdex Server", decoded?.runtimeTargetDisplayName)
         assertEquals("ready", decoded?.runtimeAttachState)
         assertEquals(11, decoded?.runtimeSnapshotSequence)
         assertEquals(13, decoded?.runtimeReplaySequence)

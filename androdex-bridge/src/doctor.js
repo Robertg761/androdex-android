@@ -43,13 +43,13 @@ async function getBridgeDoctorReport({
         timeoutMs,
       });
       if (endpointProbe.reachable) {
-        recommendations.push("T3 looks reachable. Restart or run `androdex up` with the same T3 environment to switch the bridge onto that runtime.");
+        recommendations.push("Androdex Server looks reachable. Restart or run `androdex up` with the same server environment to switch the bridge onto that runtime.");
       } else {
-        recommendations.push("No T3 listener answered on the configured loopback endpoint. Start T3 locally, then rerun `androdex doctor`.");
+        recommendations.push("No Androdex Server listener answered on the configured loopback endpoint. Start the local server, then rerun `androdex doctor`.");
         if (installedRuntime.desktopAppInstalled) {
-          recommendations.push(`Open ${installedRuntime.desktopAppPath} and wait for T3 to finish starting, then rerun \`androdex doctor\`.`);
+          recommendations.push(`Open ${installedRuntime.desktopAppPath} and wait for the server runtime to finish starting, then rerun \`androdex doctor\`.`);
         } else if (!installedRuntime.cliInstalled) {
-          recommendations.push("Install the T3 desktop app or T3 CLI first so Androdex has a host-local runtime to attach to.");
+          recommendations.push("Install the desktop app or CLI first so Androdex has a host-local server runtime to attach to.");
         }
       }
     } else if (t3Availability.reasonCode === "missing-endpoint") {
@@ -57,7 +57,7 @@ async function getBridgeDoctorReport({
     } else if (t3Availability.reasonCode === "non-loopback-endpoint") {
       recommendations.push("Point ANDRODEX_T3_ENDPOINT at localhost, 127.0.0.1, or ::1 instead of a LAN or public host.");
     } else if (t3Availability.reasonCode === "unsupported-protocol" || t3Availability.reasonCode === "invalid-endpoint") {
-      recommendations.push("Use a websocket endpoint such as ws://127.0.0.1:3773/ws for T3 companion attach.");
+      recommendations.push("Use a websocket endpoint such as ws://127.0.0.1:3773/ws for Androdex Server attach.");
     }
 
     const desktopSessionEndpoint = normalizeNonEmptyString(installedRuntime?.desktopSession?.endpoint);
@@ -65,7 +65,7 @@ async function getBridgeDoctorReport({
     const desktopDescriptorDetail = normalizeNonEmptyString(installedRuntime?.desktopSession?.descriptorDetail);
     if (desktopDescriptorStatus && desktopDescriptorStatus !== "trusted" && desktopDescriptorStatus !== "missing") {
       recommendations.push(
-        `The local T3 desktop runtime descriptor looks ${desktopDescriptorStatus.replace(/-/g, " ")}. Restart T3 Code to refresh ${installedRuntime?.desktopSession?.runtimeSessionPath || "the descriptor"}${desktopDescriptorDetail ? ` (${desktopDescriptorDetail})` : ""}.`
+        `The local server runtime descriptor looks ${desktopDescriptorStatus.replace(/-/g, " ")}. Restart the runtime to refresh ${installedRuntime?.desktopSession?.runtimeSessionPath || "the descriptor"}${desktopDescriptorDetail ? ` (${desktopDescriptorDetail})` : ""}.`
       );
     }
     if (desktopSessionEndpoint) {
@@ -78,15 +78,15 @@ async function getBridgeDoctorReport({
         });
       }
       if (desktopSessionEndpoint !== runtimeEndpoint) {
-        recommendations.push(`T3 desktop is currently exposing a different loopback websocket (${desktopSessionEndpoint}).`);
+        recommendations.push(`The desktop runtime is currently exposing a different loopback websocket (${desktopSessionEndpoint}).`);
       }
       if (installedRuntime?.desktopSession?.source !== "runtime-session-file"
         && installedRuntime?.desktopSession?.authEnabled !== false) {
-        recommendations.push("The installed T3 desktop app uses auth-protected dynamic loopback sessions, so seamless attach still needs a desktop-to-Androdex auth handoff or local runtime descriptor.");
+        recommendations.push("The installed desktop runtime uses auth-protected dynamic loopback sessions, so seamless attach still needs a desktop-to-Androdex auth handoff or local runtime descriptor.");
       }
     }
   } else {
-    recommendations.push("Codex-native is still the default. Set ANDRODEX_RUNTIME_TARGET=t3-server when you want Androdex to attach to a host-local T3 runtime.");
+    recommendations.push("Codex-native is still the default. Set ANDRODEX_RUNTIME_TARGET=t3-server when you want Androdex to attach to the local Androdex Server runtime.");
   }
 
   return {
@@ -125,13 +125,13 @@ async function runBridgeDoctor({
   }
 
   if (report.runtimeTarget === "t3-server") {
-    consoleImpl.log(`[androdex] T3 config: ${report.t3Availability.summary}`);
+    consoleImpl.log(`[androdex] Androdex Server config: ${report.t3Availability.summary}`);
     if (report.t3Availability.detail) {
-      consoleImpl.log(`[androdex] T3 detail: ${report.t3Availability.detail}`);
+      consoleImpl.log(`[androdex] Androdex Server detail: ${report.t3Availability.detail}`);
     }
     if (report.endpointProbe) {
       consoleImpl.log(
-        `[androdex] T3 probe: ${report.endpointProbe.reachable ? "reachable" : `unreachable (${report.endpointProbe.reasonCode})`}`
+        `[androdex] Androdex Server probe: ${report.endpointProbe.reachable ? "reachable" : `unreachable (${report.endpointProbe.reasonCode})`}`
       );
     }
     if (report.tools.t3Runtime) {
@@ -143,17 +143,17 @@ async function runBridgeDoctor({
         runtimeBits.push(`CLI at ${report.tools.t3Runtime.cliPath}`);
       }
       consoleImpl.log(
-        `[androdex] T3 install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
+        `[androdex] Androdex Server install: ${runtimeBits.length > 0 ? runtimeBits.join(", ") : "not detected"}`
       );
       const desktopSessionEndpoint = normalizeNonEmptyString(report.tools.t3Runtime.desktopSession?.endpoint);
       if (desktopSessionEndpoint) {
         const authSuffix = report.tools.t3Runtime.desktopSession?.authEnabled === true
           ? " (auth enabled)"
           : (report.tools.t3Runtime.desktopSession?.authEnabled === false ? " (auth disabled)" : "");
-        consoleImpl.log(`[androdex] T3 desktop session: ${desktopSessionEndpoint}${authSuffix}`);
+        consoleImpl.log(`[androdex] Androdex Server desktop session: ${desktopSessionEndpoint}${authSuffix}`);
         if (report.desktopSessionProbe) {
           consoleImpl.log(
-            `[androdex] T3 desktop session probe: ${report.desktopSessionProbe.reachable ? "reachable" : `unreachable (${report.desktopSessionProbe.reasonCode})`}`
+            `[androdex] Androdex Server desktop session probe: ${report.desktopSessionProbe.reachable ? "reachable" : `unreachable (${report.desktopSessionProbe.reasonCode})`}`
           );
         }
       }
@@ -162,11 +162,11 @@ async function runBridgeDoctor({
         const descriptorLine = descriptorStatus === "trusted"
           ? `trusted descriptor at ${report.tools.t3Runtime.desktopSession.runtimeSessionPath}`
           : `${descriptorStatus.replace(/-/g, " ")} descriptor at ${report.tools.t3Runtime.desktopSession.runtimeSessionPath}`;
-        consoleImpl.log(`[androdex] T3 desktop descriptor: ${descriptorLine}`);
+        consoleImpl.log(`[androdex] Androdex Server desktop descriptor: ${descriptorLine}`);
       }
     }
   } else {
-    consoleImpl.log(`[androdex] T3 config: ${report.t3Availability.summary}`);
+    consoleImpl.log(`[androdex] Androdex Server config: ${report.t3Availability.summary}`);
   }
 
   for (const recommendation of report.recommendations) {

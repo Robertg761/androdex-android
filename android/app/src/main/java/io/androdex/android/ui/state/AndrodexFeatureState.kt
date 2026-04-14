@@ -1108,8 +1108,8 @@ private fun buildHostRuntimeTargetOptions(
         ),
         RuntimeSettingsOptionUiState(
             value = "t3-server",
-            title = "T3 Code",
-            subtitle = "Attach the host bridge to a local T3 server.",
+            title = "Androdex Server",
+            subtitle = "Attach the host bridge to the local Androdex Server runtime.",
             selected = currentRuntimeTarget == "t3-server",
         ),
     )

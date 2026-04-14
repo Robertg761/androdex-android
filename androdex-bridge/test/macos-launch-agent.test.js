@@ -356,9 +356,9 @@ test("printMacOSBridgeServiceStatus includes installed T3 desktop session detail
       console.log = originalConsoleLog;
     }
 
-    assert.ok(messages.some((message) => message.includes("T3 install: desktop app at /Applications/T3 Code (Alpha).app")));
-    assert.ok(messages.some((message) => message.includes("T3 desktop session: ws://127.0.0.1:57816/ws (auth enabled)")));
-    assert.ok(messages.some((message) => message.includes("T3 desktop descriptor: trusted descriptor")));
+    assert.ok(messages.some((message) => message.includes("Androdex Server install: desktop app at /Applications/T3 Code (Alpha).app")));
+    assert.ok(messages.some((message) => message.includes("Androdex Server desktop session: ws://127.0.0.1:57816/ws (auth enabled)")));
+    assert.ok(messages.some((message) => message.includes("Androdex Server desktop descriptor: trusted descriptor")));
   });
 });
 
