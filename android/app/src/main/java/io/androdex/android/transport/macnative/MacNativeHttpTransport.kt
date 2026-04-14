@@ -1,5 +1,7 @@
 package io.androdex.android.transport.macnative
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -18,19 +20,21 @@ internal class MacNativeHttpException(
 internal abstract class OkHttpMacNativeJsonTransport(
     private val okHttpClient: OkHttpClient,
 ) {
-    protected fun executeJsonRequest(request: Request): JSONObject {
-        okHttpClient.newCall(request).execute().use { response ->
-            val responseBody = response.body.string()
-            if (!response.isSuccessful) {
-                throw MacNativeHttpException(
-                    statusCode = response.code,
-                    message = decodeMacNativeErrorMessage(responseBody, response.code),
-                )
+    protected suspend fun executeJsonRequest(request: Request): JSONObject {
+        return withContext(Dispatchers.IO) {
+            okHttpClient.newCall(request).execute().use { response ->
+                val responseBody = response.body.string()
+                if (!response.isSuccessful) {
+                    throw MacNativeHttpException(
+                        statusCode = response.code,
+                        message = decodeMacNativeErrorMessage(responseBody, response.code),
+                    )
+                }
+                if (responseBody.isBlank()) {
+                    return@withContext JSONObject()
+                }
+                JSONObject(responseBody)
             }
-            if (responseBody.isBlank()) {
-                return JSONObject()
-            }
-            return JSONObject(responseBody)
         }
     }
 

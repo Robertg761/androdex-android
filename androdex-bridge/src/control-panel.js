@@ -21,7 +21,8 @@ const {
   stopMacOSBridgeService,
 } = require("./macos-launch-agent");
 const { getBridgeDoctorReport } = require("./doctor");
-const { detectInstalledT3Runtime } = require("./runtime/t3-discovery");
+const { detectInstalledT3Runtime, resolveT3RuntimeEndpoint } = require("./runtime/t3-discovery");
+const { buildRuntimeTargetOptions } = require("./runtime/runtime-target-options");
 const { resolveRuntimeTargetConfig } = require("./runtime/target-config");
 
 const DEFAULT_LOG_LINE_COUNT = 160;
@@ -38,6 +39,18 @@ async function getBridgeDesktopSnapshot({
   const serviceStatus = getMacOSBridgeServiceStatus({ env: controlEnv });
   const installedT3Runtime = detectInstalledT3Runtime({ env: controlEnv });
   const runtimeSessionPath = resolveT3RuntimeSessionPath({ env });
+  const runtimeTargetOptions = await buildRuntimeTargetOptions({
+    currentRuntimeTarget: normalizeNonEmptyString(daemonConfig.runtimeTarget)
+      || normalizeNonEmptyString(serviceStatus?.runtimeConfig?.runtimeTarget)
+      || normalizeNonEmptyString(serviceStatus?.bridgeStatus?.runtimeTarget)
+      || "codex-native",
+    installedT3Runtime,
+    runtimeAttachFailure: serviceStatus?.bridgeStatus?.runtimeAttachFailure,
+    t3EndpointConfig: resolveDesktopT3EndpointConfig({
+      env,
+      nextConfig: daemonConfig,
+    }),
+  });
 
   return {
     daemonConfig,
@@ -66,19 +79,60 @@ async function getBridgeDesktopSnapshot({
       stderrLogPath: resolveBridgeStderrLogPath({ env }),
     },
     runtimeSessionDescriptor: readRuntimeSessionDescriptor({ filePath: runtimeSessionPath }),
+    runtimeTargetOptions,
     serviceStatus,
   };
 }
 
-function updateBridgeRuntimeConfig({
+async function updateBridgeRuntimeConfig({
   targetKind,
   endpoint = "",
   endpointAuthToken = "",
   refreshEnabled = null,
   env = process.env,
+  detectInstalledT3RuntimeImpl = detectInstalledT3Runtime,
+  readDaemonConfigImpl = readDaemonConfig,
+  resolveT3RuntimeEndpointImpl = resolveT3RuntimeEndpoint,
+  writeDaemonConfigImpl = writeDaemonConfig,
+} = {}) {
+  const currentConfig = readDaemonConfigImpl({ env }) || {};
+  const nextConfig = buildNextRuntimeConfig({
+    currentConfig,
+    endpoint,
+    endpointAuthToken,
+    refreshEnabled,
+    targetKind,
+  });
+
+  const runtimeTargetOptions = await buildRuntimeTargetOptions({
+    currentRuntimeTarget: nextConfig.runtimeTarget,
+    installedT3Runtime: detectInstalledT3RuntimeImpl({ env }),
+    t3EndpointConfig: resolveDesktopT3EndpointConfig({
+      env,
+      nextConfig,
+      resolveT3RuntimeEndpointImpl,
+    }),
+  });
+  const selectedOption = runtimeTargetOptions.find((option) => option.value === nextConfig.runtimeTarget);
+  if (selectedOption && !selectedOption.enabled) {
+    throw new Error(
+      normalizeNonEmptyString(selectedOption.availabilityMessage)
+        || `${selectedOption.title} is not ready yet.`
+    );
+  }
+
+  writeDaemonConfigImpl(nextConfig, { env });
+  return nextConfig;
+}
+
+function buildNextRuntimeConfig({
+  currentConfig = {},
+  endpoint = "",
+  endpointAuthToken = "",
+  refreshEnabled = null,
+  targetKind,
 } = {}) {
   const runtimeTarget = resolveRuntimeTargetConfig({ kind: targetKind }).kind;
-  const currentConfig = readDaemonConfig({ env }) || {};
   const nextConfig = {
     ...currentConfig,
     runtimeProvider: runtimeTarget === "t3-server" ? "t3code" : "codex",
@@ -97,8 +151,8 @@ function updateBridgeRuntimeConfig({
       : "";
   } else {
     nextConfig.runtimeEndpoint = "";
-    delete nextConfig.runtimeEndpointAuthToken;
-    delete nextConfig.runtimeEndpointSource;
+    nextConfig.runtimeEndpointAuthToken = "";
+    nextConfig.runtimeEndpointSource = "";
   }
 
   if (typeof refreshEnabled === "boolean") {
@@ -106,8 +160,23 @@ function updateBridgeRuntimeConfig({
     nextConfig.refreshEnabledExplicit = true;
   }
 
-  writeDaemonConfig(nextConfig, { env });
   return nextConfig;
+}
+
+function resolveDesktopT3EndpointConfig({
+  env = process.env,
+  nextConfig = {},
+  resolveT3RuntimeEndpointImpl = resolveT3RuntimeEndpoint,
+} = {}) {
+  const explicitEndpoint = normalizeNonEmptyString(nextConfig.runtimeEndpoint);
+  if (explicitEndpoint) {
+    return {
+      endpoint: explicitEndpoint,
+      authToken: normalizeNonEmptyString(nextConfig.runtimeEndpointAuthToken),
+      source: normalizeNonEmptyString(nextConfig.runtimeEndpointSource) || "explicit",
+    };
+  }
+  return resolveT3RuntimeEndpointImpl({ env });
 }
 
 async function startBridgeServiceFromConfig({

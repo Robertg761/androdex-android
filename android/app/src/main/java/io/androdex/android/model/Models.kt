@@ -300,6 +300,7 @@ data class HostRuntimeMetadata(
     val runtimeTargetDisplayName: String? = null,
     val backendProvider: String? = null,
     val backendProviderDisplayName: String? = null,
+    val runtimeTargetOptions: List<HostRuntimeTargetOption> = emptyList(),
     val runtimeAttachState: String? = null,
     val runtimeAttachFailure: String? = null,
     val runtimeProtocolVersion: String? = null,
@@ -309,6 +310,15 @@ data class HostRuntimeMetadata(
     val runtimeReplaySequence: Int? = null,
     val runtimeSubscriptionState: String? = null,
     val runtimeDuplicateSuppressionCount: Int? = null,
+)
+
+data class HostRuntimeTargetOption(
+    val value: String,
+    val title: String,
+    val subtitle: String? = null,
+    val selected: Boolean = false,
+    val enabled: Boolean = true,
+    val availabilityMessage: String? = null,
 )
 
 data class HostRateLimitBucket(

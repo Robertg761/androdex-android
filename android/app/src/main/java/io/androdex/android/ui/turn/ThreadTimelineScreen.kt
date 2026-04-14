@@ -109,6 +109,7 @@ import io.androdex.android.timeline.ThreadTimelineRenderItem
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
 import io.androdex.android.timeline.timelineScrollTargetIndex as renderTimelineScrollTargetIndex
 import io.androdex.android.ui.shared.BusyIndicator
+import io.androdex.android.ui.shared.LandingBackdrop
 import io.androdex.android.ui.shared.RemodexButton
 import io.androdex.android.ui.shared.RemodexButtonStyle
 import io.androdex.android.ui.shared.RemodexDivider
@@ -637,6 +638,7 @@ internal fun ThreadTimelineScreen(
                     .weight(1f),
                 contentAlignment = Alignment.TopCenter,
             ) {
+                LandingBackdrop(modifier = Modifier.matchParentSize())
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -653,6 +655,13 @@ internal fun ThreadTimelineScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(geometry.spacing14),
                     ) {
+                        item(key = "thread-overview") {
+                            ThreadOverviewCard(
+                                title = state.title,
+                                subtitle = state.subtitle,
+                                runState = state.runState,
+                            )
+                        }
                         if (state.isForkedThread) {
                             item(key = "forked-banner") {
                                 ForkedThreadBanner()
@@ -886,6 +895,77 @@ private fun ThreadHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 content = actions,
             )
+        }
+    }
+}
+
+@Composable
+private fun ThreadOverviewCard(
+    title: String,
+    subtitle: String?,
+    runState: ThreadRunBadgeUiState?,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+    val statusLabel = threadRunStatusLabel(runState)
+    val statusStyle = threadRunPillStyle(runState)
+
+    RemodexGroupedSurface(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = geometry.cornerLarge,
+        tonalColor = colors.subtleGlassTint.copy(alpha = 0.88f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = geometry.spacing16, vertical = geometry.spacing16),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+                ) {
+                    Text(
+                        text = "Live thread",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textSecondary,
+                    )
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = colors.textPrimary,
+                    )
+                }
+                statusLabel?.let {
+                    RemodexPill(label = it, style = statusStyle)
+                }
+            }
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary,
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(runStateDotColor(runState).copy(alpha = if (runState == null) 0.45f else 1f)),
+                )
+                Text(
+                    text = statusLabel?.let { "Session state: $it" } ?: "Session state: Waiting",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            }
         }
     }
 }
@@ -2860,6 +2940,21 @@ private fun messageBubbleShape(
             else -> RoundedCornerShape(inner, outer, outer, inner)
         }
     }
+}
+
+private fun threadRunStatusLabel(runState: ThreadRunBadgeUiState?): String? = when (runState) {
+    ThreadRunBadgeUiState.RUNNING -> "Running"
+    ThreadRunBadgeUiState.READY -> "Ready"
+    ThreadRunBadgeUiState.FAILED -> "Needs review"
+    null -> null
+}
+
+@Composable
+private fun threadRunPillStyle(runState: ThreadRunBadgeUiState?): RemodexPillStyle = when (runState) {
+    ThreadRunBadgeUiState.RUNNING -> RemodexPillStyle.Warning
+    ThreadRunBadgeUiState.READY -> RemodexPillStyle.Success
+    ThreadRunBadgeUiState.FAILED -> RemodexPillStyle.Error
+    null -> RemodexPillStyle.Neutral
 }
 
 private fun fileChangeSummaryText(message: ConversationMessage): String? {

@@ -34,6 +34,8 @@ import io.androdex.android.model.WorkspaceActivationStatus
 import io.androdex.android.model.WorkspaceBrowseResult
 import io.androdex.android.model.WorkspaceRecentState
 import io.androdex.android.onboarding.InMemoryFirstPairingOnboardingStore
+import io.androdex.android.ui.state.AndrodexDestinationUiState
+import io.androdex.android.ui.state.toAppUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -108,6 +110,12 @@ class MainViewModelPairingOnboardingTest {
     }
 
     @Test
+    fun httpsPairDeepLink_extractsMacPairUrlPayload() {
+        val pairUrl = "https://mac.example.com/pair#token=pair_123"
+        assertEquals(pairUrl, extractPairingPayloadFromUriString(pairUrl))
+    }
+
+    @Test
     fun freshScanSuccess_overridesSavedReconnectAndConnectsWithNewPayload() = runTest(dispatcher) {
         val repository = PairingOnboardingRepository(
             hasSavedPairing = true,
@@ -155,6 +163,27 @@ class MainViewModelPairingOnboardingTest {
         assertEquals(1, repository.reconnectSavedCalls)
         assertEquals("No QR code was captured. Reconnecting to the saved pair.", viewModel.uiState.value.errorMessage)
         assertTrue(viewModel.uiState.value.freshPairingAttempt == null)
+    }
+
+    @Test
+    fun canceledFreshScan_fromFirstPairingFallsBackToManualPairing() = runTest(dispatcher) {
+        val repository = PairingOnboardingRepository(hasSavedPairing = false)
+        val viewModel = MainViewModel(repository)
+        dispatcher.scheduler.runCurrent()
+
+        viewModel.beginFreshPairingScan()
+        dispatcher.scheduler.runCurrent()
+        viewModel.completeFreshPairingScan(null)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(0, repository.reconnectSavedCalls)
+        assertEquals(null, viewModel.uiState.value.errorMessage)
+        assertFalse(viewModel.uiState.value.isFirstPairingOnboardingActive)
+        assertTrue(viewModel.uiState.value.freshPairingAttempt == null)
+        assertTrue(
+            viewModel.uiState.value.toAppUiState(isSettingsVisible = false).destination
+                is AndrodexDestinationUiState.Pairing
+        )
     }
 
     @Test

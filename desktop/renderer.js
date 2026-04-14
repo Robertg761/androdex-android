@@ -27,13 +27,16 @@ const els = {
   pairingQrImage: document.querySelector("#pairing-qr-image"),
   pairingQrPlaceholder: document.querySelector("#pairing-qr-placeholder"),
   pairingStatusLabel: document.querySelector("#pairing-status-label"),
+  applyRuntimeConfigButton: document.querySelector("#apply-runtime-config-button"),
   refreshEnabledInput: document.querySelector("#refresh-enabled-input"),
   refreshState: document.querySelector("#refresh-state"),
   runtimeAuthTokenInput: document.querySelector("#runtime-auth-token-input"),
+  runtimeChoiceNote: document.querySelector("#runtime-choice-note"),
   runtimeConfigForm: document.querySelector("#runtime-config-form"),
   runtimeConfigNote: document.querySelector("#runtime-config-note"),
   runtimeEndpointInput: document.querySelector("#runtime-endpoint-input"),
   runtimeLabel: document.querySelector("#runtime-label"),
+  saveRuntimeConfigButton: document.querySelector("#save-runtime-config-button"),
   runtimeSyncFoot: document.querySelector("#runtime-sync-foot"),
   runtimeSyncState: document.querySelector("#runtime-sync-state"),
   serviceInstalled: document.querySelector("#service-installed"),
@@ -73,6 +76,99 @@ function formatConnectionLabel(snapshot) {
   const connection = snapshot?.serviceStatus?.bridgeStatus?.connectionStatus || "unknown";
   const bridgeState = snapshot?.serviceStatus?.bridgeStatus?.state || "unknown";
   return `${bridgeState} / ${connection}`;
+}
+
+function listRuntimeTargetOptions(snapshot) {
+  return Array.isArray(snapshot?.runtimeTargetOptions) ? snapshot.runtimeTargetOptions : [];
+}
+
+function findRuntimeTargetOption(snapshot, value) {
+  const normalizedValue = typeof value === "string" ? value.trim() : "";
+  return listRuntimeTargetOptions(snapshot).find((option) => option?.value === normalizedValue) || null;
+}
+
+function selectedRuntimeTargetValue(snapshot) {
+  return document.querySelector('input[name="targetKind"]:checked')?.value
+    || snapshot?.daemonConfig?.runtimeTarget
+    || snapshot?.serviceStatus?.runtimeConfig?.runtimeTarget
+    || "codex-native";
+}
+
+function describeRuntimeChoice(snapshot, targetKind) {
+  const option = findRuntimeTargetOption(snapshot, targetKind);
+  const blockedAlternate = listRuntimeTargetOptions(snapshot).find((candidate) => candidate?.enabled === false && !candidate?.selected);
+  if (!option) {
+    return {
+      disabled: false,
+      message: "Pick the host runtime you want to run right now.",
+      variant: "default",
+    };
+  }
+  if (option.selected && option.enabled !== false) {
+    if (blockedAlternate?.availabilityMessage) {
+      return {
+        disabled: false,
+        message: `${option.title} is active. ${blockedAlternate.title} is unavailable right now: ${blockedAlternate.availabilityMessage}`,
+        variant: "warning",
+      };
+    }
+    return {
+      disabled: false,
+      message: `${option.title} is active on the host right now.`,
+      variant: "success",
+    };
+  }
+  if (option.enabled === false) {
+    return {
+      disabled: true,
+      message: option.availabilityMessage || `${option.title} is not ready yet.`,
+      variant: "warning",
+    };
+  }
+  return {
+    disabled: false,
+    message: `${option.title} is ready. Apply when you want the bridge to switch over.`,
+    variant: "success",
+  };
+}
+
+function syncRuntimeSelectionUi(snapshot) {
+  const selectedTarget = selectedRuntimeTargetValue(snapshot);
+  const selectionState = describeRuntimeChoice(snapshot, selectedTarget);
+
+  document.querySelectorAll('label[data-runtime-option]').forEach((label) => {
+    const option = findRuntimeTargetOption(snapshot, label.dataset.runtimeOption);
+    const input = label.querySelector('input[name="targetKind"]');
+    if (!input) {
+      return;
+    }
+    const isUnavailable = Boolean(option && option.enabled === false && !option.selected);
+    const isSelectedUnavailable = Boolean(option && option.enabled === false && option.selected);
+    input.disabled = isUnavailable;
+    label.classList.toggle("is-unavailable", isUnavailable);
+    label.classList.toggle("is-selected-unavailable", isSelectedUnavailable);
+    label.title = option?.availabilityMessage || "";
+  });
+
+  if (els.t3RuntimeFields) {
+    els.t3RuntimeFields.classList.toggle("is-hidden", selectedTarget !== "t3-server");
+  }
+  if (els.runtimeChoiceNote) {
+    els.runtimeChoiceNote.textContent = selectionState.message;
+    if (selectionState.variant === "default") {
+      delete els.runtimeChoiceNote.dataset.variant;
+    } else {
+      els.runtimeChoiceNote.dataset.variant = selectionState.variant;
+    }
+  }
+  if (els.saveRuntimeConfigButton) {
+    els.saveRuntimeConfigButton.disabled = selectionState.disabled;
+    els.saveRuntimeConfigButton.title = selectionState.disabled ? selectionState.message : "";
+  }
+  if (els.applyRuntimeConfigButton) {
+    els.applyRuntimeConfigButton.disabled = selectionState.disabled;
+    els.applyRuntimeConfigButton.title = selectionState.disabled ? selectionState.message : "";
+  }
 }
 
 function updatePairingView(snapshot) {
@@ -179,15 +275,13 @@ function render(snapshot) {
   if (radio) {
     radio.checked = true;
   }
-  if (els.t3RuntimeFields) {
-    els.t3RuntimeFields.classList.toggle("is-hidden", runtimeTarget !== "t3-server");
-  }
   els.runtimeEndpointInput.value = daemonConfig.runtimeEndpoint || "";
   els.runtimeAuthTokenInput.value = daemonConfig.runtimeEndpointAuthToken || "";
   els.refreshEnabledInput.checked = Boolean(daemonConfig.refreshEnabled);
   els.runtimeConfigNote.textContent = runtimeTarget === "t3-server"
     ? (serviceStatus.t3Availability?.summary || "T3 attach not selected.")
     : "Codex-native is active. Switch to T3 when you want the bridge to attach to a local T3 runtime.";
+  syncRuntimeSelectionUi(snapshot);
 
   const descriptor = snapshot?.runtimeSessionDescriptor || null;
   els.descriptorBaseUrlInput.value = descriptor?.baseUrl || "";
@@ -341,10 +435,7 @@ async function handleAction(action) {
 function installListeners() {
   document.querySelectorAll('input[name="targetKind"]').forEach((input) => {
     input.addEventListener("change", () => {
-      const selected = document.querySelector('input[name="targetKind"]:checked')?.value || "codex-native";
-      if (els.t3RuntimeFields) {
-        els.t3RuntimeFields.classList.toggle("is-hidden", selected !== "t3-server");
-      }
+      syncRuntimeSelectionUi(state.snapshot);
     });
   });
 

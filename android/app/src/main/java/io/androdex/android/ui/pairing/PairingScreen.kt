@@ -740,7 +740,7 @@ private fun ManualPairingCard(
                         color = colors.textPrimary,
                     )
                     Text(
-                        text = "Use this when scanning is unavailable or you already copied the bridge payload from the host terminal.",
+                        text = "Use this when scanning is unavailable or you already copied a pairing link or JSON payload from the host.",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textSecondary,
                     )
@@ -752,8 +752,8 @@ private fun ManualPairingCard(
                 onValueChange = onPairingInputChanged,
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 4,
-                label = "Pairing payload",
-                placeholder = "{\"v\":3,...}",
+                label = "Pairing link or payload",
+                placeholder = "http://mac.local/pair#token=...",
                 mono = true,
             )
 
@@ -767,7 +767,7 @@ private fun ManualPairingCard(
                 ),
             ) {
                 Text(
-                    text = "Connect with payload",
+                    text = "Connect with pairing info",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),

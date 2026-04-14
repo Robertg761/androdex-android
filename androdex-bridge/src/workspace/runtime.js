@@ -8,7 +8,9 @@ const fs = require("fs");
 const path = require("path");
 const { createRuntimeAdapter } = require("../runtime/adapter");
 const { readDaemonConfig, writeDaemonConfig } = require("../daemon-state");
-const { resolveT3RuntimeEndpoint } = require("../runtime/t3-discovery");
+const { detectInstalledT3Runtime, resolveT3RuntimeEndpoint } = require("../runtime/t3-discovery");
+const { buildRuntimeTargetOptions } = require("../runtime/runtime-target-options");
+const { resolveRuntimeTargetConfig } = require("../runtime/target-config");
 
 const MAX_RECENT_WORKSPACES = 25;
 
@@ -38,6 +40,7 @@ function createWorkspaceRuntime({
     getCurrentCwd,
     getRuntimeMetadata,
     getRuntimeTarget,
+    getRuntimeTargetOptions,
     getStatus,
     getWorkspaceState,
     hasActiveWorkspace,
@@ -65,12 +68,20 @@ function createWorkspaceRuntime({
   }
 
   function getStatus() {
-    return {
-      currentCwd: currentCwd || null,
-      runtimeMetadata: getRuntimeMetadata(),
-      runtimeTarget: resolveConfiguredRuntimeTarget(),
-      workspaceActive: Boolean(activeRuntime),
-    };
+    return buildStatus();
+  }
+
+  async function getRuntimeTargetOptions({
+    runtimeConfig = config,
+    probeTimeoutMs = 500,
+  } = {}) {
+    return buildRuntimeTargetOptions({
+      currentRuntimeTarget: resolveConfiguredRuntimeTarget(runtimeConfig),
+      installedT3Runtime: detectInstalledT3Runtime({ env: process.env }),
+      probeTimeoutMs,
+      runtimeAttachFailure: currentRuntimeMetadata?.runtimeAttachFailure,
+      t3EndpointConfig: resolveConfiguredT3Endpoint(runtimeConfig),
+    });
   }
 
   function getWorkspaceState() {
@@ -107,51 +118,61 @@ function createWorkspaceRuntime({
       throw new Error(`Workspace directory not found: ${nextCwd}`);
     }
 
-    const activationId = ++activationSequence;
-    const activation = activationQueue.then(() => performWorkspaceActivation({
+    return queueWorkspaceActivation({
+      activationId: ++activationSequence,
       cwd: nextCwd,
       forceRestart,
-      activationId,
-    }));
-    activationQueue = activation.then(
-      () => undefined,
-      () => undefined
-    );
-    return activation;
+      runtimeConfig: config,
+      persistWorkspaceState: true,
+    });
   }
 
-  async function performWorkspaceActivation({ cwd, activationId, forceRestart = false }) {
+  async function performWorkspaceActivation({
+    cwd,
+    activationId,
+    forceRestart = false,
+    runtimeConfig = config,
+    persistWorkspaceState = true,
+  }) {
+    const runtimeTarget = resolveConfiguredRuntimeTarget(runtimeConfig);
     if (activationId !== activationSequence) {
-      return getStatus();
+      return buildStatus({
+        runtimeConfig,
+        workspaceActive: Boolean(activeRuntime),
+      });
     }
 
-    if (!forceRestart && currentCwd === cwd && activeRuntime) {
+    if (!forceRestart && runtimeConfig === config && currentCwd === cwd && activeRuntime) {
       return getStatus();
     }
 
     await shutdownTransport();
     currentCwd = cwd;
-    rememberRecentWorkspace(cwd);
+    rememberRecentWorkspace(cwd, { persist: persistWorkspaceState });
     onBeforeTransportStart?.({
       cwd,
-      runtimeTarget: resolveConfiguredRuntimeTarget(),
+      runtimeTarget,
     });
 
-    const runtimeTarget = resolveConfiguredRuntimeTarget();
     const nextRuntime = createRuntimeAdapterImpl({
-      endpoint: resolveConfiguredRuntimeEndpoint(),
-      endpointAuthToken: resolveConfiguredRuntimeEndpointAuthToken(),
+      endpoint: resolveConfiguredRuntimeEndpoint(runtimeConfig),
+      endpointAuthToken: resolveConfiguredRuntimeEndpointAuthToken(runtimeConfig),
       env: process.env,
       cwd,
       loadReplayCursor,
       logEvent: onTransportLog,
       persistReplayCursor,
-      resolveEndpointConfig: runtimeTarget === "t3-server" ? resolveConfiguredT3Endpoint : null,
+      resolveEndpointConfig: runtimeTarget === "t3-server"
+        ? () => resolveConfiguredT3Endpoint(runtimeConfig)
+        : null,
       targetKind: runtimeTarget,
     });
     pendingRuntime = nextRuntime;
     currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || null;
-    publishTransportMetadata();
+    publishTransportMetadata({
+      runtimeConfig,
+      workspaceActive: false,
+    });
 
     nextRuntime.onError((error) => {
       if (!isCurrentRuntime(nextRuntime)) {
@@ -160,12 +181,15 @@ function createWorkspaceRuntime({
       activeRuntime = null;
       pendingRuntime = null;
       currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
-      publishTransportMetadata();
+      publishTransportMetadata({
+        runtimeConfig,
+        workspaceActive: false,
+      });
       onTransportError?.({
         error,
         currentCwd,
         runtimeMetadata: getRuntimeMetadata(),
-        runtimeTarget: resolveConfiguredRuntimeTarget(),
+        runtimeTarget,
       });
     });
 
@@ -174,7 +198,10 @@ function createWorkspaceRuntime({
         return;
       }
       currentRuntimeMetadata = metadata ? { ...metadata } : null;
-      publishTransportMetadata();
+      publishTransportMetadata({
+        runtimeConfig,
+        workspaceActive: Boolean(activeRuntime),
+      });
     });
 
     nextRuntime.onMessage((message) => {
@@ -191,25 +218,37 @@ function createWorkspaceRuntime({
       activeRuntime = null;
       pendingRuntime = null;
       currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
-      publishTransportMetadata();
+      publishTransportMetadata({
+        runtimeConfig,
+        workspaceActive: false,
+      });
       onTransportClose?.({
         currentCwd,
         runtimeMetadata: getRuntimeMetadata(),
-        runtimeTarget: resolveConfiguredRuntimeTarget(),
+        runtimeTarget,
       });
     });
 
     await nextRuntime.whenReady?.();
     if (activationId !== activationSequence || pendingRuntime !== nextRuntime) {
       nextRuntime.shutdown?.();
-      return getStatus();
+      return buildStatus({
+        runtimeConfig,
+        workspaceActive: Boolean(activeRuntime),
+      });
     }
 
     activeRuntime = nextRuntime;
     pendingRuntime = null;
     currentRuntimeMetadata = nextRuntime.getRuntimeMetadata?.() || currentRuntimeMetadata;
-    publishTransportMetadata();
-    return getStatus();
+    publishTransportMetadata({
+      runtimeConfig,
+      workspaceActive: true,
+    });
+    return buildStatus({
+      runtimeConfig,
+      workspaceActive: true,
+    });
   }
 
   async function shutdown() {
@@ -223,28 +262,68 @@ function createWorkspaceRuntime({
     if (!nextTarget) {
       throw new Error("Runtime target is required.");
     }
+    const currentTarget = resolveConfiguredRuntimeTarget(config);
+    const nextConfig = cloneConfigSnapshot(config);
+    applyRuntimeConfigUpdate(nextConfig, nextRuntimeConfig);
+    const nextResolvedTarget = resolveConfiguredRuntimeTarget(nextConfig);
 
-    config.runtimeTarget = nextTarget;
-    config.runtimeProvider = normalizeNonEmptyString(nextRuntimeConfig.runtimeProvider)
-      || (nextTarget === "t3-server" ? "t3code" : "codex");
-    if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpoint")) {
-      config.runtimeEndpoint = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpoint);
-    }
-    if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpointAuthToken")) {
-      config.runtimeEndpointAuthToken = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpointAuthToken);
-    }
-    writeDaemonConfigImpl({
-      ...(readDaemonConfigImpl() || {}),
-      ...config,
-    });
-
-    if (currentCwd && isExistingDirectory(currentCwd)) {
-      return activateWorkspace({
-        cwd: currentCwd,
-        forceRestart: true,
-      });
+    if (currentTarget !== nextResolvedTarget) {
+      const targetOptions = await getRuntimeTargetOptions({ runtimeConfig: nextConfig });
+      const selectedOption = targetOptions.find((option) => option.value === nextResolvedTarget);
+      if (selectedOption && !selectedOption.enabled) {
+        throw new Error(
+          normalizeNonEmptyString(selectedOption.availabilityMessage)
+            || `${selectedOption.title} is not ready yet.`
+        );
+      }
     }
 
+    const hasActiveWorkspace = Boolean(currentCwd && isExistingDirectory(currentCwd));
+    const previousConfig = cloneConfigSnapshot(config);
+    if (hasActiveWorkspace) {
+      try {
+        const activationId = ++activationSequence;
+        const status = await queueWorkspaceActivation({
+          activationId,
+          cwd: currentCwd,
+          forceRestart: true,
+          runtimeConfig: nextConfig,
+          persistWorkspaceState: false,
+        });
+        replaceConfigSnapshot(config, nextConfig);
+        writeCommittedConfig();
+        publishTransportMetadata();
+        return status;
+      } catch (error) {
+        replaceConfigSnapshot(config, previousConfig);
+        try {
+          const recoveryActivationId = ++activationSequence;
+          await queueWorkspaceActivation({
+            activationId: recoveryActivationId,
+            cwd: currentCwd,
+            forceRestart: true,
+            runtimeConfig: previousConfig,
+            persistWorkspaceState: false,
+          });
+        } catch (recoveryError) {
+          onTransportError?.({
+            error: recoveryError,
+            currentCwd,
+            runtimeMetadata: getRuntimeMetadata(),
+            runtimeTarget: resolveConfiguredRuntimeTarget(previousConfig),
+          });
+        }
+        publishTransportMetadata();
+        throw new Error(buildRuntimeSwitchFailureMessage({
+          targetKind: nextResolvedTarget,
+          currentTarget,
+          error,
+        }));
+      }
+    }
+
+    replaceConfigSnapshot(config, nextConfig);
+    writeCommittedConfig();
     await shutdownTransport();
     publishTransportMetadata();
     return getStatus();
@@ -272,7 +351,7 @@ function createWorkspaceRuntime({
     }
   }
 
-  function rememberRecentWorkspace(cwd) {
+  function rememberRecentWorkspace(cwd, { persist = true } = {}) {
     const normalized = normalizeWorkspacePath(cwd);
     recentWorkspaces = [
       normalized,
@@ -281,12 +360,12 @@ function createWorkspaceRuntime({
 
     config.activeCwd = normalized;
     config.recentWorkspaces = [...recentWorkspaces];
-    writeDaemonConfigImpl({
-      ...(readDaemonConfigImpl() || {}),
-      ...config,
-      activeCwd: normalized,
-      recentWorkspaces: [...recentWorkspaces],
-    });
+    if (persist) {
+      writeCommittedConfig({
+        activeCwd: normalized,
+        recentWorkspaces: [...recentWorkspaces],
+      });
+    }
   }
 
   function loadReplayCursor({ runtimeTarget, runtimeStateRoot }) {
@@ -323,44 +402,43 @@ function createWorkspaceRuntime({
       },
     };
     config.t3ReplayCursors = nextReplayCursors;
-    writeDaemonConfigImpl({
-      ...(readDaemonConfigImpl() || {}),
-      ...config,
+    writeCommittedConfig({
       t3ReplayCursors: nextReplayCursors,
     });
   }
 
-  function resolveConfiguredRuntimeTarget() {
-    return normalizeNonEmptyString(config?.runtimeTarget)
-      || normalizeNonEmptyString(config?.runtimeProvider)
+  function resolveConfiguredRuntimeTarget(runtimeConfig = config) {
+    return normalizeNonEmptyString(runtimeConfig?.runtimeTarget)
+      || normalizeNonEmptyString(runtimeConfig?.runtimeProvider)
       || "codex-native";
   }
 
-  function resolveConfiguredRuntimeEndpoint() {
-    if (resolveConfiguredRuntimeTarget() === "t3-server") {
-      return resolveConfiguredT3Endpoint().endpoint;
+  function resolveConfiguredRuntimeEndpoint(runtimeConfig = config) {
+    if (resolveConfiguredRuntimeTarget(runtimeConfig) === "t3-server") {
+      return resolveConfiguredT3Endpoint(runtimeConfig).endpoint;
     }
 
-    return normalizeNonEmptyString(config?.runtimeEndpoint)
-      || normalizeNonEmptyString(config?.codexEndpoint)
+    return normalizeNonEmptyString(runtimeConfig?.runtimeEndpoint)
+      || normalizeNonEmptyString(runtimeConfig?.codexEndpoint)
       || "";
   }
 
-  function resolveConfiguredRuntimeEndpointAuthToken() {
-    if (resolveConfiguredRuntimeTarget() === "t3-server") {
-      return resolveConfiguredT3Endpoint().authToken;
+  function resolveConfiguredRuntimeEndpointAuthToken(runtimeConfig = config) {
+    if (resolveConfiguredRuntimeTarget(runtimeConfig) === "t3-server") {
+      return resolveConfiguredT3Endpoint(runtimeConfig).authToken;
     }
 
-    return normalizeNonEmptyString(config?.runtimeEndpointAuthToken)
+    return normalizeNonEmptyString(runtimeConfig?.runtimeEndpointAuthToken)
       || "";
   }
 
-  function resolveConfiguredT3Endpoint() {
-    const explicitEndpoint = normalizeNonEmptyString(config?.runtimeEndpoint);
+  function resolveConfiguredT3Endpoint(runtimeConfig = config) {
+    const explicitEndpoint = normalizeNonEmptyString(runtimeConfig?.runtimeEndpoint);
     if (explicitEndpoint) {
       return {
         endpoint: explicitEndpoint,
-        authToken: normalizeNonEmptyString(config?.runtimeEndpointAuthToken),
+        authToken: normalizeNonEmptyString(runtimeConfig?.runtimeEndpointAuthToken),
+        source: normalizeNonEmptyString(runtimeConfig?.runtimeEndpointSource) || "explicit",
       };
     }
 
@@ -370,6 +448,7 @@ function createWorkspaceRuntime({
     return {
       endpoint: normalizeNonEmptyString(discoveredEndpoint?.endpoint),
       authToken: normalizeNonEmptyString(discoveredEndpoint?.authToken),
+      source: normalizeNonEmptyString(discoveredEndpoint?.source),
     };
   }
 
@@ -377,13 +456,127 @@ function createWorkspaceRuntime({
     return activeRuntime === runtime || pendingRuntime === runtime;
   }
 
-  function publishTransportMetadata() {
+  function publishTransportMetadata({
+    runtimeConfig = config,
+    workspaceActive = Boolean(activeRuntime),
+  } = {}) {
     onTransportMetadata?.({
       currentCwd,
       runtimeMetadata: getRuntimeMetadata(),
-      runtimeTarget: resolveConfiguredRuntimeTarget(),
-      workspaceActive: Boolean(activeRuntime),
+      runtimeTarget: resolveConfiguredRuntimeTarget(runtimeConfig),
+      workspaceActive,
     });
+  }
+
+  function buildStatus({
+    runtimeConfig = config,
+    workspaceActive = Boolean(activeRuntime),
+  } = {}) {
+    return {
+      currentCwd: currentCwd || null,
+      runtimeMetadata: getRuntimeMetadata(),
+      runtimeTarget: resolveConfiguredRuntimeTarget(runtimeConfig),
+      workspaceActive,
+    };
+  }
+
+  function queueWorkspaceActivation({
+    activationId = ++activationSequence,
+    cwd,
+    forceRestart = false,
+    runtimeConfig = config,
+    persistWorkspaceState = true,
+  }) {
+    const activation = activationQueue.then(() => performWorkspaceActivation({
+      activationId,
+      cwd,
+      forceRestart,
+      runtimeConfig,
+      persistWorkspaceState,
+    }));
+    activationQueue = activation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return activation;
+  }
+
+  function writeCommittedConfig(overrides = {}) {
+    const normalizedRuntimeEndpoint = normalizeNonEmptyString(config?.runtimeEndpoint);
+    const normalizedRuntimeEndpointAuthToken = normalizeNonEmptyString(config?.runtimeEndpointAuthToken);
+    const normalizedRuntimeEndpointSource = normalizeNonEmptyString(config?.runtimeEndpointSource);
+    writeDaemonConfigImpl({
+      ...(readDaemonConfigImpl() || {}),
+      ...config,
+      runtimeEndpoint: normalizedRuntimeEndpoint,
+      runtimeEndpointAuthToken: normalizedRuntimeEndpointAuthToken,
+      runtimeEndpointSource: normalizedRuntimeEndpointSource,
+      ...overrides,
+    });
+  }
+}
+
+function applyRuntimeConfigUpdate(config, nextRuntimeConfig = {}) {
+  const nextTarget = normalizeNonEmptyString(nextRuntimeConfig.runtimeTarget)
+    || normalizeNonEmptyString(nextRuntimeConfig.runtimeProvider);
+  config.runtimeTarget = nextTarget;
+  config.runtimeProvider = normalizeNonEmptyString(nextRuntimeConfig.runtimeProvider)
+    || (nextTarget === "t3-server" ? "t3code" : "codex");
+
+  if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpoint")) {
+    config.runtimeEndpoint = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpoint);
+  }
+  if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpointAuthToken")) {
+    config.runtimeEndpointAuthToken = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpointAuthToken);
+  }
+  if (Object.prototype.hasOwnProperty.call(nextRuntimeConfig, "runtimeEndpointSource")) {
+    config.runtimeEndpointSource = normalizeNonEmptyString(nextRuntimeConfig.runtimeEndpointSource);
+  }
+
+  if (config.runtimeTarget === "codex-native") {
+    config.runtimeEndpoint = normalizeNonEmptyString(config.codexEndpoint);
+    config.runtimeEndpointAuthToken = "";
+    config.runtimeEndpointSource = "";
+  }
+}
+
+function buildRuntimeSwitchFailureMessage({
+  targetKind,
+  currentTarget,
+  error,
+}) {
+  const targetLabel = resolveRuntimeTargetLabel(targetKind);
+  const currentLabel = resolveRuntimeTargetLabel(currentTarget);
+  const detail = normalizeNonEmptyString(error?.message) || `Unable to switch to ${targetLabel}.`;
+  if (currentLabel && currentLabel !== targetLabel) {
+    return `${detail} The bridge stayed on ${currentLabel}.`;
+  }
+  return detail;
+}
+
+function cloneConfigSnapshot(value) {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return { ...value };
+  }
+}
+
+function replaceConfigSnapshot(target, snapshot) {
+  Object.keys(target).forEach((key) => {
+    delete target[key];
+  });
+  Object.assign(target, cloneConfigSnapshot(snapshot));
+}
+
+function resolveRuntimeTargetLabel(kind) {
+  try {
+    return resolveRuntimeTargetConfig({ kind }).displayName;
+  } catch {
+    return normalizeNonEmptyString(kind) || null;
   }
 }
 

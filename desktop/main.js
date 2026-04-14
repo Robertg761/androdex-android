@@ -68,7 +68,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("control:apply-runtime-config", async (_event, payload = {}) => {
-    bridge.updateBridgeRuntimeConfig({
+    await bridge.updateBridgeRuntimeConfig({
       endpoint: payload.endpoint,
       endpointAuthToken: payload.endpointAuthToken,
       refreshEnabled: payload.refreshEnabled,

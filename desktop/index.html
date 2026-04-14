@@ -57,14 +57,18 @@
 
             <form id="runtime-config-form" class="compact-form">
               <div class="segmented runtime-segmented">
-                <label>
+                <label data-runtime-option="codex-native">
                   <input type="radio" name="targetKind" value="codex-native" />
                   <span>Codex</span>
                 </label>
-                <label>
+                <label data-runtime-option="t3-server">
                   <input type="radio" name="targetKind" value="t3-server" />
                   <span>T3 Code</span>
                 </label>
+              </div>
+
+              <div id="runtime-choice-note" class="note-box subtle-note">
+                Pick the host runtime you want to run right now.
               </div>
 
               <div id="t3-runtime-fields" class="field-grid">
@@ -84,8 +88,8 @@
               </label>
 
               <div class="button-row">
-                <button type="button" data-action="save-runtime-config" class="ghost">Save</button>
-                <button type="submit" class="accent">Apply Runtime</button>
+                <button id="save-runtime-config-button" type="button" data-action="save-runtime-config" class="ghost">Save</button>
+                <button id="apply-runtime-config-button" type="submit" class="accent">Apply Runtime</button>
                 <button type="button" data-action="start-service">Start</button>
                 <button type="button" data-action="restart-service" class="ghost">Restart</button>
                 <button type="button" data-action="stop-service" class="ghost">Stop</button>

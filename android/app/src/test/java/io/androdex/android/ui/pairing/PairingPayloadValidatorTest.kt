@@ -87,4 +87,14 @@ class PairingPayloadValidatorTest {
 
         assertTrue(result is ConnectPayloadValidationResult.Success)
     }
+
+    @Test
+    fun macNativePairUrl_returnsSuccess() {
+        val result = validateConnectPayload(
+            rawPayload = "https://mac.example.com/pair#token=pair_123",
+            nowEpochMs = Long.MAX_VALUE,
+        )
+
+        assertTrue(result is ConnectPayloadValidationResult.Success)
+    }
 }

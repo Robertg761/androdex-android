@@ -33,6 +33,24 @@ class MacNativeUrlResolverTest {
     }
 
     @Test
+    fun macNativeSocketUrl_appendsWsPathAndTokenForWebSocketSchemes() {
+        assertEquals(
+            "ws://localhost:4318/ws?wsToken=token-123",
+            macNativeSocketUrl(
+                wsBaseUrl = "ws://localhost:4318",
+                token = "token-123",
+            ),
+        )
+        assertEquals(
+            "wss://example.com/base/path/ws?wsToken=token-456",
+            macNativeSocketUrl(
+                wsBaseUrl = "wss://example.com/base/path",
+                token = "token-456",
+            ),
+        )
+    }
+
+    @Test
     fun normalizeHttpBaseUrl_rejectsUnsupportedScheme() {
         try {
             normalizeMacNativeHttpBaseUrl("ftp://example.com")

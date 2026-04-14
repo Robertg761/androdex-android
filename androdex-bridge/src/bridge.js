@@ -799,15 +799,28 @@ function startBridge({
       return false;
     }
 
-    if (method === "bridge/runtimetarget/read") {
-      sendResponse(JSON.stringify({
-        id: parsed.id,
-        result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime),
-      }));
+    if (method === "bridge/runtimetarget/read" || method === "bridge/runtimeTarget/read") {
+      workspaceRuntime.getRuntimeTargetOptions()
+        .then((runtimeTargetOptions) => {
+          sendResponse(JSON.stringify({
+            id: parsed.id,
+            result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime, runtimeTargetOptions),
+          }));
+        })
+        .catch((error) => {
+          sendResponse(JSON.stringify({
+            id: parsed.id,
+            error: {
+              code: -32000,
+              message: normalizeNonEmptyString(error?.message)
+                || "Unable to read the host runtime targets.",
+            },
+          }));
+        });
       return true;
     }
 
-    if (method !== "bridge/runtimetarget/set") {
+    if (method !== "bridge/runtimetarget/set" && method !== "bridge/runtimeTarget/set") {
       return false;
     }
 
@@ -824,18 +837,52 @@ function startBridge({
       return true;
     }
 
-    workspaceRuntime.updateRuntimeConfig({
-      ...buildBridgeManagedRuntimeTargetUpdate({
-        targetKind: resolvedTargetConfig.kind,
-        codexEndpoint: config.codexEndpoint,
-        currentConfig: config,
-      }),
-    })
-      .then(() => {
-        sendResponse(JSON.stringify({
-          id: parsed.id,
-          result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime),
-        }));
+    workspaceRuntime.getRuntimeTargetOptions()
+      .then((runtimeTargetOptions) => {
+        const selectedOption = runtimeTargetOptions.find((option) => option.value === resolvedTargetConfig.kind) || null;
+        if (selectedOption?.selected) {
+          sendResponse(JSON.stringify({
+            id: parsed.id,
+            result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime, runtimeTargetOptions),
+          }));
+          return;
+        }
+        if (selectedOption && !selectedOption.enabled) {
+          sendResponse(JSON.stringify({
+            id: parsed.id,
+            error: {
+              code: -32000,
+              message: normalizeNonEmptyString(selectedOption.availabilityMessage)
+                || `${selectedOption.title} is not ready yet.`,
+            },
+          }));
+          return;
+        }
+
+        workspaceRuntime.updateRuntimeConfig({
+          ...buildBridgeManagedRuntimeTargetUpdate({
+            targetKind: resolvedTargetConfig.kind,
+            codexEndpoint: config.codexEndpoint,
+            currentConfig: config,
+          }),
+        })
+          .then(() => workspaceRuntime.getRuntimeTargetOptions())
+          .then((updatedRuntimeTargetOptions) => {
+            sendResponse(JSON.stringify({
+              id: parsed.id,
+              result: buildBridgeManagedRuntimeTargetResult(workspaceRuntime, updatedRuntimeTargetOptions),
+            }));
+          })
+          .catch((error) => {
+            sendResponse(JSON.stringify({
+              id: parsed.id,
+              error: {
+                code: -32000,
+                message: normalizeNonEmptyString(error?.message)
+                  || "Unable to switch the host runtime target.",
+              },
+            }));
+          });
       })
       .catch((error) => {
         sendResponse(JSON.stringify({
@@ -843,7 +890,7 @@ function startBridge({
           error: {
             code: -32000,
             message: normalizeNonEmptyString(error?.message)
-              || "Unable to switch the host runtime target.",
+              || "Unable to inspect the host runtime targets.",
           },
         }));
       });
@@ -1561,6 +1608,7 @@ function buildBridgeRuntimeMetadata({
   runtimeMetadata = null,
   runtimeTarget = "",
   fallbackTargetConfig = null,
+  runtimeTargetOptions = null,
 } = {}) {
   const resolvedTargetConfig = runCatchingResolveRuntimeTargetConfig(runtimeTarget) || fallbackTargetConfig;
   return {
@@ -1571,10 +1619,11 @@ function buildBridgeRuntimeMetadata({
     backendProviderDisplayName: resolvedTargetConfig?.backendProviderKind
       ? titleCaseProviderName(resolvedTargetConfig.backendProviderKind)
       : null,
+    runtimeTargetOptions: Array.isArray(runtimeTargetOptions) ? runtimeTargetOptions : [],
   };
 }
 
-function buildBridgeManagedRuntimeTargetResult(workspaceRuntime) {
+function buildBridgeManagedRuntimeTargetResult(workspaceRuntime, runtimeTargetOptions = null) {
   const workspaceStatus = workspaceRuntime?.getStatus?.() || {};
   return {
     workspaceActive: Boolean(workspaceStatus.workspaceActive),
@@ -1582,6 +1631,7 @@ function buildBridgeManagedRuntimeTargetResult(workspaceRuntime) {
     ...buildBridgeRuntimeMetadata({
       runtimeMetadata: workspaceStatus.runtimeMetadata,
       runtimeTarget: workspaceStatus.runtimeTarget,
+      runtimeTargetOptions,
     }),
   };
 }

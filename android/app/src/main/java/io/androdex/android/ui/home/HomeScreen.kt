@@ -2,15 +2,16 @@ package io.androdex.android.ui.home
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -22,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -113,14 +115,6 @@ internal fun HomeScreen(
                             state = state,
                             onSelectHostRuntimeTarget = onSelectHostRuntimeTarget,
                             onCreateThread = onCreateThread,
-                            onOpenProjects = onOpenProjects,
-                        )
-                    }
-                }
-                item {
-                    HomeNarrowSection {
-                        CurrentProjectCard(
-                            activeWorkspacePath = state.activeWorkspacePath,
                             onOpenProjects = onOpenProjects,
                         )
                     }
@@ -234,120 +228,68 @@ private fun HomeHeroSection(
     onCreateThread: () -> Unit,
     onOpenProjects: () -> Unit,
 ) {
-    val hasWorkspace = state.activeWorkspacePath != null
-    val canCreateThread = hasWorkspace && state.createThreadSupported
     val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
     ) {
-        Surface(
-            modifier = Modifier.size(88.dp),
-            shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
-            color = RemodexTheme.colors.selectedRowFill,
-        ) {
-            Image(
-                painter = painterResource(id = R.mipmap.ic_launcher_foreground),
-                contentDescription = "Androdex",
-                modifier = Modifier.size(88.dp),
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(132.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                colors.accentBlue.copy(alpha = 0.18f),
+                                colors.accentGreen.copy(alpha = 0.08f),
+                                Color.Transparent,
+                            ),
+                        ),
+                    ),
             )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            ) {
+                Surface(
+                    modifier = Modifier.size(88.dp),
+                    shape = RoundedCornerShape(RemodexTheme.geometry.cornerXLarge),
+                    color = colors.selectedRowFill,
+                ) {
+                    Image(
+                        painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                        contentDescription = "Androdex",
+                        modifier = Modifier.size(88.dp),
+                    )
+                }
+                RemodexPill(
+                    label = "Host mission control",
+                    style = RemodexPillStyle.Accent,
+                )
+            }
         }
         StatusCapsule(
             state = state.connection,
             modifier = Modifier.fillMaxWidth(),
             bottomPadding = 0.dp,
         )
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
-        ) {
-            Text(
-                text = "Run on your computer. Continue from Android.",
-                style = MaterialTheme.typography.titleLarge,
-                color = RemodexTheme.colors.textPrimary,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                text = if (hasWorkspace) {
-                    if (state.createThreadSupported) {
-                        "Jump back into recent work in ${displayName(state.activeWorkspacePath)} or start a fresh thread without leaving the home view."
-                    } else {
-                        "Jump back into recent work in ${displayName(state.activeWorkspacePath)} and keep browsing existing threads from Android while T3 write actions stay on the host."
-                    }
-                } else {
-                    "Choose a project once, then keep chats, file-aware actions, and recovery flows anchored to your host workspace."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textSecondary,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
-        }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Lock,
-                contentDescription = null,
-                tint = RemodexTheme.colors.textTertiary,
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                text = "Encrypted relay-safe control",
-                style = MaterialTheme.typography.labelLarge,
-                color = RemodexTheme.colors.textSecondary,
-            )
-        }
+        HomeLaunchCard(
+            activeWorkspacePath = state.activeWorkspacePath,
+            createThreadSupported = state.createThreadSupported,
+            createThreadBlockedReason = state.createThreadBlockedReason,
+            busy = state.busy.isVisible,
+            onCreateThread = onCreateThread,
+            onOpenProjects = onOpenProjects,
+        )
         QuickRuntimeSwitchCard(
             options = state.hostRuntimeTargetOptions,
             enabled = !state.busy.isVisible,
             onSelect = onSelectHostRuntimeTarget,
         )
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-        ) {
-            RemodexButton(
-                onClick = onCreateThread,
-                enabled = canCreateThread && !state.busy.isVisible,
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = geometry.spacing20, vertical = geometry.spacing14),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = when {
-                        !hasWorkspace -> "Pick a project first"
-                        state.createThreadSupported -> "New chat"
-                        else -> "New chat unavailable"
-                    },
-                    modifier = Modifier.padding(start = geometry.spacing8),
-                )
-            }
-            RemodexButton(
-                onClick = onOpenProjects,
-                modifier = Modifier.fillMaxWidth(),
-                style = RemodexButtonStyle.Ghost,
-            ) {
-                Text(text = if (hasWorkspace) "Switch project" else "Choose project")
-            }
-            if (hasWorkspace && !state.createThreadSupported) {
-                Text(
-                    text = state.createThreadBlockedReason
-                        ?: "Starting new chats from this runtime isn't available in Androdex yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = RemodexTheme.colors.textSecondary,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
     }
 }
 
@@ -358,72 +300,130 @@ private fun QuickRuntimeSwitchCard(
     onSelect: (String) -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
+    val activeOption = options.firstOrNull { it.selected }
 
     LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
         ) {
-            Text(
-                text = "Host runtime",
-                style = MaterialTheme.typography.labelLarge,
-                color = RemodexTheme.colors.textSecondary,
-            )
-            Text(
-                text = "Swap between Codex and T3 Code right from home.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = RemodexTheme.colors.textPrimary,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
+                ) {
+                    Text(
+                        text = "Host runtime",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textSecondary,
+                    )
+                    Text(
+                        text = activeOption?.title?.let { "Currently running on $it." }
+                            ?: "Swap between Codex and T3 Code right from home.",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = colors.textPrimary,
+                    )
+                    Text(
+                        text = "Switches only appear live when the host can actually serve them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                    )
+                }
+                activeOption?.let {
+                    RemodexPill(
+                        label = "Live now",
+                        style = if (it.enabled) RemodexPillStyle.Success else RemodexPillStyle.Warning,
+                    )
+                }
+            }
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(geometry.spacing6),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
             ) {
-                options.forEachIndexed { index, option ->
-                    RemodexSelectionRow(
-                        selected = option.selected,
-                        onClick = if (enabled && !option.selected) {
-                            { option.value?.let(onSelect) }
-                        } else {
-                            null
-                        },
+                options.forEach { option ->
+                    val optionEnabled = enabled && option.enabled
+                    val supportingText = runtimeOptionSupportingText(option)
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(geometry.cornerLarge),
+                        color = when {
+                            option.selected -> colors.accentBlue.copy(alpha = 0.12f)
+                            optionEnabled -> colors.secondarySurface.copy(alpha = 0.46f)
+                            else -> colors.selectedRowFill.copy(alpha = 0.42f)
+                        },
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = 1.dp,
+                            color = when {
+                                option.selected -> colors.accentBlue.copy(alpha = 0.28f)
+                                else -> colors.hairlineDivider
+                            },
+                        ),
                     ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(geometry.spacing2),
+                        RemodexSelectionRow(
+                            selected = false,
+                            onClick = if (optionEnabled && !option.selected) {
+                                { option.value?.let(onSelect) }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            paddingValues = PaddingValues(
+                                horizontal = geometry.spacing14,
+                                vertical = geometry.spacing14,
+                            ),
                         ) {
-                            Text(
-                                text = option.title,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (enabled) {
-                                    RemodexTheme.colors.textPrimary
-                                } else {
-                                    RemodexTheme.colors.disabledForeground
-                                },
-                            )
-                            option.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(geometry.spacing4),
+                            ) {
                                 Text(
-                                    text = subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (enabled) {
-                                        RemodexTheme.colors.textSecondary
+                                    text = option.title,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = if (optionEnabled || option.selected) {
+                                        colors.textPrimary
                                     } else {
-                                        RemodexTheme.colors.disabledForeground
+                                        colors.disabledForeground
                                     },
                                 )
+                                supportingText?.let { subtitle ->
+                                    Text(
+                                        text = subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (optionEnabled || option.selected) {
+                                            colors.textSecondary
+                                        } else {
+                                            colors.disabledForeground
+                                        },
+                                    )
+                                }
+                                option.availabilityMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                    Text(
+                                        text = message,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = if (option.selected) colors.accentBlue else colors.accentOrange,
+                                    )
+                                }
                             }
+                            RemodexPill(
+                                label = when {
+                                    option.selected && !option.enabled -> "Needs repair"
+                                    option.selected -> "Active"
+                                    option.enabled -> "Ready"
+                                    else -> "Unavailable"
+                                },
+                                style = when {
+                                    option.selected && !option.enabled -> RemodexPillStyle.Warning
+                                    option.selected -> RemodexPillStyle.Accent
+                                    option.enabled -> RemodexPillStyle.Success
+                                    else -> RemodexPillStyle.Warning
+                                },
+                            )
                         }
-                        RemodexPill(
-                            label = if (option.selected) "Active" else "Switch",
-                            style = if (option.selected) {
-                                RemodexPillStyle.Accent
-                            } else {
-                                RemodexPillStyle.Neutral
-                            },
-                        )
-                    }
-                    if (index != options.lastIndex) {
-                        RemodexDivider()
                     }
                 }
             }
@@ -484,47 +484,179 @@ private fun RecentConversationList(
 }
 
 @Composable
-private fun CurrentProjectCard(
+private fun HomeLaunchCard(
+    activeWorkspacePath: String?,
+    createThreadSupported: Boolean,
+    createThreadBlockedReason: String?,
+    busy: Boolean,
+    onCreateThread: () -> Unit,
+    onOpenProjects: () -> Unit,
+) {
+    val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
+    val hasWorkspace = activeWorkspacePath != null
+    val canCreateThread = hasWorkspace && createThreadSupported && !busy
+
+    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            colors.accentBlue.copy(alpha = 0.08f),
+                            Color.Transparent,
+                            colors.accentGreen.copy(alpha = 0.05f),
+                        ),
+                    ),
+                ),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
+                verticalArrangement = Arrangement.spacedBy(geometry.spacing16),
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                ) {
+                    Text(
+                        text = "Run on your computer. Continue from Android.",
+                        style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                        color = colors.textPrimary,
+                    )
+                    Text(
+                        text = if (hasWorkspace) {
+                            if (createThreadSupported) {
+                                "Jump back into recent work in ${displayName(activeWorkspacePath)} or start a fresh thread without leaving the home view."
+                            } else {
+                                "Jump back into recent work in ${displayName(activeWorkspacePath)} and keep browsing existing threads from Android while T3 write actions stay on the host."
+                            }
+                        } else {
+                            "Choose a project once, then keep chats, file-aware actions, and recovery flows anchored to your host workspace."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textSecondary,
+                    )
+                }
+                ProjectSpotlightCard(
+                    activeWorkspacePath = activeWorkspacePath,
+                    onOpenProjects = onOpenProjects,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(geometry.spacing8),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Lock,
+                        contentDescription = null,
+                        tint = colors.textTertiary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "Encrypted relay-safe control",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textSecondary,
+                    )
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+                ) {
+                    RemodexButton(
+                        onClick = onCreateThread,
+                        enabled = canCreateThread,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(
+                            horizontal = geometry.spacing20,
+                            vertical = geometry.spacing14,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = when {
+                                !hasWorkspace -> "Pick a project first"
+                                createThreadSupported -> "New chat"
+                                else -> "New chat unavailable"
+                            },
+                            modifier = Modifier.padding(start = geometry.spacing8),
+                        )
+                    }
+                    RemodexButton(
+                        onClick = onOpenProjects,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = RemodexButtonStyle.Secondary,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = if (hasWorkspace) "Switch project" else "Choose project",
+                            modifier = Modifier.padding(start = geometry.spacing8),
+                        )
+                    }
+                    if (hasWorkspace && !createThreadSupported) {
+                        Text(
+                            text = createThreadBlockedReason
+                                ?: "Starting new chats from this runtime isn't available in Androdex yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textSecondary,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectSpotlightCard(
     activeWorkspacePath: String?,
     onOpenProjects: () -> Unit,
 ) {
     val geometry = RemodexTheme.geometry
+    val colors = RemodexTheme.colors
 
-    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(horizontal = geometry.sectionPadding, vertical = geometry.sectionPadding),
-            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(geometry.cornerXLarge))
+            .background(colors.selectedRowFill.copy(alpha = 0.55f))
+            .border(
+                width = 1.dp,
+                color = colors.hairlineDivider,
+                shape = RoundedCornerShape(geometry.cornerXLarge),
+            )
+            .padding(geometry.spacing16),
+        verticalArrangement = Arrangement.spacedBy(geometry.spacing12),
+    ) {
+        Text(
+            text = "Active project",
+            style = MaterialTheme.typography.labelLarge,
+            color = colors.textSecondary,
+        )
+        Text(
+            text = activeWorkspacePath?.let(::displayName) ?: "No project selected yet",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = colors.textPrimary,
+        )
+        Text(
+            text = activeWorkspacePath
+                ?: "Pick a host folder to anchor new chats, recent history, and file-aware actions.",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textSecondary,
+        )
+        RemodexButton(
+            onClick = onOpenProjects,
+            style = RemodexButtonStyle.Ghost,
         ) {
-            Text(
-                text = "Current project",
-                style = MaterialTheme.typography.labelLarge,
-                color = RemodexTheme.colors.textSecondary,
-            )
-            Text(
-                text = activeWorkspacePath?.let(::displayName) ?: "No project selected yet",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = RemodexTheme.colors.textPrimary,
-            )
-            Text(
-                text = activeWorkspacePath
-                    ?: "Pick a host folder to anchor new chats, recent history, and file-aware actions.",
-                style = MaterialTheme.typography.bodySmall,
-                color = RemodexTheme.colors.textSecondary,
-            )
-            RemodexButton(
-                onClick = onOpenProjects,
-                style = RemodexButtonStyle.Ghost,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = if (activeWorkspacePath == null) "Open project picker" else "Change project",
-                    modifier = Modifier.padding(start = geometry.spacing6),
-                )
-            }
+            Text(text = if (activeWorkspacePath == null) "Open project picker" else "Change project")
         }
     }
 }
@@ -573,31 +705,36 @@ private fun RecentConversationHeader(
 private fun LoadingThreadsCard() {
     val geometry = RemodexTheme.geometry
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = geometry.spacing16),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(18.dp),
-            strokeWidth = 2.dp,
-            color = RemodexTheme.colors.accentBlue,
-            trackColor = RemodexTheme.colors.selectedRowFill,
-        )
-        Text(
-            text = "Loading your conversations",
-            style = MaterialTheme.typography.titleSmall,
-            color = RemodexTheme.colors.textPrimary,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            text = "Androdex is syncing the thread list from the host.",
-            style = MaterialTheme.typography.bodySmall,
-            color = RemodexTheme.colors.textSecondary,
-            textAlign = TextAlign.Center,
-        )
+    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = geometry.sectionPadding,
+                    vertical = geometry.spacing20,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = RemodexTheme.colors.accentBlue,
+                trackColor = RemodexTheme.colors.selectedRowFill,
+            )
+            Text(
+                text = "Loading your conversations",
+                style = MaterialTheme.typography.titleSmall,
+                color = RemodexTheme.colors.textPrimary,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = "Androdex is syncing the thread list from the host.",
+                style = MaterialTheme.typography.bodySmall,
+                color = RemodexTheme.colors.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -608,31 +745,36 @@ private fun EmptyThreadsCard(
 ) {
     val geometry = RemodexTheme.geometry
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = geometry.spacing16),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
-    ) {
-        Text(
-            text = state.title,
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = RemodexTheme.colors.textPrimary,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            text = state.message,
-            style = MaterialTheme.typography.bodySmall,
-            color = RemodexTheme.colors.textSecondary,
-            textAlign = TextAlign.Center,
-        )
-        if (state.showChooseProjectAction) {
-            RemodexButton(
-                onClick = onOpenProjects,
-                style = RemodexButtonStyle.Secondary,
-            ) {
-                Text("Choose a project")
+    LandingSectionSurface(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = geometry.sectionPadding,
+                    vertical = geometry.spacing20,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            Text(
+                text = state.title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = RemodexTheme.colors.textPrimary,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = state.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = RemodexTheme.colors.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+            if (state.showChooseProjectAction) {
+                RemodexButton(
+                    onClick = onOpenProjects,
+                    style = RemodexButtonStyle.Secondary,
+                ) {
+                    Text("Choose a project")
+                }
             }
         }
     }
@@ -733,6 +875,16 @@ private fun threadRunLabel(runState: ThreadRunBadgeUiState?): String? = when (ru
     ThreadRunBadgeUiState.READY -> "Ready"
     ThreadRunBadgeUiState.FAILED -> "Needs review"
     null -> null
+}
+
+private fun runtimeOptionSupportingText(option: RuntimeSettingsOptionUiState): String? {
+    val subtitle = option.subtitle?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val availability = option.availabilityMessage?.trim()?.takeIf { it.isNotEmpty() } ?: return subtitle
+    if (subtitle == availability) {
+        return null
+    }
+    val duplicatedSuffix = "\n$availability"
+    return subtitle.removeSuffix(duplicatedSuffix).trimEnd().ifBlank { null }
 }
 
 private fun displayName(path: String): String {

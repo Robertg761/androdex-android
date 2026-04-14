@@ -2,9 +2,13 @@ package io.androdex.android.ui.shared
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.androdex.android.ui.theme.RemodexTheme
 
@@ -18,6 +22,36 @@ internal fun LandingBackdrop(modifier: Modifier = Modifier) {
             .fillMaxSize()
             .background(background),
     ) {
+        Box(
+            modifier = Modifier
+                .size(280.dp)
+                .align(Alignment.TopEnd)
+                .offset(x = 110.dp, y = (-56).dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            colors.accentBlue.copy(alpha = 0.18f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .size(220.dp)
+                .align(Alignment.TopStart)
+                .offset(x = (-72).dp, y = 140.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            colors.accentGreen.copy(alpha = 0.12f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
         Box(
             modifier = Modifier
                 .matchParentSize()

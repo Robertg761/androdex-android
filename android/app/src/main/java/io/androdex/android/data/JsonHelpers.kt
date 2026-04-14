@@ -27,6 +27,7 @@ import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.HostRateLimitBucket
 import io.androdex.android.model.HostRuntimeMetadata
+import io.androdex.android.model.HostRuntimeTargetOption
 import io.androdex.android.model.ModelOption
 import io.androdex.android.model.PlanStep
 import io.androdex.android.model.ReasoningEffortOption
@@ -568,10 +569,14 @@ fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
         "runtimeDuplicateSuppressionCount",
         "runtime_duplicate_suppression_count",
     )
+    val runtimeTargetOptions = decodeHostRuntimeTargetOptions(
+        resultObject.arrayOrNull("runtimeTargetOptions", "runtime_target_options")
+    )
     if (runtimeTarget == null
         && runtimeTargetDisplayName == null
         && backendProvider == null
         && backendProviderDisplayName == null
+        && runtimeTargetOptions.isEmpty()
         && runtimeAttachState == null
         && runtimeAttachFailure == null
         && runtimeProtocolVersion == null
@@ -589,6 +594,7 @@ fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
         runtimeTargetDisplayName = runtimeTargetDisplayName,
         backendProvider = backendProvider,
         backendProviderDisplayName = backendProviderDisplayName,
+        runtimeTargetOptions = runtimeTargetOptions,
         runtimeAttachState = runtimeAttachState,
         runtimeAttachFailure = runtimeAttachFailure,
         runtimeProtocolVersion = runtimeProtocolVersion,
@@ -599,6 +605,36 @@ fun decodeHostRuntimeMetadata(resultObject: JSONObject): HostRuntimeMetadata? {
         runtimeSubscriptionState = runtimeSubscriptionState,
         runtimeDuplicateSuppressionCount = runtimeDuplicateSuppressionCount,
     )
+}
+
+private fun decodeHostRuntimeTargetOptions(options: JSONArray?): List<HostRuntimeTargetOption> {
+    if (options == null) {
+        return emptyList()
+    }
+
+    val decoded = mutableListOf<HostRuntimeTargetOption>()
+    for (index in 0 until options.length()) {
+        val option = options.optJSONObject(index) ?: continue
+        val value = option.stringOrNull("value", "kind") ?: continue
+        val title = option.stringOrNull("title", "label") ?: continue
+        decoded += HostRuntimeTargetOption(
+            value = value,
+            title = title,
+            subtitle = option.stringOrNull("subtitle", "description"),
+            selected = option.booleanLikeOrFalse("selected", "active"),
+            enabled = if (option.has("enabled") || option.has("available")) {
+                option.booleanLikeOrFalse("enabled", "available")
+            } else {
+                true
+            },
+            availabilityMessage = option.stringOrNull(
+                "availabilityMessage",
+                "availability_message",
+                "detail",
+            ),
+        )
+    }
+    return decoded
 }
 
 internal fun JSONObject.decodedHostAccountStatusOrNull(): HostAccountStatus? {

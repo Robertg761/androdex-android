@@ -113,6 +113,7 @@ test("buildBridgeManagedRuntimeTargetResult returns host runtime selection metad
     runtimeTargetDisplayName: "T3 Server",
     backendProvider: null,
     backendProviderDisplayName: null,
+    runtimeTargetOptions: [],
     runtimeAttachState: "ready",
     runtimeEndpointHost: "127.0.0.1",
   });

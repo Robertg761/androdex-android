@@ -19,6 +19,7 @@ import io.androdex.android.model.HostAccountSnapshot
 import io.androdex.android.model.HostAccountSnapshotOrigin
 import io.androdex.android.model.HostAccountStatus
 import io.androdex.android.model.HostRuntimeMetadata
+import io.androdex.android.model.HostRuntimeTargetOption
 import io.androdex.android.model.ImageAttachment
 import io.androdex.android.model.GitRepoSyncResult
 import io.androdex.android.model.ModelOption
@@ -349,6 +350,49 @@ class AndrodexFeatureStateTest {
             "Use the active project to start a chat.",
             homeState.threadList.emptyState?.message,
         )
+    }
+
+    @Test
+    fun homeRoute_surfacesUnavailableRuntimeTargetsFromHostMetadata() {
+        val state = AndrodexUiState(
+            connectionStatus = ConnectionStatus.CONNECTED,
+            hostRuntimeMetadata = HostRuntimeMetadata(
+                runtimeTarget = "codex-native",
+                runtimeTargetDisplayName = "Codex Native",
+                runtimeTargetOptions = listOf(
+                    HostRuntimeTargetOption(
+                        value = "codex-native",
+                        title = "Codex",
+                        subtitle = "Use the normal host-local Codex runtime.",
+                        selected = true,
+                        enabled = true,
+                    ),
+                    HostRuntimeTargetOption(
+                        value = "t3-server",
+                        title = "T3 Code",
+                        subtitle = "Attach the host bridge to a local T3 server.",
+                        selected = false,
+                        enabled = false,
+                        availabilityMessage = "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+                    ),
+                ),
+            ),
+        )
+
+        val homeState = state.toHomeScreenUiState()
+
+        val codexOption = homeState.hostRuntimeTargetOptions.first { it.value == "codex-native" }
+        val t3Option = homeState.hostRuntimeTargetOptions.first { it.value == "t3-server" }
+
+        assertTrue(codexOption.selected)
+        assertTrue(codexOption.enabled)
+        assertFalse(t3Option.selected)
+        assertFalse(t3Option.enabled)
+        assertEquals(
+            "No T3 listener answered on 127.0.0.1:3773. Start T3 locally and try again.",
+            t3Option.availabilityMessage,
+        )
+        assertTrue(t3Option.subtitle.orEmpty().contains("Start T3 locally"))
     }
 
     @Test

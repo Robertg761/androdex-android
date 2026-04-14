@@ -4,6 +4,7 @@ import io.androdex.android.AppEnvironment
 import io.androdex.android.crypto.pairingQrVersion
 import io.androdex.android.crypto.secureClockSkewToleranceSeconds
 import io.androdex.android.model.ConnectPayloadDescriptor
+import io.androdex.android.model.MacNativePairingSource
 import io.androdex.android.model.PairingPayload
 import io.androdex.android.model.RecoveryPayload
 import io.androdex.android.model.macNativePairingPayloadVersion
@@ -46,6 +47,9 @@ private fun validateMacNativePairingPayload(
         return ConnectPayloadValidationResult.UpdateRequired(
             "This Mac pairing payload came from an unsupported Android convergence format. Update Androdex on both devices and scan a new QR code.",
         )
+    }
+    if (payload.source == MacNativePairingSource.PAIR_URL) {
+        return ConnectPayloadValidationResult.Success(payload)
     }
     val expiryWithSkew = payload.expiresAt + (secureClockSkewToleranceSeconds * 1000)
     if (expiryWithSkew < nowEpochMs) {

@@ -388,6 +388,8 @@ internal data class RuntimeSettingsOptionUiState(
     val title: String,
     val subtitle: String?,
     val selected: Boolean,
+    val enabled: Boolean = true,
+    val availabilityMessage: String? = null,
 )
 
 internal data class ThreadRuntimeUiState(
@@ -495,14 +497,14 @@ private fun AndrodexUiState.toFirstPairingOnboardingUiState(): FirstPairingOnboa
 
 internal fun AndrodexUiState.toHomeScreenUiState(nowEpochMs: Long = System.currentTimeMillis()): HomeScreenUiState {
     val threadList = toThreadListPaneUiState(nowEpochMs)
-    val currentRuntimeTarget = currentHostRuntimeTarget()
+    val currentRuntimeMetadata = resolveCurrentHostRuntimeMetadata()
     return HomeScreenUiState(
         connection = toConnectionBannerUiState(),
         busy = toBusyUiState(),
         trustedPair = trustedPairSnapshot.toTrustedPairUiState(connectionStatus),
         hostAccount = hostAccountSnapshot.toHostAccountUiState(),
         bridgeStatus = toBridgeStatusUiState(),
-        hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeTarget),
+        hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeMetadata),
         activeWorkspacePath = activeWorkspacePath,
         createThreadSupported = threadList.createThreadSupported,
         createThreadBlockedReason = threadList.createThreadBlockedReason,
@@ -969,8 +971,8 @@ private fun AndrodexUiState.buildThreadTimelineUiState(
 private fun AndrodexUiState.toRuntimeSettingsUiState(
     isVisible: Boolean,
 ): RuntimeSettingsUiState {
-    val currentRuntimeTarget = currentHostRuntimeTarget()
-    val hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeTarget)
+    val currentRuntimeMetadata = resolveCurrentHostRuntimeMetadata()
+    val hostRuntimeTargetOptions = buildHostRuntimeTargetOptions(currentRuntimeMetadata)
     val selectedModel = resolveSelectedModel(availableModels, selectedModelId)
     val modelOptions = buildList {
         add(
@@ -1070,11 +1072,34 @@ private fun AndrodexUiState.toRuntimeSettingsUiState(
     )
 }
 
-private fun AndrodexUiState.currentHostRuntimeTarget(): String =
-    hostRuntimeMetadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() } ?: "codex-native"
+private fun AndrodexUiState.resolveCurrentHostRuntimeMetadata() = hostRuntimeMetadata
 
-private fun buildHostRuntimeTargetOptions(currentRuntimeTarget: String): List<RuntimeSettingsOptionUiState> =
-    listOf(
+private fun AndrodexUiState.currentHostRuntimeTarget(): String =
+    resolveCurrentHostRuntimeMetadata()?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() } ?: "codex-native"
+
+private fun buildHostRuntimeTargetOptions(
+    metadata: io.androdex.android.model.HostRuntimeMetadata?,
+): List<RuntimeSettingsOptionUiState> {
+    val currentRuntimeTarget = metadata?.runtimeTarget?.trim()?.takeIf { it.isNotEmpty() } ?: "codex-native"
+    val metadataOptions = metadata?.runtimeTargetOptions.orEmpty()
+    if (metadataOptions.isNotEmpty()) {
+        return metadataOptions.map { option ->
+            RuntimeSettingsOptionUiState(
+                value = option.value,
+                title = option.title,
+                subtitle = resolveRuntimeTargetOptionSubtitle(
+                    baseSubtitle = option.subtitle,
+                    enabled = option.enabled,
+                    availabilityMessage = option.availabilityMessage,
+                ),
+                selected = option.selected || option.value == currentRuntimeTarget,
+                enabled = option.selected || option.enabled,
+                availabilityMessage = option.availabilityMessage,
+            )
+        }
+    }
+
+    return listOf(
         RuntimeSettingsOptionUiState(
             value = "codex-native",
             title = "Codex",
@@ -1088,6 +1113,21 @@ private fun buildHostRuntimeTargetOptions(currentRuntimeTarget: String): List<Ru
             selected = currentRuntimeTarget == "t3-server",
         ),
     )
+}
+
+private fun resolveRuntimeTargetOptionSubtitle(
+    baseSubtitle: String?,
+    enabled: Boolean,
+    availabilityMessage: String?,
+): String? {
+    val normalizedSubtitle = baseSubtitle?.trim()?.takeIf { it.isNotEmpty() }
+    val normalizedAvailability = availabilityMessage?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        enabled || normalizedAvailability == null -> normalizedSubtitle
+        normalizedSubtitle == null -> normalizedAvailability
+        else -> "$normalizedSubtitle\n$normalizedAvailability"
+    }
+}
 
 private fun AndrodexUiState.toConnectionBannerUiState(): ConnectionBannerUiState {
     return ConnectionBannerUiState(

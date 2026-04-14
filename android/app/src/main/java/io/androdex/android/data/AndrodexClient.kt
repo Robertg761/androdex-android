@@ -1184,6 +1184,9 @@ class AndrodexClient(
     }
 
     suspend fun loadRuntimeConfig() {
+        hostRuntimeMetadata = runCatching {
+            decodeHostRuntimeMetadata(sendRequest("bridge/runtimetarget/read", JSONObject()))
+        }.getOrNull() ?: hostRuntimeMetadata
         val result = sendRequest(
             "model/list",
             JSONObject()
@@ -1225,7 +1228,7 @@ class AndrodexClient(
         val normalizedTarget = targetKind.trim().takeIf { it.isNotEmpty() }
             ?: throw IllegalArgumentException("Runtime target is required.")
         val result = sendRequest(
-            "bridge/runtimeTarget/set",
+            "bridge/runtimetarget/set",
             JSONObject().put("targetKind", normalizedTarget)
         )
         hostRuntimeMetadata = decodeHostRuntimeMetadata(result) ?: hostRuntimeMetadata

@@ -56,6 +56,13 @@ button:hover {
   border-color: rgba(237, 194, 132, 0.52);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+  border-color: var(--line);
+}
+
 button.accent {
   background: linear-gradient(180deg, rgba(212, 161, 90, 0.36), rgba(212, 161, 90, 0.18));
 }
@@ -272,6 +279,18 @@ textarea {
   color: var(--text);
 }
 
+.segmented label.is-unavailable span {
+  border-color: rgba(239, 132, 111, 0.22);
+  background: rgba(239, 132, 111, 0.06);
+  color: #c8b4ae;
+}
+
+.segmented label.is-selected-unavailable span {
+  border-color: rgba(239, 132, 111, 0.4);
+  background: rgba(239, 132, 111, 0.12);
+  color: var(--text);
+}
+
 .runtime-segmented {
   max-width: 320px;
 }
@@ -319,6 +338,22 @@ textarea {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
+}
+
+.subtle-note {
+  font-size: 0.92rem;
+}
+
+.note-box[data-variant="warning"] {
+  border-color: rgba(239, 132, 111, 0.34);
+  color: #f0c1b6;
+  background: rgba(239, 132, 111, 0.08);
+}
+
+.note-box[data-variant="success"] {
+  border-color: rgba(110, 210, 170, 0.28);
+  color: #cbe8da;
+  background: rgba(110, 210, 170, 0.08);
 }
 
 .detail-strip {

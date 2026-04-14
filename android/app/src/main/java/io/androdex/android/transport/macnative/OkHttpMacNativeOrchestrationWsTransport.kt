@@ -192,18 +192,20 @@ private class ManagedMacNativeRpcWebSocket(
     }
 }
 
-private fun macNativeSocketUrl(
+internal fun macNativeSocketUrl(
     wsBaseUrl: String,
     token: String,
     queryParameterName: String = "wsToken",
 ): String {
-    val url = java.net.URI("$wsBaseUrl/ws").toURL().toURI()
+    val baseUri = java.net.URI(wsBaseUrl)
+    val basePath = baseUri.path?.trimEnd('/').orEmpty()
+    val socketPath = if (basePath.isEmpty()) "/ws" else "$basePath/ws"
     val withQuery = java.net.URI(
-        url.scheme,
-        url.userInfo,
-        url.host,
-        url.port,
-        url.path,
+        baseUri.scheme,
+        baseUri.userInfo,
+        baseUri.host,
+        baseUri.port,
+        socketPath,
         "$queryParameterName=$token",
         null,
     )
