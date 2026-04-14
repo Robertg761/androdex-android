@@ -121,7 +121,11 @@ class MirrorShellViewModel(
 
     private fun applyPairingLink(pairingLink: PairingLink) {
         val hadPairedOrigin = uiStateFlow.value.pairedOrigin != null
-        store.savePairing(pairingLink.origin, pairingLink.displayLabel)
+        store.savePairing(
+            origin = pairingLink.origin,
+            displayLabel = pairingLink.displayLabel,
+            bootstrapPairingUrl = pairingLink.pairingUrl,
+        )
         store.saveLastOpenedUrl(null)
         uiStateFlow.update {
             it.copy(
@@ -138,11 +142,15 @@ class MirrorShellViewModel(
 }
 
 private fun MirrorShellSnapshot.toUiState(): MirrorShellUiState {
-    val initialUrl = lastOpenedUrl ?: pairedOrigin
+    val initialUrl = resolveInitialUrl()
     return MirrorShellUiState(
         pairedOrigin = pairedOrigin,
         displayLabel = displayLabel,
         initialUrl = initialUrl,
         pairingInput = pairedOrigin.orEmpty(),
     )
+}
+
+internal fun MirrorShellSnapshot.resolveInitialUrl(): String? {
+    return lastOpenedUrl ?: bootstrapPairingUrl ?: pairedOrigin
 }

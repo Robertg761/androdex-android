@@ -9,6 +9,10 @@ data class PairingLink(
     val displayLabel: String,
 )
 
+internal fun extractPairingPayloadFromUriString(rawInput: String): String? {
+    return parsePairingLink(rawInput)?.pairingUrl
+}
+
 internal fun parsePairingLink(rawInput: String): PairingLink? {
     val trimmed = rawInput.trim().takeIf { it.isNotEmpty() } ?: return null
     val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null

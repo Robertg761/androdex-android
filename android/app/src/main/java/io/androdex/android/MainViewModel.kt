@@ -48,6 +48,7 @@ import io.androdex.android.notifications.NoopNotificationCoordinator
 import io.androdex.android.notifications.decodeNotificationOpenPayload
 import io.androdex.android.onboarding.FirstPairingOnboardingStore
 import io.androdex.android.onboarding.InMemoryFirstPairingOnboardingStore
+import io.androdex.android.pairing.extractPairingPayloadFromUriString as extractMirrorPairingPayloadFromUriString
 import io.androdex.android.service.AndrodexService
 import io.androdex.android.service.AndrodexServiceState
 import io.androdex.android.timeline.ThreadTimelineRenderSnapshot
@@ -62,8 +63,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.net.URI
-import java.net.URLDecoder
 import java.util.UUID
 
 data class AndrodexUiState(
@@ -3046,52 +3045,7 @@ private fun Uri.extractPairingPayload(): String? {
 }
 
 internal fun extractPairingPayloadFromUriString(rawUri: String): String? {
-    val trimmed = rawUri.trim()
-    if (trimmed.isEmpty()) {
-        return null
-    }
-
-    val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
-    extractUriParameter(uri.rawQuery, "payload")?.let { return it }
-
-    val normalizedScheme = uri.scheme?.trim()?.lowercase()
-    val normalizedPath = uri.rawPath
-        ?.trim()
-        .orEmpty()
-        .trimEnd('/')
-    if ((normalizedScheme == "http" || normalizedScheme == "https")
-        && normalizedPath.endsWith("/pair")
-        && resolveUriTokenParameter(uri) != null
-    ) {
-        return trimmed
-    }
-
-    return null
-}
-
-private fun resolveUriTokenParameter(uri: URI): String? {
-    extractUriParameter(uri.rawQuery, "token")?.let { return it }
-    return extractUriParameter(uri.rawFragment, "token")
-}
-
-private fun extractUriParameter(rawQuery: String?, name: String): String? {
-    val normalizedName = name.trim()
-    val query = rawQuery?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
-    return query
-        .split('&')
-        .asSequence()
-        .mapNotNull { entry ->
-            val separatorIndex = entry.indexOf('=')
-            val rawKey = if (separatorIndex >= 0) entry.substring(0, separatorIndex) else entry
-            val rawValue = if (separatorIndex >= 0) entry.substring(separatorIndex + 1) else ""
-            val decodedKey = URLDecoder.decode(rawKey, Charsets.UTF_8).trim()
-            if (decodedKey != normalizedName) {
-                null
-            } else {
-                URLDecoder.decode(rawValue, Charsets.UTF_8).trim().ifEmpty { null }
-            }
-        }
-        .firstOrNull()
+    return extractMirrorPairingPayloadFromUriString(rawUri)
 }
 
 private fun applyServiceState(

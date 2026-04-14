@@ -5,6 +5,7 @@ import android.content.Context
 data class MirrorShellSnapshot(
     val pairedOrigin: String?,
     val displayLabel: String?,
+    val bootstrapPairingUrl: String?,
     val lastOpenedUrl: String?,
 )
 
@@ -15,14 +16,19 @@ class MirrorShellStore(context: Context) {
         return MirrorShellSnapshot(
             pairedOrigin = prefs.getString(KEY_PAIRED_ORIGIN, null)?.trim()?.takeIf { it.isNotEmpty() },
             displayLabel = prefs.getString(KEY_DISPLAY_LABEL, null)?.trim()?.takeIf { it.isNotEmpty() },
+            bootstrapPairingUrl = prefs.getString(KEY_BOOTSTRAP_PAIRING_URL, null)?.trim()?.takeIf { it.isNotEmpty() },
             lastOpenedUrl = prefs.getString(KEY_LAST_OPENED_URL, null)?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
 
-    fun savePairing(origin: String, displayLabel: String?) {
+    fun savePairing(origin: String, displayLabel: String?, bootstrapPairingUrl: String?) {
         prefs.edit()
             .putString(KEY_PAIRED_ORIGIN, origin.trim())
             .putString(KEY_DISPLAY_LABEL, displayLabel?.trim().takeUnless { it.isNullOrEmpty() })
+            .putString(
+                KEY_BOOTSTRAP_PAIRING_URL,
+                bootstrapPairingUrl?.trim().takeUnless { it.isNullOrEmpty() },
+            )
             .apply()
     }
 
@@ -35,6 +41,7 @@ class MirrorShellStore(context: Context) {
         prefs.edit()
             .remove(KEY_PAIRED_ORIGIN)
             .remove(KEY_DISPLAY_LABEL)
+            .remove(KEY_BOOTSTRAP_PAIRING_URL)
             .remove(KEY_LAST_OPENED_URL)
             .apply()
     }
@@ -43,6 +50,7 @@ class MirrorShellStore(context: Context) {
         const val PREFS_NAME = "androdex_web_shell"
         const val KEY_PAIRED_ORIGIN = "paired_origin"
         const val KEY_DISPLAY_LABEL = "display_label"
+        const val KEY_BOOTSTRAP_PAIRING_URL = "bootstrap_pairing_url"
         const val KEY_LAST_OPENED_URL = "last_opened_url"
     }
 }
