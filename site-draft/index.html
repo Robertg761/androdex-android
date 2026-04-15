@@ -7,7 +7,7 @@
     <meta name="description" content="Androdex is in closed beta. Join the tester group and opt into the Android beta on Google Play." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet" />
     <link rel="icon" type="image/png" href="/app-icon-512.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -103,38 +103,53 @@
             </p>
           </div>
 
-          <div class="gallery-grid">
-            <figure class="gallery-card gallery-card-tall">
-              <img src="/media/main-home.jpg" alt="Connected Androdex home screen" loading="lazy" />
-              <figcaption>
-                <strong>Connected home</strong>
-                <span>Recent work, current project state, and host status in one shell.</span>
-              </figcaption>
-            </figure>
+          <div class="gallery-carousel" data-gallery-carousel>
+            <div class="gallery-viewport" data-gallery-viewport tabindex="0" aria-label="Runtime screenshot carousel">
+              <div class="gallery-track" data-gallery-track>
+                <figure class="gallery-card gallery-slide">
+                  <img src="/media/runtime-chat-view.jpg" alt="Androdex chat view runtime screenshot" loading="lazy" />
+                  <figcaption>
+                    <strong>Chat View</strong>
+                    <span>Conversation list and message flow while paired to your host runtime.</span>
+                  </figcaption>
+                </figure>
 
-            <figure class="gallery-card">
-              <img src="/media/messages.jpg" alt="Androdex thread screen with assistant messages" loading="lazy" />
-              <figcaption>
-                <strong>Thread view</strong>
-                <span>Follow Codex activity, stream responses, and continue work from your phone.</span>
-              </figcaption>
-            </figure>
+                <figure class="gallery-card gallery-slide">
+                  <img src="/media/runtime-thread-view.jpg" alt="Androdex thread view runtime screenshot" loading="lazy" />
+                  <figcaption>
+                    <strong>Thread View</strong>
+                    <span>Live assistant activity and turn-by-turn context from Android.</span>
+                  </figcaption>
+                </figure>
 
-            <figure class="gallery-card">
-              <img src="/media/git-panel.png" alt="Androdex git panel and branch controls" loading="lazy" />
-              <figcaption>
-                <strong>Git-aware controls</strong>
-                <span>Inspect branch state and related actions without leaving the mobile session.</span>
-              </figcaption>
-            </figure>
+                <figure class="gallery-card gallery-slide">
+                  <img src="/media/runtime-terminal-view.jpg" alt="Androdex terminal view runtime screenshot" loading="lazy" />
+                  <figcaption>
+                    <strong>Terminal View</strong>
+                    <span>Inspect terminal output and command activity from the mobile client.</span>
+                  </figcaption>
+                </figure>
 
-            <figure class="gallery-card gallery-card-wide">
-              <img src="/media/threads.png" alt="Androdex thread list and project navigation" loading="lazy" />
-              <figcaption>
-                <strong>Project navigation</strong>
-                <span>Jump between conversations and repo context while staying paired to your host machine.</span>
-              </figcaption>
-            </figure>
+                <figure class="gallery-card gallery-slide">
+                  <img src="/media/runtime-model-options.jpg" alt="Androdex model options runtime screenshot" loading="lazy" />
+                  <figcaption>
+                    <strong>Model Options</strong>
+                    <span>Adjust model/runtime preferences directly from the Android session.</span>
+                  </figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div class="gallery-controls">
+              <button class="gallery-nav" type="button" data-gallery-prev aria-label="Previous screenshot">
+                &#8249;
+              </button>
+              <div class="gallery-dots" data-gallery-dots role="tablist" aria-label="Screenshot selector"></div>
+              <p class="gallery-status" data-gallery-status aria-live="polite"></p>
+              <button class="gallery-nav" type="button" data-gallery-next aria-label="Next screenshot">
+                &#8250;
+              </button>
+            </div>
           </div>
         </section>
 
@@ -217,5 +232,6 @@
         </div>
       </footer>
     </div>
+    <script src="/app.js" defer></script>
   </body>
 </html>
