@@ -51,6 +51,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,6 +116,13 @@ internal fun composerHasVisibleContextChips(
     return hasMentionedFiles || hasMentionedSkills
 }
 
+internal fun composerShowsInlineGalleryButton(
+    isModePanelVisible: Boolean,
+    remainingAttachmentSlots: Int,
+): Boolean {
+    return !isModePanelVisible && remainingAttachmentSlots > 0
+}
+
 private enum class ComposerAutocompleteKind(val rowHeight: androidx.compose.ui.unit.Dp) {
     FILE(38.dp),
     SKILL(50.dp),
@@ -174,6 +183,10 @@ internal fun ComposerBar(
     val submitPresentation = composerSubmitPresentation(
         submitButtonLabel = state.submitButtonLabel,
         showStop = state.showStop,
+    )
+    val showInlineGalleryButton = composerShowsInlineGalleryButton(
+        isModePanelVisible = showModePanel,
+        remainingAttachmentSlots = state.remainingAttachmentSlots,
     )
 
     LaunchedEffect(state.isReviewModeEnabled) {
@@ -409,6 +422,28 @@ internal fun ComposerBar(
                             onClick = { showModePanel = !showModePanel },
                         )
 
+                        AnimatedVisibility(
+                            visible = showInlineGalleryButton,
+                            enter = remodexFadeIn(motion.microStateMillis),
+                            exit = remodexFadeOut(motion.microStateMillis),
+                        ) {
+                            ComposerActionButton(
+                                label = "Add photo",
+                                contentDescription = "Add photo",
+                                enabled = state.inputEnabled,
+                                loading = false,
+                                primary = false,
+                                icon = {
+                                    Icon(
+                                        imageVector = Icons.Default.PhotoLibrary,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = onAddGallery,
+                            )
+                        }
+
                         RemodexInputChrome(
                             modifier = Modifier.weight(1f),
                             variant = RemodexInputFieldVariant.Thread,
@@ -583,6 +618,7 @@ private fun ComposerSubmitButton(
 @Composable
 private fun ComposerActionButton(
     label: String,
+    contentDescription: String = label,
     enabled: Boolean,
     loading: Boolean,
     primary: Boolean,
@@ -612,6 +648,11 @@ private fun ComposerActionButton(
     Surface(
         modifier = Modifier
             .height(36.dp)
+            .semantics(mergeDescendants = true) {
+                if (icon != null) {
+                    this.contentDescription = contentDescription
+                }
+            }
             .clip(shape)
             .remodexPressedState(
                 interactionSource = interactionSource,

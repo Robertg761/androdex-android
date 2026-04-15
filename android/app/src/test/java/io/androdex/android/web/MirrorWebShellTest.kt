@@ -120,6 +120,8 @@ class MirrorWebShellTest {
         assertTrue(script.contains("MutationObserver"))
         assertTrue(script.contains("if (!event.isTrusted)"))
         assertTrue(script.contains("const bindSidebarInteractions = () => {"))
+        assertTrue(script.contains("const forceSidebarProjectCreateButtonsVisible = () => {"))
+        assertTrue(script.contains("button.style.setProperty(\"touch-action\", \"manipulation\", \"important\")"))
         assertTrue(script.contains("closeSidebarAfterAction(220)"))
         assertTrue(script.contains("const isSidebarOpen = () => {"))
         assertTrue(script.contains("const attemptSidebarClose = () => {"))

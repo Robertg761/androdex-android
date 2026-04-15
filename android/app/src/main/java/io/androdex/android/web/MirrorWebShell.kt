@@ -1075,9 +1075,36 @@ internal fun androidThreadTapBridgeScript(): String =
                 frameHandle = 0;
                 restoreViewportLayout();
                 pinPrimaryHeader();
+                forceSidebarProjectCreateButtonsVisible();
               });
             };
           })();
+
+          const forceSidebarProjectCreateButtonsVisible = () => {
+            const buttons = Array.from(
+              document.querySelectorAll('[data-androdex-role="create-thread"]'),
+            );
+
+            buttons.forEach((button) => {
+              if (!(button instanceof HTMLElement)) {
+                return;
+              }
+
+              const wrapper = button.parentElement;
+              if (wrapper instanceof HTMLElement) {
+                wrapper.style.setProperty("opacity", "1", "important");
+                wrapper.style.setProperty("pointer-events", "auto", "important");
+                wrapper.style.setProperty("visibility", "visible", "important");
+              }
+
+              button.style.setProperty("opacity", "1", "important");
+              button.style.setProperty("pointer-events", "auto", "important");
+              button.style.setProperty("visibility", "visible", "important");
+              button.style.setProperty("touch-action", "manipulation", "important");
+            });
+
+            return buttons.length;
+          };
 
           const restoreViewportLayout = () => {
             const px = window.innerHeight + "px";
@@ -1263,6 +1290,8 @@ internal fun androidThreadTapBridgeScript(): String =
           };
 
           const bindSidebarInteractions = () => {
+            forceSidebarProjectCreateButtonsVisible();
+
             const rows = Array.from(
               document.querySelectorAll(
                 '[data-androdex-role="thread-row"], [data-thread-item="true"] [role="button"][data-testid^="thread-row-"]',

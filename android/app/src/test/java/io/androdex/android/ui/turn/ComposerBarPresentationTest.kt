@@ -37,6 +37,31 @@ class ComposerBarPresentationTest {
     }
 
     @Test
+    fun composerShowsInlineGalleryButton_onlyWhenPanelIsClosedAndSlotsRemain() {
+        assertEquals(
+            true,
+            composerShowsInlineGalleryButton(
+                isModePanelVisible = false,
+                remainingAttachmentSlots = 2,
+            ),
+        )
+        assertEquals(
+            false,
+            composerShowsInlineGalleryButton(
+                isModePanelVisible = true,
+                remainingAttachmentSlots = 2,
+            ),
+        )
+        assertEquals(
+            false,
+            composerShowsInlineGalleryButton(
+                isModePanelVisible = false,
+                remainingAttachmentSlots = 0,
+            ),
+        )
+    }
+
+    @Test
     fun composerAccessoryButtonState_prefersCloseWhilePanelIsVisible() {
         assertEquals(
             ComposerAccessoryButtonState.CLOSE,
