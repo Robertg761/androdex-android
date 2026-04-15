@@ -7,8 +7,11 @@ The bridge defaults to the public hosted relay at `wss://relay.androdex.xyz/rela
 ## What It Does
 
 - accepts WebSocket connections at `/relay/{hostId}`
+- accepts desktop tunnel control sockets at `/desktop-tunnel/connect`
+- publishes desktop-native HTTP and WebSocket routes at `/desktop/{routeId}/...`
 - pairs one host daemon with one live mobile client for a host id
 - forwards secure control messages and encrypted payloads between the host and the mobile client
+- forwards desktop-native HTTP and WebSocket traffic without translating Androdex app state
 - logs only connection metadata and payload sizes, not plaintext prompts or responses
 - exposes lightweight stats for a health endpoint
 - can optionally host a generic push-session service that stores Android registrations and forwards completion payloads to a webhook you control
@@ -109,6 +112,15 @@ Optional HTTP endpoints:
 - `POST /v1/push/session/register-device`
 - `POST /v1/push/session/notify-completion`
 
+Desktop-native tunnel routes:
+
+- control socket: `GET /desktop-tunnel/connect?routeId=<id>&routeToken=<token>` over WebSocket
+- public HTTP base: `/desktop/{routeId}`
+- public WebSocket base: `/desktop/{routeId}` with whatever backend path the client needs under it
+
+The desktop tunnel stays transport-only. It forwards HTTP requests and WebSocket frames to the
+desktop app's local backend, but it does not become a second Androdex application server.
+
 ## Standalone Server
 
 If you want a relay that works across different networks, run this folder on a VPS or other internet-reachable host and point the bridge at its public URL.
@@ -169,6 +181,14 @@ If you terminate TLS at a reverse proxy instead, run the relay behind Nginx, Cad
 wss://your-relay.example/relay
 ```
 
+If you also want the desktop-native remote path on the same host, forward these HTTP and WebSocket
+prefixes to the relay container too:
+
+```text
+/desktop/*
+/desktop-tunnel/*
+```
+
 After that, set the bridge relay explicitly before pairing:
 
 ```sh
@@ -181,6 +201,7 @@ Recommended production shape:
 2. terminate TLS at a reverse proxy such as Caddy or Nginx
 3. publish a hostname you control
 4. point the bridge at `wss://<your-domain>/relay`
+5. if you want desktop-native remote access, keep `/desktop/*` and `/desktop-tunnel/*` on the same hostname
 
 That keeps the relay generic while letting the phone connect from any network.
 

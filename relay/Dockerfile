@@ -6,6 +6,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY push-service.js ./push-service.js
+COPY desktop-tunnel.js ./desktop-tunnel.js
 COPY relay.js ./relay.js
 COPY server.js ./server.js
 

@@ -13,6 +13,7 @@ const {
   resolveTrustedMacRecoverySession,
   resolveTrustedMacSession,
 } = require("./relay");
+const { createDesktopTunnelService } = require("./desktop-tunnel");
 const {
   createPushSessionService,
   createWebhookPushClient,
@@ -49,19 +50,34 @@ function createRelayServer({
       })
       : createDisabledPushSessionService());
 
+  const desktopTunnelService = createDesktopTunnelService();
   const server = createServer({
     isTlsEnabled,
     tlsCertPath,
     tlsKeyPath,
     pushSessionService: resolvedPushSessionService,
     pushServiceEnabled: Boolean(enablePushService || pushSessionService),
+    desktopTunnelService,
   });
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ noServer: true });
   setupRelay(wss);
+  server.on("upgrade", (req, socket, head) => {
+    if (desktopTunnelService.maybeHandleUpgrade(req, socket, head)) {
+      return;
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+  server.on("close", () => {
+    desktopTunnelService.close();
+  });
 
   return {
     server,
     wss,
+    desktopTunnelService,
     pushSessionService: resolvedPushSessionService,
   };
 }
@@ -72,6 +88,7 @@ function createServer({
   tlsKeyPath,
   pushSessionService,
   pushServiceEnabled,
+  desktopTunnelService,
 }) {
   const requestListener = (req, res) => {
     const pathname = safePathname(req.url);
@@ -82,6 +99,7 @@ function createServer({
         relayPath: "/relay/{hostId}",
         ...getRelayStats(),
         push: pushSessionService.getStats(),
+        desktopTunnel: desktopTunnelService.getStats(),
       });
       return;
     }
@@ -100,6 +118,10 @@ function createServer({
 
     if (req.method === "POST" && pathname === "/v1/trusted/session/recover") {
       return handleJSONRoute(req, res, async (body) => resolveTrustedMacRecoverySession(body));
+    }
+
+    if (desktopTunnelService.maybeHandleHttpRequest(req, res)) {
+      return;
     }
 
     writeJson(res, 404, { ok: false, error: "Not found" });

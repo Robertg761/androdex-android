@@ -52,12 +52,14 @@ internal fun resolveMacNativeHttpEndpointUrl(
     require(endpointPath.startsWith("/")) { "Endpoint paths must start with '/'." }
     val normalizedHttpBaseUrl = normalizeMacNativeHttpBaseUrl(httpBaseUrl)
     val uri = URI(normalizedHttpBaseUrl)
+    val basePath = uri.path?.trimEnd('/').orEmpty()
+    val resolvedPath = if (basePath.isEmpty()) endpointPath else "$basePath$endpointPath"
     return URI(
         uri.scheme,
         uri.userInfo,
         uri.host,
         uri.port,
-        endpointPath,
+        resolvedPath,
         null,
         null,
     ).toASCIIString()

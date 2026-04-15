@@ -33,6 +33,17 @@ class MacNativeUrlResolverTest {
     }
 
     @Test
+    fun resolveHttpEndpointUrl_preservesBasePaths() {
+        assertEquals(
+            "https://example.com/base/path/api/auth/session",
+            resolveMacNativeHttpEndpointUrl(
+                httpBaseUrl = "https://example.com/base/path",
+                endpointPath = "/api/auth/session",
+            ),
+        )
+    }
+
+    @Test
     fun macNativeSocketUrl_appendsWsPathAndTokenForWebSocketSchemes() {
         assertEquals(
             "ws://localhost:4318/ws?wsToken=token-123",
