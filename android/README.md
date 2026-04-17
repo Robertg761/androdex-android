@@ -57,5 +57,5 @@ cd android
 Current build metadata:
 
 - package name: `io.androdex.android`
-- version: `0.2.2`
-- version code: `14`
+- version: `0.2.7`
+- version code: `19`

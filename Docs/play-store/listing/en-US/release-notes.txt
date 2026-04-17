@@ -1,3 +1,3 @@
-Hotfixes fresh-install WebView pairing from the desktop QR code.
+Rolls the Android client back to the last stable mirror-shell pairing flow.
 
-Keeps the desktop-mirroring WebView flow, accepts Mac-native QR payloads, and repairs encoded `androdex://pair` payload handling.
+Keeps the inline gallery action, preserves the visible sidebar create actions, and reverts the QR payload parsing changes that destabilized reconnect and fresh-install pairing.

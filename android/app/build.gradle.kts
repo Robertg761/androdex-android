@@ -79,8 +79,8 @@ android {
         applicationId = "io.androdex.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.2.4"
+        versionCode = 19
+        versionName = "0.2.7"
         buildConfigField(
             "String",
             "ANDRODEX_DEFAULT_RELAY_URL",
