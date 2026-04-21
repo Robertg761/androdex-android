@@ -79,8 +79,8 @@ android {
         applicationId = "io.androdex.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.2.7"
+        versionCode = 20
+        versionName = "0.2.8"
         buildConfigField(
             "String",
             "ANDRODEX_DEFAULT_RELAY_URL",
@@ -125,6 +125,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+
         release {
             isMinifyEnabled = false
             if (signingConfigs.findByName("release") != null) {

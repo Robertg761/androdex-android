@@ -1,6 +1,8 @@
 package io.androdex.android.web
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -108,6 +110,117 @@ class MirrorWebShellTest {
                 finishedUrl = null,
             ),
         )
+    }
+
+    @Test
+    fun resolveMirrorLoadTargetPrefersExplicitExternalOpen() {
+        assertEquals(
+            "https://host.example/thread/next",
+            resolveMirrorLoadTarget(
+                externalOpenPending = "https://host.example/thread/next",
+                activeLoadUrl = "https://host.example/thread/current",
+                initialUrl = "https://host.example",
+                pairedOrigin = "https://host.example",
+            ),
+        )
+    }
+
+    @Test
+    fun resolveMirrorLoadTargetFallsBackToActiveUrlBeforePersistedInitialUrl() {
+        assertEquals(
+            "https://host.example/thread/current",
+            resolveMirrorLoadTarget(
+                externalOpenPending = null,
+                activeLoadUrl = "https://host.example/thread/current",
+                initialUrl = "https://host.example/thread/stale",
+                pairedOrigin = "https://host.example",
+            ),
+        )
+    }
+
+    @Test
+    fun parseMirrorDocumentSnapshotDecodesJsonPayload() {
+        val snapshot = parseMirrorDocumentSnapshot(
+            "\"{\\\"title\\\":\\\"Androdex\\\",\\\"url\\\":\\\"https://host.example\\\",\\\"bodyText\\\":\\\"Ready\\\",\\\"bodyChildCount\\\":3,\\\"imageCount\\\":0,\\\"visibleMediaCount\\\":1}\"",
+        )
+
+        assertEquals(
+            MirrorDocumentSnapshot(
+                title = "Androdex",
+                url = "https://host.example",
+                bodyText = "Ready",
+                bodyChildCount = 3,
+                imageCount = 0,
+                visibleMediaCount = 1,
+            ),
+            snapshot,
+        )
+    }
+
+    @Test
+    fun classifyMirrorDocumentFailureFlagsBlankDocuments() {
+        val error = classifyMirrorDocumentFailure(
+            snapshot = MirrorDocumentSnapshot(
+                title = "",
+                url = "https://host.example/pair",
+                bodyText = "",
+                bodyChildCount = 1,
+                imageCount = 1,
+                visibleMediaCount = 1,
+            ),
+            fallbackUrl = "https://host.example/pair",
+        )
+
+        assertNotNull(error)
+        assertEquals(MirrorLoadFailureKind.BlankPage, error?.kind)
+    }
+
+    @Test
+    fun classifyMirrorDocumentFailureFlagsBrowserErrorText() {
+        val error = classifyMirrorDocumentFailure(
+            snapshot = MirrorDocumentSnapshot(
+                title = "Error",
+                url = "https://host.example/pair",
+                bodyText = "This site can't be reached. net::ERR_CONNECTION_RESET",
+                bodyChildCount = 4,
+                imageCount = 0,
+                visibleMediaCount = 0,
+            ),
+            fallbackUrl = "https://host.example/pair",
+        )
+
+        assertNotNull(error)
+        assertEquals(MirrorLoadFailureKind.BrowserErrorPage, error?.kind)
+    }
+
+    @Test
+    fun classifyMirrorDocumentFailureAllowsHealthyContent() {
+        val error = classifyMirrorDocumentFailure(
+            snapshot = MirrorDocumentSnapshot(
+                title = "Androdex",
+                url = "https://host.example/thread/1",
+                bodyText = "Thread title Recent messages",
+                bodyChildCount = 8,
+                imageCount = 0,
+                visibleMediaCount = 0,
+            ),
+            fallbackUrl = "https://host.example/thread/1",
+        )
+
+        assertNull(error)
+    }
+
+    @Test
+    fun httpLoadErrorExplainsForbiddenSessions() {
+        val error = httpLoadError(
+            requestUrl = "https://host.example/thread/1",
+            statusCode = 403,
+            reason = "Forbidden",
+        )
+
+        assertEquals(MirrorLoadFailureKind.Http, error.kind)
+        assertTrue(error.summary.contains("saved pairing"))
+        assertEquals("HTTP 403 (Forbidden)", error.technicalDetails)
     }
 
     @Test

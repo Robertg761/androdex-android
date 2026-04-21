@@ -8,12 +8,15 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Build
 import android.os.Message
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -24,15 +27,17 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +50,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -59,9 +66,15 @@ import androidx.core.content.FileProvider
 import io.androdex.android.BuildConfig
 import io.androdex.android.MirrorShellUiState
 import io.androdex.android.pairing.isAllowedAppUrl
+import io.androdex.android.ui.shared.RemodexButton
+import io.androdex.android.ui.shared.RemodexButtonStyle
+import io.androdex.android.ui.shared.RemodexGroupedSurface
 import io.androdex.android.ui.shared.RemodexIconButton
 import io.androdex.android.ui.shared.RemodexPageHeader
+import io.androdex.android.ui.shared.RemodexPill
+import io.androdex.android.ui.shared.RemodexPillStyle
 import io.androdex.android.ui.shared.remodexBottomSafeAreaInsets
+import io.androdex.android.ui.theme.RemodexMonoFontFamily
 import io.androdex.android.ui.theme.RemodexTheme
 import java.io.File
 import java.text.SimpleDateFormat
@@ -73,11 +86,39 @@ import org.json.JSONObject
 private const val pageLoadTimeoutMs = 12_000L
 private const val noActiveThreadMarker = "No active thread"
 private const val pickThreadMarker = "Pick a thread to continue"
+private const val blankPageProbeDelayMs = 900L
+
+internal enum class MirrorLoadFailureKind {
+    Timeout,
+    Network,
+    Http,
+    Ssl,
+    RenderProcessGone,
+    BrowserErrorPage,
+    BlankPage,
+}
+
+internal data class MirrorLoadErrorState(
+    val kind: MirrorLoadFailureKind,
+    val title: String,
+    val summary: String,
+    val technicalDetails: String? = null,
+    val failingUrl: String? = null,
+)
+
+internal data class MirrorDocumentSnapshot(
+    val title: String,
+    val url: String?,
+    val bodyText: String,
+    val bodyChildCount: Int,
+    val imageCount: Int,
+    val visibleMediaCount: Int,
+)
 
 internal data class MirrorPageFinishedState(
     val activeLoadUrl: String?,
     val isLoading: Boolean,
-    val loadError: String?,
+    val loadError: MirrorLoadErrorState?,
 )
 
 internal fun resolveMirrorPageFinishedState(
@@ -91,6 +132,18 @@ internal fun resolveMirrorPageFinishedState(
     )
 }
 
+internal fun resolveMirrorLoadTarget(
+    externalOpenPending: String?,
+    activeLoadUrl: String?,
+    initialUrl: String?,
+    pairedOrigin: String,
+): String {
+    return externalOpenPending
+        ?: activeLoadUrl
+        ?: initialUrl
+        ?: pairedOrigin
+}
+
 @Composable
 fun MirrorWebShell(
     state: MirrorShellUiState,
@@ -102,16 +155,46 @@ fun MirrorWebShell(
     val context = LocalContext.current
     val activity = LocalActivity.current
     val pairedOrigin = state.pairedOrigin ?: return
-    var isLoading by remember { mutableStateOf(true) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var canGoBack by remember { mutableStateOf(false) }
-    var handlingBackPress by remember { mutableStateOf(false) }
+    var isLoading by remember(pairedOrigin) { mutableStateOf(true) }
+    var loadError by remember(pairedOrigin) { mutableStateOf<MirrorLoadErrorState?>(null) }
+    var canGoBack by remember(pairedOrigin) { mutableStateOf(false) }
+    var handlingBackPress by remember(pairedOrigin) { mutableStateOf(false) }
     var activeLoadUrl by remember(pairedOrigin) { mutableStateOf<String?>(state.initialUrl ?: pairedOrigin) }
-    var showHomeAssist by remember { mutableStateOf(false) }
+    var showHomeAssist by remember(pairedOrigin) { mutableStateOf(false) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var webView by remember(pairedOrigin) { mutableStateOf<WebView?>(null) }
     var popupWebView by remember(pairedOrigin) { mutableStateOf<WebView?>(null) }
+    var webViewGeneration by remember(pairedOrigin) { mutableIntStateOf(0) }
+    val reloadCurrentPage: () -> Unit = {
+        val target = resolveMirrorLoadTarget(
+            externalOpenPending = state.externalOpenPending,
+            activeLoadUrl = activeLoadUrl,
+            initialUrl = state.initialUrl,
+            pairedOrigin = pairedOrigin,
+        )
+        showHomeAssist = false
+        loadError = null
+        isLoading = true
+        if (webView == null) {
+            activeLoadUrl = target
+            webViewGeneration += 1
+        } else {
+            webView?.reload()
+        }
+    }
+    val openPairedHome: () -> Unit = {
+        val target = pairedOrigin
+        showHomeAssist = false
+        loadError = null
+        isLoading = true
+        activeLoadUrl = target
+        if (webView == null) {
+            webViewGeneration += 1
+        } else {
+            webView?.loadUrl(target)
+        }
+    }
     val openThreads: () -> Unit = {
         showHomeAssist = false
         webView?.openSidebarInPage()
@@ -211,7 +294,7 @@ fun MirrorWebShell(
         takePictureLauncher.launch(nextUri)
     }
 
-    DisposableEffect(pairedOrigin) {
+    DisposableEffect(pairedOrigin, webViewGeneration) {
         onDispose {
             popupWebView?.stopLoading()
             popupWebView?.destroy()
@@ -257,7 +340,9 @@ fun MirrorWebShell(
         }
         delay(pageLoadTimeoutMs)
         if (isLoading && loadError == null && activeLoadUrl == targetUrl) {
-            loadError = "The paired environment took too long to respond. The host may be offline, or the saved session may need a fresh pairing link."
+            loadError = timeoutLoadError(targetUrl)
+            showHomeAssist = false
+            isLoading = false
         }
     }
 
@@ -274,7 +359,7 @@ fun MirrorWebShell(
         contentWindowInsets = remodexBottomSafeAreaInsets(),
         topBar = {
             MirrorShellTopBar(
-                onReload = webView?.let { currentWebView -> { currentWebView.reload() } },
+                onReload = reloadCurrentPage,
                 onClearPairing = onClearPairing,
             )
         },
@@ -284,10 +369,11 @@ fun MirrorWebShell(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = {
-                    WebView(it).apply {
+            key(pairedOrigin, webViewGeneration) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = {
+                        WebView(it).apply {
                         configureMirrorSettings()
                         setBackgroundColor(Color.BLACK)
                         CookieManager.getInstance().setAcceptCookie(true)
@@ -450,6 +536,7 @@ fun MirrorWebShell(
                                 activeLoadUrl = url ?: activeLoadUrl
                                 isLoading = true
                                 loadError = null
+                                showHomeAssist = false
                                 canGoBack = view?.canGoBack() == true
                             }
 
@@ -463,6 +550,14 @@ fun MirrorWebShell(
                                 loadError = finishedState.loadError
                                 canGoBack = view?.canGoBack() == true
                                 view?.installAndroidThreadTapBridge()
+                                view?.inspectDocumentHealth(
+                                    expectedUrl = finishedState.activeLoadUrl,
+                                ) { diagnosticError ->
+                                    if (diagnosticError != null && activeLoadUrl == finishedState.activeLoadUrl) {
+                                        showHomeAssist = false
+                                        loadError = diagnosticError
+                                    }
+                                }
                                 inspectForHomeAssist(view)
                                 url?.let(onTopLevelUrlChanged)
                             }
@@ -477,8 +572,10 @@ fun MirrorWebShell(
                                 }
                                 isLoading = false
                                 showHomeAssist = false
-                                loadError = error?.description?.toString()?.takeIf { it.isNotBlank() }
-                                    ?: "Unable to load the paired environment."
+                                loadError = requestLoadError(
+                                    requestUrl = request.url?.toString(),
+                                    error = error,
+                                )
                             }
 
                             override fun onReceivedHttpError(
@@ -491,37 +588,73 @@ fun MirrorWebShell(
                                 }
                                 isLoading = false
                                 showHomeAssist = false
-                                val statusCode = errorResponse?.statusCode
-                                val reason = errorResponse?.reasonPhrase?.takeIf { it.isNotBlank() }
-                                loadError = when {
-                                    statusCode != null && reason != null -> {
-                                        "The paired environment returned HTTP $statusCode ($reason)."
-                                    }
-                                    statusCode != null -> "The paired environment returned HTTP $statusCode."
-                                    else -> "The paired environment returned an unexpected response."
+                                loadError = httpLoadError(
+                                    requestUrl = request.url?.toString(),
+                                    statusCode = errorResponse?.statusCode,
+                                    reason = errorResponse?.reasonPhrase,
+                                )
+                            }
+
+                            override fun onReceivedSslError(
+                                view: WebView?,
+                                handler: SslErrorHandler?,
+                                error: SslError?,
+                            ) {
+                                handler?.cancel()
+                                isLoading = false
+                                showHomeAssist = false
+                                loadError = sslLoadError(
+                                    failingUrl = error?.url ?: view?.url ?: activeLoadUrl,
+                                    primaryError = error?.primaryError,
+                                )
+                            }
+
+                            override fun onRenderProcessGone(
+                                view: WebView?,
+                                detail: RenderProcessGoneDetail?,
+                            ): Boolean {
+                                view?.destroy()
+                                if (webView === view) {
+                                    webView = null
                                 }
+                                popupWebView?.stopLoading()
+                                popupWebView?.destroy()
+                                popupWebView = null
+                                isLoading = false
+                                showHomeAssist = false
+                                loadError = renderProcessGoneLoadError(
+                                    failingUrl = activeLoadUrl ?: view?.url,
+                                    didCrash = detail?.didCrash() == true,
+                                )
+                                return true
                             }
                         }
                         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
                         webView = this
                         onWebViewReady()
                     }
-                },
-                update = { view ->
-                    webView = view
-                    val target = state.externalOpenPending ?: state.initialUrl ?: pairedOrigin
-                    if (view.url != target) {
-                        activeLoadUrl = target
-                        isLoading = true
-                        loadError = null
-                        showHomeAssist = false
-                        view.loadUrl(target)
-                    }
-                    if (state.externalOpenPending != null) {
-                        onExternalOpenHandled()
-                    }
-                },
-            )
+                    },
+                    update = { view ->
+                        webView = view
+                        val target = resolveMirrorLoadTarget(
+                            externalOpenPending = state.externalOpenPending,
+                            activeLoadUrl = activeLoadUrl,
+                            initialUrl = state.initialUrl,
+                            pairedOrigin = pairedOrigin,
+                        )
+                        if (view.url != target) {
+                            activeLoadUrl = target
+                            isLoading = true
+                            loadError = null
+                            showHomeAssist = false
+                            view.loadUrl(target)
+                        }
+                        if (state.externalOpenPending != null) {
+                            onExternalOpenHandled()
+                        }
+                    },
+                )
+            }
 
             if (isLoading) {
                 Surface(
@@ -553,40 +686,16 @@ fun MirrorWebShell(
             }
 
             if (loadError != null) {
-                Surface(
+                MirrorLoadErrorCard(
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(24.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 6.dp,
-                    shadowElevation = 6.dp,
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
-                        Text(
-                            text = "Paired environment unavailable",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            text = loadError ?: "",
-                            modifier = Modifier.padding(top = 8.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Button(
-                            modifier = Modifier.padding(top = 16.dp),
-                            onClick = { webView?.reload() },
-                        ) {
-                            Text("Retry")
-                        }
-                        Button(
-                            modifier = Modifier.padding(top = 8.dp),
-                            onClick = onClearPairing,
-                        ) {
-                            Text("Change pairing")
-                        }
-                    }
-                }
+                    hostLabel = state.displayLabel ?: pairedOrigin,
+                    error = loadError!!,
+                    onRetry = reloadCurrentPage,
+                    onOpenHome = openPairedHome,
+                    onClearPairing = onClearPairing,
+                )
             }
 
             if (!isLoading && loadError == null && showHomeAssist) {
@@ -610,15 +719,16 @@ fun MirrorWebShell(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Button(
+                        RemodexButton(
                             modifier = Modifier.padding(top = 16.dp),
                             onClick = openThreads,
                         ) {
                             Text("Open Threads")
                         }
-                        Button(
+                        RemodexButton(
                             modifier = Modifier.padding(top = 8.dp),
                             onClick = { showHomeAssist = false },
+                            style = RemodexButtonStyle.Secondary,
                         ) {
                             Text("Dismiss")
                         }
@@ -626,6 +736,114 @@ fun MirrorWebShell(
                 }
             }
 
+        }
+    }
+}
+
+@Composable
+private fun MirrorLoadErrorCard(
+    modifier: Modifier = Modifier,
+    hostLabel: String,
+    error: MirrorLoadErrorState,
+    onRetry: () -> Unit,
+    onOpenHome: () -> Unit,
+    onClearPairing: () -> Unit,
+) {
+    val colors = RemodexTheme.colors
+    val geometry = RemodexTheme.geometry
+
+    RemodexGroupedSurface(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 560.dp),
+        tonalColor = colors.secondarySurface.copy(alpha = 0.96f),
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(geometry.spacing10),
+        ) {
+            RemodexPill(
+                label = error.kind.label,
+                style = RemodexPillStyle.Error,
+            )
+            Text(
+                text = error.title,
+                style = MaterialTheme.typography.titleLarge,
+                color = colors.textPrimary,
+            )
+            Text(
+                text = error.summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textSecondary,
+            )
+            MirrorDiagnosticBlock(
+                label = "Host",
+                value = hostLabel,
+            )
+            error.failingUrl?.let { failingUrl ->
+                MirrorDiagnosticBlock(
+                    label = "URL",
+                    value = failingUrl,
+                )
+            }
+            error.technicalDetails?.let { details ->
+                MirrorDiagnosticBlock(
+                    label = "Details",
+                    value = details,
+                )
+            }
+            RemodexButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onRetry,
+            ) {
+                Text("Retry")
+            }
+            RemodexButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onOpenHome,
+                style = RemodexButtonStyle.Secondary,
+            ) {
+                Text("Open paired home")
+            }
+            RemodexButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onClearPairing,
+                style = RemodexButtonStyle.Ghost,
+            ) {
+                Text("Change pairing")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MirrorDiagnosticBlock(
+    label: String,
+    value: String,
+) {
+    val colors = RemodexTheme.colors
+
+    Surface(
+        color = colors.selectedRowFill,
+        shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.hairlineDivider),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.textSecondary,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = RemodexMonoFontFamily),
+                color = colors.textPrimary,
+            )
         }
     }
 }
@@ -705,6 +923,239 @@ internal fun parseJsOptionalBooleanResult(rawResult: String?): Boolean? {
         else -> null
     }
 }
+
+internal fun parseMirrorDocumentSnapshot(rawResult: String?): MirrorDocumentSnapshot? {
+    if (rawResult.isNullOrBlank() || rawResult == "null") {
+        return null
+    }
+    return runCatching {
+        val json = JSONObject(parseBodyTextFromJsResult(rawResult))
+        MirrorDocumentSnapshot(
+            title = json.optString("title"),
+            url = json.optString("url").trim().takeIf { it.isNotEmpty() },
+            bodyText = json.optString("bodyText"),
+            bodyChildCount = json.optInt("bodyChildCount"),
+            imageCount = json.optInt("imageCount"),
+            visibleMediaCount = json.optInt("visibleMediaCount"),
+        )
+    }.getOrNull()
+}
+
+internal fun classifyMirrorDocumentFailure(
+    snapshot: MirrorDocumentSnapshot,
+    fallbackUrl: String?,
+): MirrorLoadErrorState? {
+    val normalizedText = snapshot.bodyText
+        .replace("\\s+".toRegex(), " ")
+        .trim()
+        .lowercase(Locale.US)
+    val failingUrl = snapshot.url ?: fallbackUrl
+    val browserErrorMarkers = listOf(
+        "this site can't be reached",
+        "webpage not available",
+        "aw, snap",
+        "net::err_",
+        "dns_probe_finished",
+        "connection reset",
+        "connection refused",
+        "timed out",
+    )
+    if (browserErrorMarkers.any(normalizedText::contains)) {
+        return MirrorLoadErrorState(
+            kind = MirrorLoadFailureKind.BrowserErrorPage,
+            title = "The paired page opened a browser error screen",
+            summary = "WebView reached the page, but the document itself is an error page instead of the Androdex UI.",
+            technicalDetails = snapshot.bodyText.take(220),
+            failingUrl = failingUrl,
+        )
+    }
+
+    val blankDocument = normalizedText.isEmpty() &&
+        snapshot.bodyChildCount <= 2 &&
+        snapshot.visibleMediaCount <= 1 &&
+        snapshot.imageCount <= 1
+    if (blankDocument) {
+        return MirrorLoadErrorState(
+            kind = MirrorLoadFailureKind.BlankPage,
+            title = "The paired page rendered blank",
+            summary = "The page finished loading, but WebView did not get meaningful UI content back. This usually means the host page failed during startup or returned an empty shell.",
+            technicalDetails = "title=${snapshot.title.ifBlank { "<empty>" }}, children=${snapshot.bodyChildCount}, media=${snapshot.visibleMediaCount}, images=${snapshot.imageCount}",
+            failingUrl = failingUrl,
+        )
+    }
+
+    return null
+}
+
+internal fun timeoutLoadError(failingUrl: String?): MirrorLoadErrorState =
+    MirrorLoadErrorState(
+        kind = MirrorLoadFailureKind.Timeout,
+        title = "The paired host took too long to respond",
+        summary = "Androdex waited for the page to load but never got a usable response.",
+        technicalDetails = "Timed out after ${pageLoadTimeoutMs / 1000}s while loading the paired environment.",
+        failingUrl = failingUrl,
+    )
+
+internal fun requestLoadError(
+    requestUrl: String?,
+    error: android.webkit.WebResourceError?,
+): MirrorLoadErrorState {
+    val description = error?.description?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
+    val errorCode = error?.errorCode
+    val summary = when (errorCode) {
+        WebViewClient.ERROR_HOST_LOOKUP -> "Android could not resolve the paired host address."
+        WebViewClient.ERROR_CONNECT -> "Android could not connect to the paired host."
+        WebViewClient.ERROR_TIMEOUT -> "The paired host accepted the request but stopped responding."
+        WebViewClient.ERROR_TOO_MANY_REQUESTS -> "The paired host or relay is throttling requests right now."
+        WebViewClient.ERROR_REDIRECT_LOOP -> "The paired page is stuck in a redirect loop."
+        else -> "Android could not load the paired page."
+    }
+    return MirrorLoadErrorState(
+        kind = MirrorLoadFailureKind.Network,
+        title = "The paired page could not be loaded",
+        summary = summary,
+        technicalDetails = buildString {
+            if (errorCode != null) {
+                append("errorCode=").append(errorCode)
+            }
+            if (!description.isNullOrBlank()) {
+                if (isNotEmpty()) append(", ")
+                append(description)
+            }
+        }.takeIf { it.isNotBlank() },
+        failingUrl = requestUrl,
+    )
+}
+
+internal fun httpLoadError(
+    requestUrl: String?,
+    statusCode: Int?,
+    reason: String?,
+): MirrorLoadErrorState {
+    val summary = when (statusCode) {
+        401, 403 -> "The paired host rejected this session. The saved pairing may no longer be valid."
+        404 -> "The paired host could not find the requested page."
+        in 500..599 -> "The paired host reported a server-side failure."
+        else -> "The paired host returned an unexpected HTTP response."
+    }
+    val details = buildString {
+        if (statusCode != null) {
+            append("HTTP ").append(statusCode)
+        }
+        val cleanedReason = reason?.trim().takeUnless { it.isNullOrEmpty() }
+        if (cleanedReason != null) {
+            if (isNotEmpty()) append(" ")
+            append("(").append(cleanedReason).append(")")
+        }
+    }.takeIf { it.isNotBlank() }
+    return MirrorLoadErrorState(
+        kind = MirrorLoadFailureKind.Http,
+        title = "The paired host returned an error response",
+        summary = summary,
+        technicalDetails = details,
+        failingUrl = requestUrl,
+    )
+}
+
+internal fun sslLoadError(
+    failingUrl: String?,
+    primaryError: Int?,
+): MirrorLoadErrorState {
+    val detail = when (primaryError) {
+        SslError.SSL_DATE_INVALID -> "The certificate date is not valid."
+        SslError.SSL_EXPIRED -> "The certificate has expired."
+        SslError.SSL_IDMISMATCH -> "The certificate does not match the host name."
+        SslError.SSL_INVALID -> "Android reported the certificate as invalid."
+        SslError.SSL_NOTYETVALID -> "The certificate is not valid yet."
+        SslError.SSL_UNTRUSTED -> "Android does not trust the certificate chain."
+        else -> "Android blocked the page because the TLS certificate could not be verified."
+    }
+    return MirrorLoadErrorState(
+        kind = MirrorLoadFailureKind.Ssl,
+        title = "The paired host failed TLS validation",
+        summary = "Androdex blocked the page because the connection could not be established securely.",
+        technicalDetails = detail,
+        failingUrl = failingUrl,
+    )
+}
+
+internal fun renderProcessGoneLoadError(
+    failingUrl: String?,
+    didCrash: Boolean,
+): MirrorLoadErrorState =
+    MirrorLoadErrorState(
+        kind = MirrorLoadFailureKind.RenderProcessGone,
+        title = if (didCrash) "WebView crashed while rendering the page" else "WebView was reclaimed while rendering the page",
+        summary = "Android lost the renderer for this page, so the current view can no longer recover in place.",
+        technicalDetails = if (didCrash) {
+            "The WebView render process crashed and needs a fresh instance."
+        } else {
+            "Android removed the WebView render process, usually because of memory pressure."
+        },
+        failingUrl = failingUrl,
+    )
+
+private fun WebView.inspectDocumentHealth(
+    expectedUrl: String?,
+    onResult: (MirrorLoadErrorState?) -> Unit,
+) {
+    postDelayed(
+        {
+            if (!isAttachedToWindow) {
+                onResult(null)
+                return@postDelayed
+            }
+            val currentUrl = normalizeMirrorNavigationUrl(url)
+            if (normalizeMirrorNavigationUrl(expectedUrl) != null && currentUrl != normalizeMirrorNavigationUrl(expectedUrl)) {
+                onResult(null)
+                return@postDelayed
+            }
+            evaluateJavascript(
+                """
+                (function () {
+                  const body = document.body;
+                  const bodyText = body && body.innerText ? body.innerText.replace(/\s+/g, " ").trim() : "";
+                  const visibleMediaCount = Array.from(
+                    document.querySelectorAll("img,svg,canvas,video,iframe,embed,object"),
+                  ).filter((node) => {
+                    if (!(node instanceof Element)) {
+                      return false;
+                    }
+                    const rect = node.getBoundingClientRect();
+                    return rect.width > 1 && rect.height > 1;
+                  }).length;
+                  return JSON.stringify({
+                    title: document.title || "",
+                    url: window.location && window.location.href ? window.location.href : "",
+                    bodyText,
+                    bodyChildCount: body ? body.children.length : 0,
+                    imageCount: document.images ? document.images.length : 0,
+                    visibleMediaCount,
+                  });
+                })();
+                """.trimIndent(),
+            ) { rawResult ->
+                onResult(
+                    parseMirrorDocumentSnapshot(rawResult)?.let { snapshot ->
+                        classifyMirrorDocumentFailure(snapshot, currentUrl)
+                    },
+                )
+            }
+        },
+        blankPageProbeDelayMs,
+    )
+}
+
+private val MirrorLoadFailureKind.label: String
+    get() = when (this) {
+        MirrorLoadFailureKind.Timeout -> "Timed Out"
+        MirrorLoadFailureKind.Network -> "Network Error"
+        MirrorLoadFailureKind.Http -> "HTTP Error"
+        MirrorLoadFailureKind.Ssl -> "TLS Error"
+        MirrorLoadFailureKind.RenderProcessGone -> "Renderer Lost"
+        MirrorLoadFailureKind.BrowserErrorPage -> "Browser Error"
+        MirrorLoadFailureKind.BlankPage -> "Blank Page"
+    }
 
 private fun WebView.openSidebarInPage() {
     evaluateJavascript(
